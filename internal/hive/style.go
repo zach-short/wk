@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/zach-short/wk/internal/theme"
 	"github.com/zach-short/wk/internal/wk"
 )
 
@@ -69,18 +70,19 @@ func StyleOf(it wk.ReportItem) Key {
 
 // palette is the page's default Bioluminescent direction: its light and dark verdict colors.
 var palette = map[Key]lipgloss.AdaptiveColor{
-	Working:   {Light: "#12a37a", Dark: "#54f0b0"},
-	Idle:      {Light: "#c98a12", Dark: "#ffc65c"},
-	Land:      {Light: "#d64570", Dark: "#ff6f91"},
-	Removable: {Light: "#8aa3a8", Dark: "#6d8a92"},
-	Skip:      {Light: "#2f7fd1", Dark: "#6ab8ff"},
-	Prunable:  {Light: "#b6cccf", Dark: "#34525a"},
+	Working:   theme.Green,
+	Idle:      theme.Amber,
+	Land:      theme.Rose,
+	Removable: theme.Slate,
+	Skip:      theme.Blue,
+	Prunable:  theme.Mist,
 }
 
 var (
-	hubFill = lipgloss.AdaptiveColor{Light: "#0b3036", Dark: "#0b2b33"}
-	hubInk  = lipgloss.AdaptiveColor{Light: "#8ff5e8", Dark: "#5ef2e0"}
-	muted   = lipgloss.AdaptiveColor{Light: "#4d7a80", Dark: "#6fa5ad"}
+	hubFill = theme.HubFill
+	hubInk  = theme.HubInk
+	muted   = theme.Muted
+	rule    = theme.Rule
 )
 
 // cellStyle fills a cell with its verdict color and picks a readable ink for each background.

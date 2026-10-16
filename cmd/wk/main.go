@@ -10,17 +10,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/gitx"
 	"github.com/zach-short/wk/internal/hive"
+	"github.com/zach-short/wk/internal/setup"
 	"github.com/zach-short/wk/internal/viz"
 	"github.com/zach-short/wk/internal/wk"
 )
 
 const usage = `usage:
+  wk [--repo <absolute dir>]
   wk [--repo <absolute dir>] template refresh
   wk [--repo <absolute dir>] new <row> [--sparse|--full]
   wk [--repo <absolute dir>] gc [--apply|--json]
@@ -30,6 +35,9 @@ const usage = `usage:
   wk [--repo <absolute dir>] pool fill|status
   wk [--repo <absolute dir>] hooks install|uninstall
   wk hook worktree-create|worktree-remove|subagent-stop < <Claude Code hook input>
+
+wk alone, in a terminal, opens setup: it reads the repository, writes its config and warms the
+template. Once the config exists it opens a home screen instead, and never overwrites the file.
 
 The repository is the one holding --repo, or the current directory. Config is read from
 $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspace's absolute
@@ -70,7 +78,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	repoDir, rest, err := splitRepoFlag(args)
-	if err != nil || len(rest) == 0 {
+	if err != nil || (len(rest) == 0 && !interactive()) {
 		return fail(stderr, err, exitUsage)
 	}
 	home, err := wkHome()
@@ -78,6 +86,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err, exitError)
 	}
 	switch {
+	case len(rest) == 0:
+		return runSetup(home, repoDir, stderr)
 	case len(rest) == 2 && rest[0] == "template" && rest[1] == "refresh":
 		env, err := wk.Open(home, repoDir, stderr)
 		if err != nil {
@@ -256,11 +266,102 @@ func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
 	if what == "schedule uninstall" {
 		return fail(stderr, env.ScheduleUninstall(l, stdout), exitError)
 	}
+	return fail(stderr, scheduleInstall(env, l, stdout), exitError)
+}
+
+func scheduleInstall(env *wk.Env, l wk.Launchd, out io.Writer) error {
 	exe, err := installedExe()
+	if err != nil {
+		return err
+	}
+	return env.ScheduleInstall(exe, l, out)
+}
+
+// interactive is true when both ends are a terminal, so a bare wk may draw setup. A pipe or a
+// test gets the usage text, as before setup existed. The self-test swaps it.
+var interactive = func() bool {
+	for _, f := range []*os.File{os.Stdin, os.Stdout} {
+		info, err := f.Stat()
+		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// runSetup opens setup for the repository holding repoDir: the wizard when it has no config,
+// the home screen when it has one. Leaving with "Open the hive" opens wk hive.
+func runSetup(home, repoDir string, stderr io.Writer) int {
+	plan, err := setupPlan(home, repoDir)
 	if err != nil {
 		return fail(stderr, err, exitError)
 	}
-	return fail(stderr, env.ScheduleInstall(exe, l, stdout), exitError)
+	acts := setup.Actions{Warm: func(log io.Writer) error {
+		env, err := wk.Open(home, plan.Primary, log)
+		if err != nil {
+			return err
+		}
+		return env.RefreshTemplate()
+	}}
+	if runtime.GOOS == "darwin" {
+		acts.Schedule = func(log io.Writer) error {
+			env, err := wk.Open(home, plan.Primary, log)
+			if err != nil {
+				return err
+			}
+			l, err := launchd()
+			if err != nil {
+				return err
+			}
+			return scheduleInstall(env, l, log)
+		}
+	}
+	final, err := tea.NewProgram(setup.New(plan, acts), tea.WithAltScreen()).Run()
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	if final.(setup.Model).Result() == setup.OpenHive {
+		return runHive(home, plan.Primary, nil, stderr)
+	}
+	return exitOK
+}
+
+// setupPlan reads what setup starts from. The repository is only read for the wizard; the home
+// screen needs the config alone.
+func setupPlan(home, repoDir string) (setup.Plan, error) {
+	repo, err := gitx.Resolve(repoDir)
+	if err != nil {
+		return setup.Plan{}, err
+	}
+	path := filepath.Join(home, repo.Name+".toml")
+	cfg, found, loadErr := config.Load(path)
+	plan := setup.Plan{Repo: repo.Name, Primary: repo.Primary, ConfigPath: path, Existing: found, LoadErr: loadErr}
+	if !found {
+		plan.Found = setup.Detect(repo.Primary)
+		return plan, nil
+	}
+	if loadErr == nil {
+		installs := make([]string, len(cfg.Template.PostClone))
+		for i, c := range cfg.Template.PostClone {
+			installs[i] = strings.Join(c.Run, " ")
+		}
+		plan.Summary = []setup.Fact{
+			{Label: "base", Value: cfg.Workspace.Base},
+			{Label: "template", Value: cfg.Template.Path},
+			{Label: "clones", Value: orNone(strings.Join(cfg.Template.CloneDirs, ", "))},
+			{Label: "copies", Value: orNone(strings.Join(cfg.Template.CopyFiles, ", "))},
+			{Label: "installs", Value: orNone(strings.Join(installs, "; "))},
+			{Label: "workspaces", Value: cfg.Workspace.Dir},
+		}
+	}
+	return plan, nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 const defaultVizAddr = "127.0.0.1:8787"
