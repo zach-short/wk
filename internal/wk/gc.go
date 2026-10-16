@@ -40,6 +40,10 @@ type Judgment struct {
 	// DeleteBranch is BD-11: the branch goes with its worktree only when it is an ancestor of
 	// the base. A branch absorbed by content alone is kept for /land-worktrees.
 	DeleteBranch bool
+	// Dirty counts the changed paths and Activity is the newest activity time gc read. Both
+	// feed the --json report; a zero Activity means it could not be read.
+	Dirty    int
+	Activity time.Time
 }
 
 // survey is what gc reads once per pass and asks every worktree about.
@@ -138,10 +142,14 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 		keep("a process is working in it: %s", procList(live))
 	}
 	dirty, dirtyErr := gitx.DirtyPaths(w.Path)
+	j.Dirty = len(dirty)
 	if last, err := lastActivity(w.Path, dirty); err != nil {
 		keep("its last activity cannot be read: %v", err)
 	} else if age := s.now.Sub(last); age < s.quiet {
+		j.Activity = last
 		keep("it changed %d minutes ago, so a session may still be in it", int(age.Minutes()))
+	} else {
+		j.Activity = last
 	}
 	absorbed, ancestor := gitx.IsAbsorbed(e.Repo.Primary, w.Head, s.base)
 	if !absorbed {

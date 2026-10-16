@@ -15,7 +15,7 @@ import (
 const usage = `usage:
   wk [--repo <absolute dir>] template refresh
   wk [--repo <absolute dir>] new <row> [--sparse]
-  wk [--repo <absolute dir>] gc [--apply]
+  wk [--repo <absolute dir>] gc [--apply|--json]
   wk [--repo <absolute dir>] gc schedule install|uninstall
 
 The repository is the one holding --repo, or the current directory. Config is read from
@@ -23,7 +23,7 @@ $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspa
 path on stdout and everything else on stderr.
 
 wk gc lists every worktree with its verdict and changes nothing; --apply removes the removable
-ones. wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
+ones; --json prints the same verdicts as one JSON document for tools. wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
 gc.apply_interval_minutes; uninstall unloads and deletes it.
 `
 
@@ -98,7 +98,7 @@ func realLaunchd() (wk.Launchd, error) {
 func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
 	what := strings.Join(args, " ")
 	switch what {
-	case "", "--apply", "schedule install", "schedule uninstall":
+	case "", "--apply", "--json", "schedule install", "schedule uninstall":
 	default:
 		return fail(stderr, fmt.Errorf("unexpected arguments to wk gc: %q", what), exitUsage)
 	}
@@ -111,6 +111,8 @@ func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, env.GC(stdout), exitError)
 	case "--apply":
 		return fail(stderr, env.GCApply(stdout), exitError)
+	case "--json":
+		return fail(stderr, env.GCJSON(stdout), exitError)
 	}
 	l, err := launchd()
 	if err != nil {

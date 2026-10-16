@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wk hive</title>
+<style>
+  :root {
+    --bg: #f6f5f1;
+    --ink: #1d1f23;
+    --muted: #6b6f78;
+    --panel: #ffffff;
+    --line: #d9d7cf;
+    --working: #2e9e5b;
+    --idle: #d99a1e;
+    --removable: #9aa0a8;
+    --land: #d4553a;
+    --skip: #3b7bd6;
+    --prunable: #b8b3a6;
+    --hub: #1d1f23;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101216; --ink: #e8e9ec; --muted: #8b909a; --panel: #181b21; --line: #2a2e37;
+      --hub: #e8e9ec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101216; --ink: #e8e9ec; --muted: #8b909a; --panel: #181b21; --line: #2a2e37;
+    --hub: #e8e9ec;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: baseline;
+    padding: 16px 16px 8px;
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .counts { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 16px 12px; }
+  .chip {
+    display: flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 0 16px 24px; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .stage {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    min-height: 420px; overflow: hidden;
+  }
+  svg { width: 100%; height: auto; display: block; }
+  .cell { cursor: pointer; transition: opacity .2s; }
+  .cell:hover polygon, .cell:focus polygon { stroke-width: 3; }
+  .cell.selected polygon { stroke: var(--ink); stroke-width: 3; }
+  .cell text { font-size: 10px; fill: #fff; pointer-events: none; }
+  .cell text.sub { font-size: 9px; opacity: .85; }
+  .pulse { animation: pulse 1.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+  aside {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; align-self: start;
+  }
+  aside h2 { font-size: 15px; margin: 0 0 6px; word-break: break-all; }
+  aside dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0; font-size: 12px; }
+  aside dt { color: var(--muted); }
+  aside dd { margin: 0; word-break: break-word; }
+  aside ul { padding-left: 18px; margin: 8px 0 0; font-size: 12px; }
+  .empty { color: var(--muted); font-size: 13px; }
+  .error { color: var(--land); font-size: 12px; padding: 0 16px 12px; }
+  footer { color: var(--muted); font-size: 11px; padding: 0 16px 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>wk hive</h1>
+  <span class="meta" id="base"></span>
+  <span class="meta" id="stamp"></span>
+</header>
+<div class="counts" id="counts"></div>
+<div class="error" id="error" hidden></div>
+<main>
+  <section class="stage"><svg id="hive" viewBox="0 0 600 520" role="img" aria-label="Worktree hive"></svg></section>
+  <aside id="detail"><p class="empty">Select a cell to see why it is kept or removable.</p></aside>
+</main>
+<footer>Reads gc.json (from wk gc --json) when served. Opened as a file, it shows sample data.</footer>
+
+<script>
+// Sample data: the shape of `wk gc --json`. Used when gc.json cannot be fetched.
+const SAMPLE = {
+  base: "main",
+  generated: new Date().toISOString(),
+  removable: 2,
+  worktrees: [
+    { path: ".claude/worktrees/wk-41", branch: "wk/41", head: "a1b2c3d", verdict: "kept", reasons: ["it changed 3 minutes ago, so a session may still be in it", "3 changed paths"], dirty: 3, last_activity: new Date(Date.now() - 3*60e3).toISOString(), delete_branch: false },
+    { path: ".claude/worktrees/wk-44", branch: "wk/44", head: "e4f5a6b", verdict: "kept", reasons: ["a process is working in it: claude (pid 8121)"], dirty: 0, last_activity: new Date(Date.now() - 40*60e3).toISOString(), delete_branch: false },
+    { path: ".claude/worktrees/wk-38", branch: "wk/38", head: "c7d8e9f", verdict: "kept, run /land-worktrees", reasons: ["branch wk/38 has commits main does not hold", "4 changed paths"], dirty: 4, last_activity: new Date(Date.now() - 6*3600e3).toISOString(), delete_branch: false },
+    { path: ".claude/worktrees/wk-29", branch: "wk/29", head: "0a9b8c7", verdict: "removable", reasons: ["branch wk/29 is an ancestor of main; clean and idle; the branch is deleted with it"], dirty: 0, last_activity: new Date(Date.now() - 2*86400e3).toISOString(), delete_branch: true },
+    { path: ".claude/worktrees/wk-33", branch: "wk/33", head: "5d4c3b2", verdict: "removable", reasons: ["detached HEAD is an ancestor of main; clean and idle"], dirty: 0, last_activity: new Date(Date.now() - 1*86400e3).toISOString(), delete_branch: false },
+    { path: ".claude/worktrees/wk-12", branch: "", head: "9f8e7d6", verdict: "skip", reasons: ["the wk template"], dirty: 0, last_activity: "", delete_branch: false },
+    { path: ".claude/worktrees/wk-7", branch: "wk/7", head: "1234abc", verdict: "prunable", reasons: ["its directory is gone; git worktree prune clears the entry"], dirty: 0, last_activity: "", delete_branch: false }
+  ]
+};
+
+// Each verdict maps to one style. A kept cell with a live session reads as "working".
+function styleOf(item) {
+  const v = item.verdict;
+  if (v === "removable") return { key: "removable", label: "removable", color: "var(--removable)" };
+  if (v === "kept, run /land-worktrees") return { key: "land", label: "run /land-worktrees", color: "var(--land)" };
+  if (v === "skip") return { key: "skip", label: "skipped", color: "var(--skip)" };
+  if (v === "prunable") return { key: "prunable", label: "prunable", color: "var(--prunable)" };
+  const busy = item.reasons.some(r => /changed \d+ minutes? ago|process is working/.test(r));
+  if (busy) return { key: "working", label: "working", color: "var(--working)" };
+  return { key: "idle", label: "kept", color: "var(--idle)" };
+}
+
+const STYLES = [
+  ["working", "Working now"], ["idle", "Kept"], ["land", "Run /land-worktrees"],
+  ["removable", "Removable"], ["skip", "Skipped"], ["prunable", "Prunable"]
+];
+
+// Honeycomb layout: the hub sits at the centre, cells fill rings outward by hex distance.
+const SIZE = 38;
+function ringCoords(n) {
+  const out = [];
+  for (let q = -8; q <= 8; q++) for (let r = -8; r <= 8; r++) {
+    const d = (Math.abs(q) + Math.abs(r) + Math.abs(q + r)) / 2;
+    if (d > 0) out.push({ q, r, d, a: Math.atan2(r + q / 2, q + 0.0001) });
+  }
+  out.sort((x, y) => x.d - y.d || x.a - y.a);
+  return out.slice(0, n);
+}
+function toPixel(q, r) {
+  return { x: 300 + SIZE * Math.sqrt(3) * (q + r / 2), y: 260 + SIZE * 1.5 * r };
+}
+function hexPoints(cx, cy, s) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    pts.push((cx + s * Math.cos(a)).toFixed(1) + "," + (cy + s * Math.sin(a)).toFixed(1));
+  }
+  return pts.join(" ");
+}
+function ago(iso) {
+  if (!iso) return "unknown";
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 172800) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+let selected = null;
+
+function render(data) {
+  document.getElementById("base").textContent = "base: " + data.base;
+  document.getElementById("stamp").textContent = "updated " + ago(data.generated);
+
+  const items = data.worktrees;
+  const styled = items.map(it => ({ it, st: styleOf(it) }));
+  const counts = {};
+  styled.forEach(({ st }) => counts[st.key] = (counts[st.key] || 0) + 1);
+  document.getElementById("counts").innerHTML = STYLES
+    .filter(([k]) => counts[k])
+    .map(([k, label]) => `<span class="chip"><span class="dot" style="background:var(--${k === "idle" ? "idle" : k})"></span>${counts[k]} ${label}</span>`)
+    .join("") || `<span class="chip">no worktrees</span>`;
+
+  const svg = document.getElementById("hive");
+  const slots = ringCoords(styled.length);
+  let html = `<g><polygon points="${hexPoints(300, 260, SIZE * 0.9)}" fill="var(--hub)"/>
+    <text x="300" y="264" text-anchor="middle" font-size="12" fill="var(--bg)" font-weight="600">${esc(data.base)}</text></g>`;
+
+  styled.forEach(({ it, st }, i) => {
+    const p = toPixel(slots[i].q, slots[i].r);
+    const name = it.branch || it.path.split("/").pop();
+    const cls = ["cell"];
+    if (selected === i) cls.push("selected");
+    const pulse = st.key === "working" ? " pulse" : "";
+    html += `<g class="${cls.join(" ")}" tabindex="0" data-i="${i}">
+      <polygon class="${pulse}" points="${hexPoints(p.x, p.y, SIZE - 3)}" fill="${st.color}" stroke="var(--panel)" stroke-width="2"/>
+      <text x="${p.x.toFixed(1)}" y="${(p.y - 2).toFixed(1)}" text-anchor="middle">${esc(name.slice(0, 10))}</text>
+      <text class="sub" x="${p.x.toFixed(1)}" y="${(p.y + 10).toFixed(1)}" text-anchor="middle">${esc(st.label)}</text>
+    </g>`;
+  });
+  svg.innerHTML = html;
+  svg.querySelectorAll(".cell").forEach(g => {
+    const open = () => { selected = +g.dataset.i; render(current); };
+    g.addEventListener("click", open);
+    g.addEventListener("keydown", e => { if (e.key === "Enter") open(); });
+  });
+
+  const detail = document.getElementById("detail");
+  if (selected !== null && styled[selected]) {
+    const { it, st } = styled[selected];
+    detail.innerHTML = `
+      <h2>${esc(it.path)}</h2>
+      <span class="chip"><span class="dot" style="background:${st.color}"></span>${esc(st.label)}</span>
+      <dl>
+        <dt>branch</dt><dd>${esc(it.branch || "detached")}</dd>
+        <dt>head</dt><dd>${esc(it.head)}</dd>
+        <dt>changed</dt><dd>${it.dirty} path${it.dirty === 1 ? "" : "s"}</dd>
+        <dt>activity</dt><dd>${esc(ago(it.last_activity))}</dd>
+        <dt>delete branch</dt><dd>${it.delete_branch ? "yes" : "no"}</dd>
+      </dl>
+      <strong style="font-size:12px">Why</strong>
+      <ul>${it.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>`;
+  } else {
+    detail.innerHTML = `<p class="empty">Select a cell to see why it is kept or removable.</p>`;
+  }
+}
+
+let current = null;
+function show(data, error) {
+  current = data;
+  document.getElementById("error").hidden = !error;
+  document.getElementById("error").textContent = error || "";
+  render(data);
+}
+
+async function load() {
+  try {
+    const res = await fetch("gc.json?t=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    show(await res.json(), "");
+  } catch (err) {
+    show(SAMPLE, "Showing sample data (gc.json not loaded: " + err.message + ").");
+  }
+}
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
