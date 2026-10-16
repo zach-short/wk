@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/config"
-	"github.com/zach-short/landing-layer/internal/gitx"
+	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/gitx"
 )
 
 type Env struct {

@@ -14,9 +14,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/zach-short/landing-layer/internal/hive"
-	"github.com/zach-short/landing-layer/internal/viz"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/hive"
+	"github.com/zach-short/wk/internal/viz"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 const usage = `usage:

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
-	"github.com/zach-short/landing-layer/internal/testrepo"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
+	"github.com/zach-short/wk/internal/testrepo"
 )
 
 func TestMain(m *testing.M) {

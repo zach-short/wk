@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
-	"github.com/zach-short/landing-layer/internal/procs"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
+	"github.com/zach-short/wk/internal/procs"
 )
 
 // TrialMarkerName is the file the land-worktrees trial.sh leaves in a trial worktree's private

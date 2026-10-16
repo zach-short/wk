@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zach-short/landing-layer/internal/testrepo"
+	"github.com/zach-short/wk/internal/testrepo"
 )
 
 func TestGCJSONReportsTheVerdictsAndChangesNothing(t *testing.T) {

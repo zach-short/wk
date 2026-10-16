@@ -9,7 +9,7 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 // Key names one cell style. The page's styleOf in internal/viz/index.html makes the same choice;

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/zach-short/landing-layer/internal/clone"
-	"github.com/zach-short/landing-layer/internal/config"
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
+	"github.com/zach-short/wk/internal/clone"
+	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
 )
 
 var rowPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)

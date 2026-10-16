@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
 )
 
 // MarkerName is the file in the template's private git directory that tells wk, and later

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zach-short/landing-layer/internal/testrepo"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/testrepo"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 func TestMain(m *testing.M) {
