@@ -21,6 +21,7 @@ type Env struct {
 	Cfg   config.Config
 	State string
 	log   *syncWriter
+	clock func() time.Time
 }
 
 // Open resolves the repository holding dir and reads its config from home/<repo>.toml. All
@@ -38,7 +39,7 @@ func Open(home, dir string, log io.Writer) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Env{Repo: repo, Cfg: cfg, State: filepath.Join(home, repo.Name), log: &syncWriter{w: log}}
+	e := &Env{Repo: repo, Cfg: cfg, State: filepath.Join(home, repo.Name), log: &syncWriter{w: log}, clock: time.Now}
 	if !found {
 		e.say("no %s; using the defaults", path)
 	}

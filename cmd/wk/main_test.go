@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/zach-short/landing-layer/internal/testrepo"
+	"github.com/zach-short/landing-layer/internal/wk"
 )
 
 func TestMain(m *testing.M) {
@@ -71,5 +72,48 @@ func TestRelativeWKHomeIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "WK_HOME") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestGCDryRunPrintsAVerdictPerWorktree(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	f.Git(t, "worktree", "add", "--quiet", "-b", "worktree-x", filepath.Join(f.Repo, ".claude/worktrees/x"), "main")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "gc"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "kept                       .claude/worktrees/x") ||
+		!strings.Contains(stdout.String(), "0 of 1 removable; dry run") {
+		t.Fatalf("stdout:\n%s", stdout.String())
+	}
+}
+
+func TestGCRefusals(t *testing.T) {
+	t.Setenv("WK_HOME", t.TempDir())
+	for _, args := range [][]string{{"gc", "--force"}, {"gc", "schedule"}, {"gc", "--apply", "now"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "unexpected arguments to wk gc") {
+			t.Errorf("%q: exit %d, stderr %q", args, code, stderr.String())
+		}
+	}
+}
+
+// A test binary is a go-build binary, so the install refuses it, which is the refusal an agent
+// pointed at a `go run` binary would hit. No launchctl call is made.
+func TestScheduleInstallRefusesTheTestBinary(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	called := false
+	launchd = func() (wk.Launchd, error) {
+		return wk.Launchd{AgentsDir: filepath.Join(f.Root, "agents"), Domain: "gui/0", Control: func(...string) error { called = true; return nil }}, nil
+	}
+	t.Cleanup(func() { launchd = realLaunchd })
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "gc", "schedule", "install"}, &stdout, &stderr); code != exitError {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "go install ./cmd/wk") || called {
+		t.Fatalf("stderr %q, launchctl called %v", stderr.String(), called)
 	}
 }

@@ -169,6 +169,13 @@ func (c Config) validate() error {
 	if !strings.Contains(c.Hook.Dir, NamePlaceholder) || !strings.Contains(c.Hook.Branch, NamePlaceholder) {
 		return fmt.Errorf("hook.dir and hook.branch must both hold %s", NamePlaceholder)
 	}
+	// A quiet window of 0 would let gc remove a worktree a session made a second ago, before
+	// the session's process has moved into it.
+	for key, v := range map[string]int{"gc.quiet_minutes": c.GC.QuietMinutes, "gc.apply_interval_minutes": c.GC.ApplyIntervalMinutes} {
+		if v < 1 {
+			return fmt.Errorf("%s is %d; it must be at least 1", key, v)
+		}
+	}
 	return nil
 }
 

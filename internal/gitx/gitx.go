@@ -5,15 +5,22 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 // Run runs git in dir and returns its stdout with the trailing newline removed. A failure
 // carries git's stderr, so the reason reaches whoever reads the error.
+//
+// GIT_OPTIONAL_LOCKS=0 stops `git diff HEAD` and `git status` from rewriting the index they
+// read. Without it every read wk makes bumps the index mtime, and `wk gc` reads that mtime as
+// a session's activity (BD-10), so an hourly gc would keep every worktree "busy" for ever.
 func Run(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -72,10 +79,14 @@ func mainCheckout(dir string) (string, error) {
 
 // Worktree is one entry of `git worktree list --porcelain`.
 type Worktree struct {
-	Path     string
-	Head     string
-	Branch   string
-	Detached bool
+	Path       string
+	Head       string
+	Branch     string
+	Detached   bool
+	Bare       bool
+	Locked     bool
+	LockReason string
+	Prunable   bool
 }
 
 func Worktrees(dir string) ([]Worktree, error) {
@@ -97,6 +108,12 @@ func Worktrees(dir string) ([]Worktree, error) {
 				w.Branch = strings.TrimPrefix(value, "refs/heads/")
 			case "detached":
 				w.Detached = true
+			case "bare":
+				w.Bare = true
+			case "locked":
+				w.Locked, w.LockReason = true, value
+			case "prunable":
+				w.Prunable = true
 			}
 		}
 		if w.Path != "" {
@@ -127,17 +144,55 @@ func Blob(dir, rev, path string) (string, error) {
 	return out, nil
 }
 
-// DirtyPaths lists tracked changes and untracked files that are not ignored, as lib.sh
-// dirty_paths does: ignored files such as node_modules are not work.
+// DirtyPaths lists every path in dir that differs from its HEAD, sorted: tracked edits staged
+// or not, deletions, and untracked files that are not ignored. It runs the same two commands as
+// the land-worktrees lib.sh dirty_paths, because `wk gc` must call clean exactly what that
+// skill calls clean. Ignored files such as node_modules and .env are not work.
 func DirtyPaths(dir string) ([]string, error) {
-	out, err := Run(dir, "status", "--porcelain", "--untracked-files=all")
+	tracked, err := Run(dir, "diff", "--name-only", "--no-renames", "-z", "HEAD")
 	if err != nil {
 		return nil, err
 	}
-	if out == "" {
-		return nil, nil
+	untracked, err := Run(dir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
 	}
-	return strings.Split(out, "\n"), nil
+	seen := map[string]bool{}
+	var paths []string
+	for _, p := range strings.Split(tracked+"\x00"+untracked, "\x00") {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// IsAncestor says whether commit is already in into's history.
+func IsAncestor(dir, commit, into string) bool {
+	_, err := Run(dir, "merge-base", "--is-ancestor", commit, into)
+	return err == nil
+}
+
+// IsAbsorbed is lib.sh is_absorbed: everything on commit is already in into, because it is an
+// ancestor, or because merging it would change nothing (the work landed by a squash merge, a
+// cherry-pick or a copy). Any git failure answers false, as it does there. ancestor reports
+// which of the two held, for BD-11.
+func IsAbsorbed(dir, commit, into string) (absorbed, ancestor bool) {
+	if IsAncestor(dir, commit, into) {
+		return true, true
+	}
+	merged, err := Run(dir, "merge-tree", "--write-tree", into, commit)
+	if err != nil {
+		return false, false
+	}
+	tree, err := Run(dir, "rev-parse", into+"^{tree}")
+	if err != nil {
+		return false, false
+	}
+	first, _, _ := strings.Cut(merged, "\n")
+	return first == tree, false
 }
 
 // GitDir is the worktree's private git directory, where markers live out of sight of the

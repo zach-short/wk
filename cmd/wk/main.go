@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/zach-short/landing-layer/internal/wk"
 )
@@ -13,10 +15,16 @@ import (
 const usage = `usage:
   wk [--repo <absolute dir>] template refresh
   wk [--repo <absolute dir>] new <row> [--sparse]
+  wk [--repo <absolute dir>] gc [--apply]
+  wk [--repo <absolute dir>] gc schedule install|uninstall
 
 The repository is the one holding --repo, or the current directory. Config is read from
 $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspace's absolute
 path on stdout and everything else on stderr.
+
+wk gc lists every worktree with its verdict and changes nothing; --apply removes the removable
+ones. wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
+gc.apply_interval_minutes; uninstall unloads and deletes it.
 `
 
 const (
@@ -60,8 +68,65 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		_, _ = fmt.Fprintln(stdout, path)
 		return exitOK
+	case rest[0] == "gc":
+		return runGC(home, repoDir, rest[1:], stdout, stderr)
 	}
 	return fail(stderr, nil, exitUsage)
+}
+
+// launchd is swapped by the self-test, so no test loads an agent into the owner's session.
+var launchd = realLaunchd
+
+func realLaunchd() (wk.Launchd, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return wk.Launchd{}, err
+	}
+	return wk.Launchd{
+		AgentsDir: filepath.Join(home, "Library", "LaunchAgents"),
+		Domain:    fmt.Sprintf("gui/%d", os.Getuid()),
+		Control: func(args ...string) error {
+			out, err := exec.Command("launchctl", args...).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			}
+			return nil
+		},
+	}, nil
+}
+
+func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
+	what := strings.Join(args, " ")
+	switch what {
+	case "", "--apply", "schedule install", "schedule uninstall":
+	default:
+		return fail(stderr, fmt.Errorf("unexpected arguments to wk gc: %q", what), exitUsage)
+	}
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	switch what {
+	case "":
+		return fail(stderr, env.GC(stdout), exitError)
+	case "--apply":
+		return fail(stderr, env.GCApply(stdout), exitError)
+	}
+	l, err := launchd()
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	if what == "schedule uninstall" {
+		return fail(stderr, env.ScheduleUninstall(l, stdout), exitError)
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	return fail(stderr, env.ScheduleInstall(exe, l, stdout), exitError)
 }
 
 // fail prints err and returns code, or returns exitOK when err is nil and code is not a usage

@@ -67,6 +67,8 @@ func TestRefusals(t *testing.T) {
 		"empty base":       {"[workspace]\nbase = \"\"\n", "workspace.base is empty"},
 		"not toml":         {"[template\n", "repo.toml"},
 		"wrong value type": {"[pool]\nsize = \"two\"\n", "repo.toml"},
+		"no quiet window":  {"[gc]\nquiet_minutes = 0\n", "gc.quiet_minutes is 0"},
+		"no gc interval":   {"[gc]\napply_interval_minutes = -5\n", "gc.apply_interval_minutes is -5"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := Load(write(t, tc.body))
