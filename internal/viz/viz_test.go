@@ -59,8 +59,8 @@ func TestHandlerServesEveryAssetThePageNames(t *testing.T) {
 	h := Handler(func(io.Writer) error { return nil })
 	page := get(t, h, "/").Body.String()
 	names := regexp.MustCompile(`assets/[a-z-]+\.webp`).FindAllString(page, -1)
-	if len(names) < 7 {
-		t.Fatalf("page names %d assets, want the 7 direction images: %v", len(names), names)
+	if len(names) == 0 {
+		t.Fatalf("page names no assets, want the bioluminescent texture")
 	}
 	for _, name := range names {
 		rec := get(t, h, "/"+name)
