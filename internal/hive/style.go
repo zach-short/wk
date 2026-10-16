@@ -81,6 +81,7 @@ var (
 	hubFill = lipgloss.AdaptiveColor{Light: "#0b3036", Dark: "#0b2b33"}
 	hubInk  = lipgloss.AdaptiveColor{Light: "#8ff5e8", Dark: "#5ef2e0"}
 	muted   = lipgloss.AdaptiveColor{Light: "#4d7a80", Dark: "#6fa5ad"}
+	rule    = lipgloss.AdaptiveColor{Light: "#b6cccf", Dark: "#2a4a52"}
 )
 
 // cellStyle fills a cell with its verdict color and picks a readable ink for each background.
