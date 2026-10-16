@@ -4,11 +4,14 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/zach-short/landing-layer/internal/viz"
 	"github.com/zach-short/landing-layer/internal/wk"
 )
 
@@ -17,14 +20,19 @@ const usage = `usage:
   wk [--repo <absolute dir>] new <row> [--sparse]
   wk [--repo <absolute dir>] gc [--apply|--json]
   wk [--repo <absolute dir>] gc schedule install|uninstall
+  wk [--repo <absolute dir>] viz [--addr <host:port>]
 
 The repository is the one holding --repo, or the current directory. Config is read from
 $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspace's absolute
 path on stdout and everything else on stderr.
 
 wk gc lists every worktree with its verdict and changes nothing; --apply removes the removable
-ones; --json prints the same verdicts as one JSON document for tools. wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
+ones; --json prints the same verdicts as one JSON document for tools.
+wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
 gc.apply_interval_minutes; uninstall unloads and deletes it.
+
+wk viz serves the hive page on --addr (default 127.0.0.1:8787). The page reads the live
+verdicts on every load and changes nothing.
 `
 
 const (
@@ -70,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case rest[0] == "gc":
 		return runGC(home, repoDir, rest[1:], stdout, stderr)
+	case rest[0] == "viz":
+		return runViz(home, repoDir, rest[1:], stderr)
 	}
 	return fail(stderr, nil, exitUsage)
 }
@@ -129,6 +139,28 @@ func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err, exitError)
 	}
 	return fail(stderr, env.ScheduleInstall(exe, l, stdout), exitError)
+}
+
+const defaultVizAddr = "127.0.0.1:8787"
+
+// runViz serves the hive page until the process stops. Its report is built per request, so the
+// page never shows a stale snapshot.
+func runViz(home, repoDir string, args []string, stderr io.Writer) int {
+	addr := defaultVizAddr
+	switch {
+	case len(args) == 0:
+	case len(args) == 2 && args[0] == "--addr" && args[1] != "":
+		addr = args[1]
+	default:
+		return fail(stderr, fmt.Errorf("unexpected arguments to wk viz: %q", strings.Join(args, " ")), exitUsage)
+	}
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	_, _ = fmt.Fprintf(stderr, "wk viz: http://%s (Ctrl-C stops it)\n", addr)
+	srv := &http.Server{Addr: addr, Handler: viz.Handler(env.GCJSON), ReadHeaderTimeout: 5 * time.Second}
+	return fail(stderr, srv.ListenAndServe(), exitError)
 }
 
 // fail prints err and returns code, or returns exitOK when err is nil and code is not a usage

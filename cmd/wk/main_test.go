@@ -89,6 +89,14 @@ func TestGCDryRunPrintsAVerdictPerWorktree(t *testing.T) {
 	}
 }
 
+func TestVizRefusesBadArguments(t *testing.T) {
+	t.Setenv("WK_HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"viz", "--port", "9"}, &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "unexpected arguments to wk viz") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}
+
 func TestGCRefusals(t *testing.T) {
 	t.Setenv("WK_HOME", t.TempDir())
 	for _, args := range [][]string{{"gc", "--force"}, {"gc", "schedule"}, {"gc", "--apply", "now"}} {
