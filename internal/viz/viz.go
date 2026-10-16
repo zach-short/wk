@@ -8,11 +8,12 @@ import (
 	"net/http"
 )
 
-//go:embed index.html
+//go:embed index.html assets/*.webp
 var assets embed.FS
 
-// Handler serves the page at / and the live report at /gc.json. report writes the JSON for one
-// request, so every load shows the current state of the worktrees.
+// Handler serves the page at /, its artwork under /assets/ and the live report at /gc.json.
+// report writes the JSON for one request, so every load shows the current state of the
+// worktrees.
 func Handler(report func(io.Writer) error) http.Handler {
 	page, err := assets.ReadFile("index.html")
 	if err != nil {
@@ -27,6 +28,7 @@ func Handler(report func(io.Writer) error) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(page)
 	})
+	mux.Handle("/assets/", http.FileServerFS(assets))
 	mux.HandleFunc("/gc.json", func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
 		if err := report(&buf); err != nil {

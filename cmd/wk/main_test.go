@@ -97,6 +97,38 @@ func TestVizRefusesBadArguments(t *testing.T) {
 	}
 }
 
+func TestHiveRefusesBadArguments(t *testing.T) {
+	t.Setenv("WK_HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"hive", "--every", "1s"}, &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "unexpected arguments to wk hive") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}
+
+// The terminal view reads the dry-run report and nothing else: the worktree is still on disk
+// after the read.
+func TestHiveLoaderReadsTheDryRunReport(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	dir := filepath.Join(f.Repo, ".claude/worktrees/x")
+	f.Git(t, "worktree", "add", "--quiet", "-b", "worktree-x", dir, "main")
+	var stderr bytes.Buffer
+	env, err := wk.Open(f.Home, f.Repo, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := hiveLoader(env)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Base != "main" || len(r.Worktrees) != 1 || r.Worktrees[0].Path != ".claude/worktrees/x" {
+		t.Fatalf("report = %+v", r)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the read touched the worktree: %v", err)
+	}
+}
+
 func TestGCRefusals(t *testing.T) {
 	t.Setenv("WK_HOME", t.TempDir())
 	for _, args := range [][]string{{"gc", "--force"}, {"gc", "schedule"}, {"gc", "--apply", "now"}} {

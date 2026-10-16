@@ -2,6 +2,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/zach-short/landing-layer/internal/hive"
 	"github.com/zach-short/landing-layer/internal/viz"
 	"github.com/zach-short/landing-layer/internal/wk"
 )
@@ -21,6 +25,7 @@ const usage = `usage:
   wk [--repo <absolute dir>] gc [--apply|--json]
   wk [--repo <absolute dir>] gc schedule install|uninstall
   wk [--repo <absolute dir>] viz [--addr <host:port>]
+  wk [--repo <absolute dir>] hive
 
 The repository is the one holding --repo, or the current directory. Config is read from
 $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspace's absolute
@@ -33,6 +38,8 @@ gc.apply_interval_minutes; uninstall unloads and deletes it.
 
 wk viz serves the hive page on --addr (default 127.0.0.1:8787). The page reads the live
 verdicts on every load and changes nothing.
+wk hive draws the same hive in the terminal and reads the verdicts again every 3 seconds.
+Arrow keys select a cell, q quits. Like wk gc without --apply, it changes nothing.
 `
 
 const (
@@ -80,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGC(home, repoDir, rest[1:], stdout, stderr)
 	case rest[0] == "viz":
 		return runViz(home, repoDir, rest[1:], stderr)
+	case rest[0] == "hive":
+		return runHive(home, repoDir, rest[1:], stderr)
 	}
 	return fail(stderr, nil, exitUsage)
 }
@@ -161,6 +170,36 @@ func runViz(home, repoDir string, args []string, stderr io.Writer) int {
 	_, _ = fmt.Fprintf(stderr, "wk viz: http://%s (Ctrl-C stops it)\n", addr)
 	srv := &http.Server{Addr: addr, Handler: viz.Handler(env.GCJSON), ReadHeaderTimeout: 5 * time.Second}
 	return fail(stderr, srv.ListenAndServe(), exitError)
+}
+
+const hiveEvery = 3 * time.Second
+
+// runHive draws the terminal hive until q. It reads through hiveLoader only, which is the dry
+// run, so the view cannot remove anything.
+func runHive(home, repoDir string, args []string, stderr io.Writer) int {
+	if len(args) != 0 {
+		return fail(stderr, fmt.Errorf("unexpected arguments to wk hive: %q", strings.Join(args, " ")), exitUsage)
+	}
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	_, err = tea.NewProgram(hive.New(hiveLoader(env), hiveEvery), tea.WithAltScreen()).Run()
+	return fail(stderr, err, exitError)
+}
+
+// hiveLoader reads the report the page reads, through the same JSON, so both views keep one
+// contract.
+func hiveLoader(env *wk.Env) hive.Loader {
+	return func() (wk.Report, error) {
+		var buf bytes.Buffer
+		if err := env.GCJSON(&buf); err != nil {
+			return wk.Report{}, err
+		}
+		var r wk.Report
+		err := json.Unmarshal(buf.Bytes(), &r)
+		return r, err
+	}
 }
 
 // fail prints err and returns code, or returns exitOK when err is nil and code is not a usage

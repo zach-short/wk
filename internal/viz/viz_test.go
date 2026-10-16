@@ -3,8 +3,10 @@ package viz
 import (
 	"bytes"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -48,6 +50,36 @@ func TestHandlerReportsAFailure(t *testing.T) {
 	rec := get(t, h, "/gc.json")
 	if rec.Code != http.StatusInternalServerError || !bytes.Contains(rec.Body.Bytes(), []byte("unexpected EOF")) {
 		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+}
+
+// Every asset the page names must be embedded and served as an image, and the artwork together
+// stays under the 3 MB budget.
+func TestHandlerServesEveryAssetThePageNames(t *testing.T) {
+	h := Handler(func(io.Writer) error { return nil })
+	page := get(t, h, "/").Body.String()
+	names := regexp.MustCompile(`assets/[a-z-]+\.webp`).FindAllString(page, -1)
+	if len(names) < 7 {
+		t.Fatalf("page names %d assets, want the 7 direction images: %v", len(names), names)
+	}
+	for _, name := range names {
+		rec := get(t, h, "/"+name)
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/webp" {
+			t.Fatalf("%s: %d %q", name, rec.Code, rec.Header().Get("Content-Type"))
+		}
+	}
+
+	total := 0
+	err := fs.WalkDir(assets, "assets", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		total += int(info.Size())
+		return err
+	})
+	if err != nil || total > 3<<20 {
+		t.Fatalf("assets total %d bytes (err %v), want under 3 MB", total, err)
 	}
 }
 
