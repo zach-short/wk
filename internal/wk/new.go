@@ -8,11 +8,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/zach-short/landing-layer/internal/clone"
-	"github.com/zach-short/landing-layer/internal/config"
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
+	"github.com/zach-short/wk/internal/clone"
+	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
 )
 
 var rowPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
@@ -21,29 +22,67 @@ var rowPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 // it waits, so a base branch whose lockfile moves every minute cannot hold it forever.
 const maxRefreshes = 2
 
+// Checkout is the shape a caller asks for. DefaultCheckout follows workspace.sparse.
+type Checkout int
+
+const (
+	DefaultCheckout Checkout = iota
+	FullCheckout
+	SparseCheckout
+)
+
+func (e *Env) sparseFor(c Checkout) bool {
+	switch c {
+	case FullCheckout:
+		return false
+	case SparseCheckout:
+		return true
+	}
+	return e.Cfg.Workspace.Sparse
+}
+
 // New makes the workspace for a board row and returns its absolute path.
-func (e *Env) New(row string, sparse bool) (string, error) {
+func (e *Env) New(row string, c Checkout) (string, error) {
 	if !rowPattern.MatchString(row) {
 		return "", fmt.Errorf("row %q is not a positive integer", row)
 	}
 	dir := e.inPrimary(strings.ReplaceAll(e.Cfg.Workspace.Dir, config.RowPlaceholder, row))
 	branch := strings.ReplaceAll(e.Cfg.Workspace.Branch, config.RowPlaceholder, row)
-	return e.create(dir, branch, sparse || e.Cfg.Workspace.Sparse)
+	commit, err := gitx.Commit(e.Repo.Primary, e.Cfg.Workspace.Base)
+	if err != nil {
+		return "", fmt.Errorf("base %q: %w", e.Cfg.Workspace.Base, err)
+	}
+	return e.create(dir, branch, commit, e.sparseFor(c))
 }
 
-func (e *Env) create(dir, branch string, sparse bool) (string, error) {
+// create makes the workspace at dir on a new branch at commit: from a pool slot when one is
+// ready, else from the template. Either way the pool is topped up afterwards, in the background.
+func (e *Env) create(dir, branch, commit string, sparse bool) (string, error) {
 	if _, err := os.Lstat(dir); err == nil {
 		return "", fmt.Errorf("%s already exists", dir)
 	}
 	if gitx.BranchExists(e.Repo.Primary, branch) {
 		return "", fmt.Errorf("branch %s already exists", branch)
 	}
-	commit, err := gitx.Commit(e.Repo.Primary, e.Cfg.Workspace.Base)
-	if err != nil {
-		return "", fmt.Errorf("base %q: %w", e.Cfg.Workspace.Base, err)
+	defer e.refill()
+	path, claimed, err := e.claim(dir, branch, commit, sparse)
+	if claimed {
+		return path, err
 	}
-	lock, err := e.takeFreshTemplate(commit)
 	if err != nil {
+		e.say("pool: %v; making the workspace from the template", err)
+	}
+	return e.createCold(dir, branch, commit, sparse)
+}
+
+func (e *Env) createCold(dir, branch, commit string, sparse bool) (string, error) {
+	slot, err := e.takeCreateSlot()
+	if err != nil {
+		return "", err
+	}
+	lock, state, err := e.takeFreshTemplate()
+	if err != nil {
+		_ = slot.Release()
 		return "", err
 	}
 	err = e.timed("worktree add --no-checkout", func() error {
@@ -53,19 +92,15 @@ func (e *Env) create(dir, branch string, sparse bool) (string, error) {
 		_, err := gitx.Run(e.Repo.Primary, "worktree", "add", "--quiet", "--no-checkout", "-b", branch, dir, commit)
 		return err
 	})
-	if err != nil {
-		_ = lock.Release()
-		return "", err
+	if err == nil {
+		err = e.fill(dir, sparse)
 	}
-	err = e.fill(dir, sparse)
-	if relErr := lock.Release(); err == nil {
-		err = relErr
-	}
+	err = errors.Join(err, lock.Release(), slot.Release())
 	if err == nil {
 		err = e.copyFiles(dir)
 	}
 	if err == nil {
-		err = e.runCommands(dir, e.Cfg.Template.PostClone, nil)
+		err = e.postClone(dir, commit, state.Commit)
 	}
 	if err != nil {
 		return "", fmt.Errorf("%w; the workspace is left at %s for inspection", err, dir)
@@ -73,31 +108,62 @@ func (e *Env) create(dir, branch string, sparse bool) (string, error) {
 	return dir, nil
 }
 
-// takeFreshTemplate returns the template lock held shared, on a template that matches the base
-// branch's lockfile, refreshing it first when it does not (D7).
-func (e *Env) takeFreshTemplate(commit string) (*flock.Lock, error) {
+// postClone runs the post-clone commands unless the workspace sits at the commit its clones
+// were installed and generated at: then they would rewrite what was cloned, byte for byte.
+func (e *Env) postClone(dir, commit, clonedAt string) error {
+	if commit == clonedAt {
+		e.say("skip the post-clone commands: the clones were made at this commit")
+		return nil
+	}
+	return e.runCommands(dir, e.Cfg.Template.PostClone, nil)
+}
+
+// takeCreateSlot holds one of new.max_parallel slots while a workspace clones and checks out.
+// It polls rather than blocking on one slot, so a waiter takes whichever slot frees first.
+func (e *Env) takeCreateSlot() (*flock.Lock, error) {
+	said := false
+	for {
+		for i := range e.Cfg.New.MaxParallel {
+			lock, ok, err := flock.TryTake(filepath.Join(e.State, fmt.Sprintf("create-%d.lock", i)), true)
+			if err != nil || ok {
+				return lock, err
+			}
+		}
+		if !said {
+			e.say("waiting: %d workspaces are already cloning (new.max_parallel)", e.Cfg.New.MaxParallel)
+			said = true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// takeFreshTemplate returns the template lock held shared, and the template's state, on a
+// template that matches the base branch, refreshing it first when it does not (D7). The base
+// is read on every pass, because a refresh can take long enough for it to move again.
+func (e *Env) takeFreshTemplate() (*flock.Lock, templateState, error) {
 	for refreshes := 0; ; refreshes++ {
 		lock, err := flock.Take(e.lockPath(), false, func() { e.say("waiting: the template is being refreshed") })
 		if err != nil {
-			return nil, err
+			return nil, templateState{}, err
 		}
-		why, err := e.staleReason(commit)
-		if err != nil || why == "" {
-			if err != nil {
-				_ = lock.Release()
-				return nil, err
+		why, _, err := e.staleNow()
+		if err == nil && why == "" {
+			state, _, err := e.readState()
+			if err == nil {
+				return lock, state, nil
 			}
-			return lock, nil
 		}
-		if err := lock.Release(); err != nil {
-			return nil, err
+		if relErr := lock.Release(); err == nil {
+			err = relErr
+		}
+		if err != nil {
+			return nil, templateState{}, err
 		}
 		if refreshes == maxRefreshes {
-			return nil, fmt.Errorf("the template is still stale after %d refreshes: %s", maxRefreshes, why)
+			return nil, templateState{}, fmt.Errorf("the template is still stale after %d refreshes: %s", maxRefreshes, why)
 		}
-		e.say("refreshing the template first: %s", why)
-		if err := e.RefreshTemplate(); err != nil {
-			return nil, fmt.Errorf("template refresh: %w", err)
+		if err := e.refreshStale(); err != nil {
+			return nil, templateState{}, fmt.Errorf("template refresh: %w", err)
 		}
 	}
 }
@@ -132,10 +198,7 @@ func (e *Env) checkout(dir string, sparse bool) error {
 	}
 	return e.timed(step, func() error {
 		if sparse {
-			args := []string{"sparse-checkout", "set", "--no-cone", "/*"}
-			for _, p := range e.Cfg.Workspace.SparseExclude {
-				args = append(args, "!/"+strings.Trim(filepath.ToSlash(p), "/")+"/")
-			}
+			args := append([]string{"sparse-checkout", "set", "--no-cone", "/*"}, sparseExcludes(e.Cfg.Workspace.SparseExclude)...)
 			if _, err := gitx.Run(dir, args...); err != nil {
 				return err
 			}
@@ -143,6 +206,21 @@ func (e *Env) checkout(dir string, sparse bool) error {
 		_, err := gitx.Run(dir, "read-tree", "-m", "-u", "HEAD")
 		return err
 	})
+}
+
+// sparseExcludes turns workspace.sparse_exclude into negated non-cone patterns: a directory
+// excludes everything under it, and an entry with a glob character is a pattern as written.
+func sparseExcludes(entries []string) []string {
+	out := make([]string, 0, len(entries))
+	for _, p := range entries {
+		p = strings.Trim(filepath.ToSlash(p), "/")
+		if strings.ContainsAny(p, "*?[") {
+			out = append(out, "!/"+p)
+		} else {
+			out = append(out, "!/"+p+"/")
+		}
+	}
+	return out
 }
 
 func (e *Env) cloneOne(template, dir, rel string) error {

@@ -10,6 +10,27 @@ import (
 
 type Lock struct{ f *os.File }
 
+// TryTake locks path only if nobody holds it; ok is false, with no error, when someone does.
+func TryTake(path string, exclusive bool) (lock *Lock, ok bool, err error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	how := unix.LOCK_SH
+	if exclusive {
+		how = unix.LOCK_EX
+	}
+	err = unix.Flock(int(f.Fd()), how|unix.LOCK_NB)
+	if err != nil {
+		_ = f.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return &Lock{f: f}, true, nil
+}
+
 // Take locks path, creating it if needed. onWait runs once, before blocking, when the lock is
 // held elsewhere, so the caller can say why it is waiting.
 func Take(path string, exclusive bool, onWait func()) (*Lock, error) {

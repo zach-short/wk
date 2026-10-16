@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
-	"github.com/zach-short/landing-layer/internal/procs"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
+	"github.com/zach-short/wk/internal/procs"
 )
 
 // TrialMarkerName is the file the land-worktrees trial.sh leaves in a trial worktree's private
@@ -48,12 +48,14 @@ type Judgment struct {
 
 // survey is what gc reads once per pass and asks every worktree about.
 type survey struct {
-	base     string
-	procs    []procs.Proc
-	now      time.Time
-	quiet    time.Duration
-	primary  string
-	template string
+	base          string
+	procs         []procs.Proc
+	now           time.Time
+	quiet         time.Duration
+	stoppedQuiet  time.Duration
+	unmarkedQuiet time.Duration
+	primary       string
+	template      string
 }
 
 func (e *Env) takeSurvey() (survey, error) {
@@ -66,12 +68,14 @@ func (e *Env) takeSurvey() (survey, error) {
 		return survey{}, err
 	}
 	return survey{
-		base:     base,
-		procs:    list,
-		now:      e.clock(),
-		quiet:    time.Duration(e.Cfg.GC.QuietMinutes) * time.Minute,
-		primary:  physical(e.Repo.Primary),
-		template: physical(e.TemplateDir()),
+		base:          base,
+		procs:         list,
+		now:           e.clock(),
+		quiet:         time.Duration(e.Cfg.GC.QuietMinutes) * time.Minute,
+		stoppedQuiet:  time.Duration(e.Cfg.GC.StoppedQuietMinutes) * time.Minute,
+		unmarkedQuiet: time.Duration(e.Cfg.GC.UnmarkedAgentQuietHours) * time.Hour,
+		primary:       physical(e.Repo.Primary),
+		template:      physical(e.TemplateDir()),
 	}, nil
 }
 
@@ -143,16 +147,19 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	}
 	dirty, dirtyErr := gitx.DirtyPaths(w.Path)
 	j.Dirty = len(dirty)
+	quiet, stopped, why := s.quietFor(w.Path)
 	if last, err := lastActivity(w.Path, dirty); err != nil {
 		keep("its last activity cannot be read: %v", err)
-	} else if age := s.now.Sub(last); age < s.quiet {
+	} else if age := s.now.Sub(last); age < quiet {
 		j.Activity = last
-		keep("it changed %d minutes ago, so a session may still be in it", int(age.Minutes()))
+		keep("it changed %d minutes ago and %s", int(age.Minutes()), why)
 	} else {
 		j.Activity = last
 	}
 	absorbed, ancestor := gitx.IsAbsorbed(e.Repo.Primary, w.Head, s.base)
-	if !absorbed {
+	// A stopped subagent's commits are kept on its branch, which /land-worktrees lands from
+	// refs/heads, so its worktree can go whether or not the base holds them yet.
+	if !absorbed && !stopped {
 		if w.Branch != "" {
 			keep("branch %s has commits %s does not hold", w.Branch, e.Cfg.Workspace.Base)
 		} else {
@@ -167,6 +174,9 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	}
 
 	switch {
+	case len(reasons) == 0 && stopped && !absorbed:
+		j.Verdict = Removable
+		j.Reasons = []string{stoppedReason(e.Cfg.Workspace.Base, w.Branch)}
 	case len(reasons) == 0:
 		j.Verdict = Removable
 		j.DeleteBranch = ancestor && w.Branch != ""
@@ -192,10 +202,33 @@ func (e *Env) skipReason(s survey, w gitx.Worktree) string {
 	if exists(filepath.Join(gd, MarkerName)) {
 		return "a wk template"
 	}
+	if exists(filepath.Join(gd, PoolMarkerName)) {
+		return "a wk pool slot; wk pool fill manages it"
+	}
 	if exists(filepath.Join(gd, TrialMarkerName)) {
 		return "a land-worktrees trial; that skill removes it"
 	}
 	return ""
+}
+
+// quietFor is the quiet window a worktree needs, whether it is a stopped subagent's, and the
+// reason a kept line gives. A running subagent leaves no process in its worktree between tool
+// calls, so one without a stop marker gets the long window.
+func (s survey) quietFor(path string) (time.Duration, bool, string) {
+	if !isAgentWorktree(path) {
+		return s.quiet, false, "a session may still be in it"
+	}
+	if gd, err := privateGitDir(path); err == nil && exists(filepath.Join(gd, StoppedMarkerName)) {
+		return s.stoppedQuiet, true, fmt.Sprintf("a stopped subagent's worktree waits %d minutes", int(s.stoppedQuiet.Minutes()))
+	}
+	return max(s.quiet, s.unmarkedQuiet), false, fmt.Sprintf("a subagent worktree with no stop marker waits %d hours", int(s.unmarkedQuiet.Hours()))
+}
+
+func stoppedReason(base, branch string) string {
+	if branch == "" {
+		return "stopped subagent, clean and idle; its detached commits are not on " + base
+	}
+	return "stopped subagent, clean and idle; branch " + branch + " is kept, with commits " + base + " does not hold"
 }
 
 func removableReason(base, branch string, ancestor bool) string {
@@ -256,16 +289,12 @@ func lastActivity(wt string, dirty []string) (time.Time, error) {
 	return newest, nil
 }
 
-// GCApply removes every worktree gc judges removable. It holds the template lock exclusive, so
-// no `wk new` is between `worktree add` and its clones while gc prunes, and it judges each
-// candidate again from a fresh survey at the moment of removal, because a session may have
-// moved into it since the pass began.
+// GCApply removes every worktree gc judges removable, judging each again from a fresh survey
+// at the moment of removal, because a session may have moved into it since the pass began. It
+// takes the template lock only around `git worktree prune`, the one step that must not race a
+// `wk new` between `worktree add` and its clones; holding it for the whole pass would make
+// every new workspace wait for gc.
 func (e *Env) GCApply(out io.Writer) error {
-	lock, err := flock.Take(e.lockPath(), true, func() { e.say("waiting for the template lock") })
-	if err != nil {
-		return err
-	}
-	defer func() { _ = lock.Release() }()
 	_, _ = fmt.Fprintf(out, "wk gc --apply at %s\n", e.clock().Format(time.RFC3339))
 
 	judgments, err := e.judgeAll()
@@ -286,7 +315,7 @@ func (e *Env) GCApply(out io.Writer) error {
 			}
 		case Prunable:
 			if !pruned {
-				if _, err := gitx.Run(e.Repo.Primary, "worktree", "prune"); err != nil {
+				if err := e.prune(); err != nil {
 					failures = append(failures, err)
 				}
 				pruned = true
@@ -298,6 +327,16 @@ func (e *Env) GCApply(out io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(out, "%d of %d removed\n", removed, len(judgments))
 	return errors.Join(failures...)
+}
+
+func (e *Env) prune() error {
+	lock, err := flock.Take(e.lockPath(), true, func() { e.say("waiting for the template lock to prune") })
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+	_, err = gitx.Run(e.Repo.Primary, "worktree", "prune")
+	return err
 }
 
 func (e *Env) removeOne(out io.Writer, w gitx.Worktree) (bool, error) {

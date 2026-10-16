@@ -21,7 +21,7 @@ func TestMissingFileGivesDefaults(t *testing.T) {
 	if err != nil || found {
 		t.Fatalf("found = %v, err = %v; want the defaults and no error", found, err)
 	}
-	if cfg.Workspace.Base != "main" || cfg.Pool.Size != 2 || cfg.New.MaxSecondsFull != 8 {
+	if cfg.Workspace.Base != "main" || cfg.Pool.Size != 0 || cfg.New.MaxParallel != 2 || !cfg.Template.FollowBase || cfg.GC.StoppedQuietMinutes != 15 {
 		t.Fatalf("defaults = %+v", cfg)
 	}
 }
@@ -69,6 +69,11 @@ func TestRefusals(t *testing.T) {
 		"wrong value type": {"[pool]\nsize = \"two\"\n", "repo.toml"},
 		"no quiet window":  {"[gc]\nquiet_minutes = 0\n", "gc.quiet_minutes is 0"},
 		"no gc interval":   {"[gc]\napply_interval_minutes = -5\n", "gc.apply_interval_minutes is -5"},
+		"slot placeholder": {"[pool]\ndir = \"pool\"\n", "pool.dir must hold {slot}"},
+		"no parallelism":   {"[new]\nmax_parallel = 0\n", "new.max_parallel is 0"},
+		"no stopped quiet": {"[gc]\nstopped_quiet_minutes = 0\n", "gc.stopped_quiet_minutes is 0"},
+		"negative pool":    {"[pool]\nsparse_size = -1\n", "must not be negative"},
+		"climbing pool":    {"[pool]\ndir = \"../p-{slot}\"\n", "leaves the main checkout"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := Load(write(t, tc.body))

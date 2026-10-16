@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 // Loader reads the current verdicts. wk hive passes the dry-run report, so the view can only

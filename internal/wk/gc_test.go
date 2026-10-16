@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
-	"github.com/zach-short/landing-layer/internal/testrepo"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
+	"github.com/zach-short/wk/internal/testrepo"
 )
 
 // idle opens the fixture with a clock two hours ahead, so every worktree made by the test is
@@ -345,16 +345,43 @@ func TestGCApplyJudgesAgainAtTheMomentOfRemoval(t *testing.T) {
 	}
 }
 
-func TestGCApplyWaitsForAWkNewHoldingTheLock(t *testing.T) {
+// A `wk new` holding the template lock does not hold up removals, so gc never stalls the
+// creates of a burst; only the prune waits (BD-5 as amended).
+func TestGCApplyRemovesWhileAWkNewHoldsTheLock(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := addWorktree(t, f, "busy-template")
+	held, err := flock.Take(e.lockPath(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Release() }()
+	done := make(chan error, 1)
+	go func() { done <- e.GCApply(io.Discard) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("gc --apply waited for the template lock to remove a worktree")
+	}
+	assertGone(t, f, dir)
+}
+
+func TestGCApplyPruneWaitsForAWkNewHoldingTheLock(t *testing.T) {
 	f := testrepo.New(t)
 	e := idle(t, f)
 	dir := addWorktree(t, f, "racing")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
 	held, err := flock.Take(e.lockPath(), false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w := &waitWriter{want: "waiting for the template lock", seen: make(chan struct{})}
+	w := &waitWriter{want: "waiting for the template lock to prune", seen: make(chan struct{})}
 	e.log = &syncWriter{w: w}
 	done := make(chan error, 1)
 	go func() { done <- e.GCApply(io.Discard) }()
@@ -371,7 +398,9 @@ func TestGCApplyWaitsForAWkNewHoldingTheLock(t *testing.T) {
 		t.Fatalf("gc --apply finished while wk new held the lock: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	assertStays(t, dir)
+	if !strings.Contains(f.Git(t, "worktree", "list", "--porcelain"), dir) {
+		t.Fatal("gc pruned while wk new held the lock")
+	}
 	if err := held.Release(); err != nil {
 		t.Fatal(err)
 	}

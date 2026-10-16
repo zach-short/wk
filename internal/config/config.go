@@ -21,19 +21,25 @@ type Command struct {
 	Run []string `toml:"run"`
 }
 
+// Template is the tree every workspace clones from. With FollowBase, a base branch that moved
+// without a RefreshOn change gets a light refresh (checkout and post-clone, no build), so a
+// workspace made at the base's head can skip its own post-clone commands.
 type Template struct {
-	Path      string    `toml:"path"`
-	RefreshOn string    `toml:"refresh_on"`
-	CloneDirs []string  `toml:"clone_dirs"`
-	CopyFiles []string  `toml:"copy_files"`
-	PostClone []Command `toml:"post_clone"`
-	Build     []Command `toml:"build"`
+	Path       string    `toml:"path"`
+	RefreshOn  string    `toml:"refresh_on"`
+	FollowBase bool      `toml:"follow_base"`
+	CloneDirs  []string  `toml:"clone_dirs"`
+	CopyFiles  []string  `toml:"copy_files"`
+	PostClone  []Command `toml:"post_clone"`
+	Build      []Command `toml:"build"`
 }
 
 type Gates struct {
 	Env map[string]string `toml:"env"`
 }
 
+// Workspace names and shapes a `wk new` workspace. Each SparseExclude entry is a directory, or
+// a pattern when it holds a glob character, such as docs/incomplete/**/*.png.
 type Workspace struct {
 	Dir           string   `toml:"dir"`
 	Branch        string   `toml:"branch"`
@@ -47,18 +53,35 @@ type Hook struct {
 	Branch string `toml:"branch"`
 }
 
+// GC holds gc's windows. A subagent worktree with a stop marker needs only StoppedQuietMinutes
+// of quiet; one without a marker needs UnmarkedAgentQuietHours, because a running subagent
+// leaves no process inside its worktree between tool calls.
 type GC struct {
-	QuietMinutes         int `toml:"quiet_minutes"`
-	ApplyIntervalMinutes int `toml:"apply_interval_minutes"`
+	QuietMinutes            int `toml:"quiet_minutes"`
+	StoppedQuietMinutes     int `toml:"stopped_quiet_minutes"`
+	UnmarkedAgentQuietHours int `toml:"unmarked_agent_quiet_hours"`
+	ApplyIntervalMinutes    int `toml:"apply_interval_minutes"`
 }
 
+// New holds MaxParallel, the number of workspaces that clone and check out at once; the rest
+// queue. APFS runs concurrent clones and file writes on one volume one after another, so more
+// at once only makes every one of them finish late. The other fields are proof thresholds
+// for PLAN.md, never timeouts.
 type New struct {
-	MaxSecondsFull   float64 `toml:"max_seconds_full"`
-	MaxSecondsSparse float64 `toml:"max_seconds_sparse"`
+	MaxParallel       int     `toml:"max_parallel"`
+	MaxSecondsCold    float64 `toml:"max_seconds_cold"`
+	MaxMBPerWorkspace int     `toml:"max_mb_per_workspace"`
+	BurstSize         int     `toml:"burst_size"`
+	BurstMaxSeconds   float64 `toml:"burst_max_seconds"`
 }
 
+// Pool is the warm workspaces made ahead under neutral names. Size counts the full ones and
+// SparseSize the sparse ones; a sparse request never takes a full slot, because writing the
+// sparse patterns over a full tree deletes every excluded file one by one.
 type Pool struct {
-	Size int `toml:"size"`
+	Size       int    `toml:"size"`
+	SparseSize int    `toml:"sparse_size"`
+	Dir        string `toml:"dir"`
 }
 
 type Config struct {
@@ -74,13 +97,15 @@ type Config struct {
 const (
 	RowPlaceholder  = "{row}"
 	NamePlaceholder = "{name}"
+	SlotPlaceholder = "{slot}"
 )
 
 func Defaults() Config {
 	return Config{
 		Template: Template{
-			Path:      ".claude/worktrees/wk-template",
-			CloneDirs: []string{"node_modules"},
+			Path:       ".claude/worktrees/wk-template",
+			FollowBase: true,
+			CloneDirs:  []string{"node_modules"},
 		},
 		Gates: Gates{Env: map[string]string{}},
 		Workspace: Workspace{
@@ -92,9 +117,9 @@ func Defaults() Config {
 			Dir:    ".claude/worktrees/" + NamePlaceholder,
 			Branch: "worktree-" + NamePlaceholder,
 		},
-		GC:   GC{QuietMinutes: 60, ApplyIntervalMinutes: 60},
-		New:  New{MaxSecondsFull: 8, MaxSecondsSparse: 5},
-		Pool: Pool{Size: 2},
+		GC:   GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60},
+		New:  New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
+		Pool: Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
 	}
 }
 
@@ -128,6 +153,7 @@ func (c Config) validate() error {
 		"template.path":       c.Template.Path,
 		"workspace.dir":       c.Workspace.Dir,
 		"hook.dir":            c.Hook.Dir,
+		"pool.dir":            c.Pool.Dir,
 		"template.refresh_on": c.Template.RefreshOn,
 	}
 	for _, list := range []struct {
@@ -169,9 +195,21 @@ func (c Config) validate() error {
 	if !strings.Contains(c.Hook.Dir, NamePlaceholder) || !strings.Contains(c.Hook.Branch, NamePlaceholder) {
 		return fmt.Errorf("hook.dir and hook.branch must both hold %s", NamePlaceholder)
 	}
+	if !strings.Contains(c.Pool.Dir, SlotPlaceholder) {
+		return fmt.Errorf("pool.dir must hold %s", SlotPlaceholder)
+	}
+	if c.Pool.Size < 0 || c.Pool.SparseSize < 0 {
+		return fmt.Errorf("pool.size and pool.sparse_size must not be negative")
+	}
 	// A quiet window of 0 would let gc remove a worktree a session made a second ago, before
 	// the session's process has moved into it.
-	for key, v := range map[string]int{"gc.quiet_minutes": c.GC.QuietMinutes, "gc.apply_interval_minutes": c.GC.ApplyIntervalMinutes} {
+	for key, v := range map[string]int{
+		"gc.quiet_minutes":              c.GC.QuietMinutes,
+		"gc.stopped_quiet_minutes":      c.GC.StoppedQuietMinutes,
+		"gc.unmarked_agent_quiet_hours": c.GC.UnmarkedAgentQuietHours,
+		"gc.apply_interval_minutes":     c.GC.ApplyIntervalMinutes,
+		"new.max_parallel":              c.New.MaxParallel,
+	} {
 		if v < 1 {
 			return fmt.Errorf("%s is %d; it must be at least 1", key, v)
 		}

@@ -1,4 +1,4 @@
-module github.com/zach-short/landing-layer
+module github.com/zach-short/wk
 
 go 1.24.0
 

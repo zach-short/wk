@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Launchd is where the gc agent goes and how launchctl is reached. The command line fills it
@@ -33,11 +32,8 @@ func (l Launchd) plistPath(label string) string {
 // exe is the wk binary the agent runs, and must be an installed one: a `go run` binary lives in
 // a build cache that is deleted under it.
 func (e *Env) ScheduleInstall(exe string, l Launchd, out io.Writer) error {
-	if !filepath.IsAbs(exe) {
-		return fmt.Errorf("%q is relative; the agent needs the wk binary's absolute path", exe)
-	}
-	if strings.Contains(exe, string(filepath.Separator)+"go-build") {
-		return fmt.Errorf("%s is a go run build; run `go install ./cmd/wk` and install from that binary", exe)
+	if err := checkInstalled(exe); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(l.AgentsDir, 0o755); err != nil {
 		return err

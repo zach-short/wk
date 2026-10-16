@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zach-short/landing-layer/internal/testrepo"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/testrepo"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 func TestMain(m *testing.M) {
@@ -36,7 +36,7 @@ func TestNewPrintsOnlyThePath(t *testing.T) {
 }
 
 func TestUsageAndRefusals(t *testing.T) {
-	t.Setenv("WK_HOME", t.TempDir())
+	isolated(t)
 	for name, tc := range map[string]struct {
 		args []string
 		code int
@@ -46,7 +46,8 @@ func TestUsageAndRefusals(t *testing.T) {
 		"unknown":       {[]string{"frobnicate"}, exitUsage, "usage:"},
 		"new no row":    {[]string{"new"}, exitUsage, "needs a row"},
 		"new two rows":  {[]string{"new", "1", "2"}, exitUsage, "unexpected argument"},
-		"new bad flag":  {[]string{"new", "1", "--full"}, exitUsage, "unexpected argument"},
+		"new bad flag":  {[]string{"new", "1", "--fat"}, exitUsage, "unexpected argument"},
+		"new two modes": {[]string{"new", "1", "--full", "--sparse"}, exitUsage, "exclude each other"},
 		"relative repo": {[]string{"--repo", "demo", "new", "1"}, exitUsage, "relative"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -90,7 +91,7 @@ func TestGCDryRunPrintsAVerdictPerWorktree(t *testing.T) {
 }
 
 func TestVizRefusesBadArguments(t *testing.T) {
-	t.Setenv("WK_HOME", t.TempDir())
+	isolated(t)
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"viz", "--port", "9"}, &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "unexpected arguments to wk viz") {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
@@ -98,7 +99,7 @@ func TestVizRefusesBadArguments(t *testing.T) {
 }
 
 func TestHiveRefusesBadArguments(t *testing.T) {
-	t.Setenv("WK_HOME", t.TempDir())
+	isolated(t)
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"hive", "--every", "1s"}, &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "unexpected arguments to wk hive") {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
@@ -130,7 +131,7 @@ func TestHiveLoaderReadsTheDryRunReport(t *testing.T) {
 }
 
 func TestGCRefusals(t *testing.T) {
-	t.Setenv("WK_HOME", t.TempDir())
+	isolated(t)
 	for _, args := range [][]string{{"gc", "--force"}, {"gc", "schedule"}, {"gc", "--apply", "now"}} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "unexpected arguments to wk gc") {
@@ -155,5 +156,95 @@ func TestScheduleInstallRefusesTheTestBinary(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "go install ./cmd/wk") || called {
 		t.Fatalf("stderr %q, launchctl called %v", stderr.String(), called)
+	}
+}
+
+func feed(t *testing.T, input string) {
+	t.Helper()
+	stdin = strings.NewReader(input)
+	t.Cleanup(func() { stdin = os.Stdin })
+}
+
+func TestHookPrintsOnlyThePath(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	feed(t, `{"hook_event_name":"WorktreeCreate","name":"agent-0123456789abcdef0","cwd":"`+f.Repo+`"}`)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"hook", "worktree-create"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if want := filepath.Join(f.Repo, ".claude/worktrees/agent-0123456789abcdef0") + "\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want exactly %q", stdout.String(), want)
+	}
+}
+
+// A failed hook prints nothing on stdout, because Claude Code takes any stdout line as the path,
+// and exits 2.
+func TestHookFailurePrintsNoPath(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	feed(t, `{"hook_event_name":"WorktreeCreate","name":"a/b","cwd":"`+f.Repo+`"}`)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"hook", "worktree-create"}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "cannot be a directory name") {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestHooksInstallRefusesTheTestBinary(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "hooks", "install"}, &stdout, &stderr); code != exitError {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "go install ./cmd/wk") {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(f.Repo, ".claude/settings.local.json")); !os.IsNotExist(err) {
+		t.Fatal("a refused install wrote the settings file")
+	}
+}
+
+func TestPoolAndHooksRefuseBadArguments(t *testing.T) {
+	isolated(t)
+	for _, args := range [][]string{{"pool", "drain"}, {"hooks", "add"}, {"pool"}, {"hook", "worktree-delete"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != exitUsage {
+			t.Errorf("%q: exit %d, stderr %q", args, code, stderr.String())
+		}
+	}
+}
+
+// isolated runs a refusal test from an empty directory with an empty WK_HOME, so a case that
+// is not refused acts on no real repository. The test's own working directory is inside the
+// wk repository, which a `wk new` there would change.
+func isolated(t *testing.T) {
+	t.Helper()
+	t.Setenv("WK_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+}
+
+// Exit 2 from a SubagentStop hook would keep the subagent running, so any input, even junk,
+// exits 0 and prints nothing on stdout.
+func TestSubagentStopNeverBlocksTheStop(t *testing.T) {
+	isolated(t)
+	for _, input := range []string{"{", `{"agent_id":"a0123456789abcdef","cwd":"/nowhere"}`, ""} {
+		feed(t, input)
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"hook", "subagent-stop"}, &stdout, &stderr); code != exitOK || stdout.Len() != 0 {
+			t.Errorf("input %q: exit %d, stdout %q", input, code, stdout.String())
+		}
+	}
+}
+
+func TestWorktreeRemoveRefusesBadInput(t *testing.T) {
+	isolated(t)
+	feed(t, `{"worktree_path":"relative/path"}`)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"hook", "worktree-remove"}, &stdout, &stderr); code != exitError || !strings.Contains(stderr.String(), "not absolute") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }

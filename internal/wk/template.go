@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
 )
 
 // MarkerName is the file in the template's private git directory that tells wk, and later
@@ -38,10 +38,33 @@ func (e *Env) RefreshTemplate() error {
 		return err
 	}
 	defer func() { _ = lock.Release() }()
-	return e.refreshLocked()
+	return e.refreshLocked(true)
 }
 
-func (e *Env) refreshLocked() error {
+// refreshStale brings a stale template up to date. It judges again once it holds the lock,
+// because another `wk new` may have refreshed the template while this one waited.
+func (e *Env) refreshStale() error {
+	lock, err := flock.Take(e.lockPath(), true, func() { e.say("waiting for the template lock") })
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+	why, full, err := e.staleNow()
+	if err != nil || why == "" {
+		return err
+	}
+	if full {
+		e.say("refreshing the template first: %s", why)
+	} else {
+		e.say("updating the template first, without a build: %s", why)
+	}
+	return e.refreshLocked(full)
+}
+
+// refreshLocked moves the template to the base and runs the post-clone commands; full also
+// runs the build. A light refresh keeps the build cache of the last full one, which the next
+// build in a workspace starts from and only partly rewrites.
+func (e *Env) refreshLocked(full bool) error {
 	commit, err := gitx.Commit(e.Repo.Primary, e.Cfg.Workspace.Base)
 	if err != nil {
 		return fmt.Errorf("base %q: %w", e.Cfg.Workspace.Base, err)
@@ -60,8 +83,10 @@ func (e *Env) refreshLocked() error {
 	if err := e.runCommands(dir, e.Cfg.Template.PostClone, nil); err != nil {
 		return err
 	}
-	if err := e.runCommands(dir, e.Cfg.Template.Build, e.Cfg.Gates.Env); err != nil {
-		return err
+	if full {
+		if err := e.runCommands(dir, e.Cfg.Template.Build, e.Cfg.Gates.Env); err != nil {
+			return err
+		}
 	}
 	return e.writeState(templateState{Commit: commit, RefreshBlob: blob, RefreshedAt: time.Now().UTC()})
 }
@@ -192,28 +217,40 @@ func (e *Env) writeState(s templateState) error {
 	return os.Rename(tmp, e.statePath())
 }
 
-// staleReason says why the template must be refreshed before a clone, or "" when it is fresh.
-func (e *Env) staleReason(baseCommit string) (string, error) {
+// staleNow reads the base branch and says why the template must be refreshed before a clone,
+// or "" when it is fresh. full is true when the refresh must also build.
+func (e *Env) staleNow() (why string, full bool, err error) {
+	base, err := gitx.Commit(e.Repo.Primary, e.Cfg.Workspace.Base)
+	if err != nil {
+		return "", false, fmt.Errorf("base %q: %w", e.Cfg.Workspace.Base, err)
+	}
+	return e.staleReason(base)
+}
+
+func (e *Env) staleReason(baseCommit string) (why string, full bool, err error) {
 	s, found, err := e.readState()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if !found {
-		return "no template has been made yet", nil
+		return "no template has been made yet", true, nil
 	}
 	dir := e.TemplateDir()
 	if _, statErr := os.Stat(dir); statErr != nil {
-		return "the template directory is missing", nil
+		return "the template directory is missing", true, nil
 	}
 	if ok, err := hasMarker(dir); err != nil || !ok {
-		return "the template has no marker", nil
+		return "the template has no marker", true, nil
 	}
 	blob, err := e.refreshBlob(baseCommit)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if blob != s.RefreshBlob {
-		return fmt.Sprintf("%s changed on %s", e.Cfg.Template.RefreshOn, e.Cfg.Workspace.Base), nil
+		return fmt.Sprintf("%s changed on %s", e.Cfg.Template.RefreshOn, e.Cfg.Workspace.Base), true, nil
 	}
-	return "", nil
+	if e.Cfg.Template.FollowBase && s.Commit != baseCommit {
+		return fmt.Sprintf("%s moved from %.10s to %.10s", e.Cfg.Workspace.Base, s.Commit, baseCommit), false, nil
+	}
+	return "", false, nil
 }

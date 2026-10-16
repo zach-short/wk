@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/flock"
-	"github.com/zach-short/landing-layer/internal/gitx"
-	"github.com/zach-short/landing-layer/internal/testrepo"
+	"github.com/zach-short/wk/internal/flock"
+	"github.com/zach-short/wk/internal/gitx"
+	"github.com/zach-short/wk/internal/testrepo"
 )
 
 func TestMain(m *testing.M) {
@@ -31,7 +31,11 @@ func open(t *testing.T, f testrepo.Fixture, log io.Writer) *Env {
 
 func mustNew(t *testing.T, e *Env, row string, sparse bool) string {
 	t.Helper()
-	dir, err := e.New(row, sparse)
+	c := DefaultCheckout
+	if sparse {
+		c = SparseCheckout
+	}
+	dir, err := e.New(row, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +137,7 @@ func TestNewRefusesBadRows(t *testing.T) {
 	f := testrepo.New(t)
 	e := open(t, f, io.Discard)
 	for _, row := range []string{"", "abc", "0", "-3", "07", "1/2", "../x", "1234567890"} {
-		if _, err := e.New(row, false); err == nil || !strings.Contains(err.Error(), "not a positive integer") {
+		if _, err := e.New(row, DefaultCheckout); err == nil || !strings.Contains(err.Error(), "not a positive integer") {
 			t.Errorf("row %q: err = %v, want a refusal", row, err)
 		}
 	}
@@ -153,11 +157,11 @@ func TestNewRefusesExistingRowAndBranch(t *testing.T) {
 	f := testrepo.New(t)
 	e := open(t, f, io.Discard)
 	mustNew(t, e, "3", false)
-	if _, err := e.New("3", false); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := e.New("3", DefaultCheckout); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second wk new 3: err = %v, want a refusal", err)
 	}
 	f.Git(t, "branch", "wk/4", "main")
-	if _, err := e.New("4", false); err == nil || !strings.Contains(err.Error(), "branch wk/4 already exists") {
+	if _, err := e.New("4", DefaultCheckout); err == nil || !strings.Contains(err.Error(), "branch wk/4 already exists") {
 		t.Fatalf("wk new 4 over an existing branch: err = %v, want a refusal", err)
 	}
 	if _, err := os.Stat(filepath.Join(f.Repo, ".claude/worktrees/wk-4")); !os.IsNotExist(err) {
@@ -250,7 +254,7 @@ func TestNewWaitsForAHeldRefreshLock(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		dir, err := e.New("5", false)
+		dir, err := e.New("5", DefaultCheckout)
 		done <- result{dir, err}
 	}()
 
@@ -353,5 +357,118 @@ func TestOpenSaysOnceWhenConfigIsMissing(t *testing.T) {
 	}
 	if e.Cfg.Template.Path != ".claude/worktrees/wk-template" {
 		t.Fatalf("defaults not used: %+v", e.Cfg.Template)
+	}
+}
+
+// The pattern form of sparse_exclude leaves out the images under docs/incomplete and keeps
+// every markdown, so a sparse workspace can still grep the design documents (D8 as amended).
+func TestPatternSparseKeepsTextAndDropsImages(t *testing.T) {
+	f := testrepo.New(t)
+	f.Write(t, "docs/incomplete/plan/shots/a.png", "png\n")
+	f.Commit(t, "a screenshot")
+	e := open(t, f, io.Discard)
+	e.Cfg.Workspace.Sparse = true
+	e.Cfg.Workspace.SparseExclude = []string{"docs/incomplete/**/*.png"}
+	dir := mustNew(t, e, "51", false)
+
+	read(t, filepath.Join(dir, "docs/incomplete/plan/PLAN.md"))
+	if _, err := os.Stat(filepath.Join(dir, "docs/incomplete/plan/shots/a.png")); !os.IsNotExist(err) {
+		t.Fatalf("the screenshot is in the sparse workspace (err %v)", err)
+	}
+	assertClean(t, dir)
+
+	full, err := e.New("52", FullCheckout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(t, filepath.Join(full, "docs/incomplete/plan/shots/a.png"))
+}
+
+func TestSparseExcludesTurnsDirectoriesAndPatternsIntoNegations(t *testing.T) {
+	got := strings.Join(sparseExcludes([]string{"docs/incomplete", "/docs/x/**/*.svg/"}), " ")
+	if want := "!/docs/incomplete/ !/docs/x/**/*.svg"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A base that moved without a lockfile change gets a light refresh, with no build, and the
+// workspace made at the new head then skips its own post-clone commands.
+func TestNewFollowsTheBaseWithALightRefresh(t *testing.T) {
+	f := testrepo.New(t)
+	mustNew(t, open(t, f, io.Discard), "53", false)
+	f.Write(t, "web/next.ts", "export const next = 1;\n")
+	f.Commit(t, "main moves")
+
+	var log bytes.Buffer
+	e := open(t, f, &log)
+	dir := mustNew(t, e, "54", false)
+	if !strings.Contains(log.String(), "updating the template first, without a build: main moved") {
+		t.Fatalf("no light refresh:\n%s", log.String())
+	}
+	if strings.Contains(log.String(), "in web") {
+		t.Fatalf("the light refresh ran the build:\n%s", log.String())
+	}
+	if !strings.Contains(log.String(), "skip the post-clone commands") {
+		t.Fatalf("the workspace at the template's commit ran its post-clone commands:\n%s", log.String())
+	}
+	main := f.Git(t, "rev-parse", "main")
+	if got := testrepo.Git(t, e.TemplateDir(), "rev-parse", "HEAD"); got != main {
+		t.Fatalf("template HEAD = %s, want main %s", got, main)
+	}
+	read(t, filepath.Join(dir, "web/next.ts"))
+	assertClean(t, dir)
+}
+
+func TestNewWithoutFollowBaseRunsThePostCloneCommands(t *testing.T) {
+	f := testrepo.New(t)
+	mustNew(t, open(t, f, io.Discard), "55", false)
+	f.Write(t, "web/next.ts", "export const next = 1;\n")
+	f.Commit(t, "main moves")
+
+	var log bytes.Buffer
+	e := open(t, f, &log)
+	e.Cfg.Template.FollowBase = false
+	mustNew(t, e, "56", false)
+	if strings.Contains(log.String(), "updating the template") || strings.Contains(log.String(), "skip the post-clone") {
+		t.Fatalf("follow_base = false still followed the base:\n%s", log.String())
+	}
+}
+
+// With every create slot taken, a `wk new` waits and says so, and goes on once one frees.
+func TestNewWaitsForACreateSlot(t *testing.T) {
+	f := testrepo.New(t)
+	e := open(t, f, io.Discard)
+	if err := e.RefreshTemplate(); err != nil {
+		t.Fatal(err)
+	}
+	e.Cfg.New.MaxParallel = 1
+	held, err := flock.Take(filepath.Join(e.State, "create-0.lock"), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &waitWriter{want: "workspaces are already cloning", seen: make(chan struct{})}
+	e.log = &syncWriter{w: w}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.New("57", DefaultCheckout)
+		done <- err
+	}()
+	select {
+	case <-w.seen:
+	case err := <-done:
+		t.Fatalf("wk new finished while every create slot was held: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("wk new never said it was waiting for a slot")
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("wk new did not finish after the slot freed")
 	}
 }

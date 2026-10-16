@@ -12,16 +12,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zach-short/landing-layer/internal/config"
-	"github.com/zach-short/landing-layer/internal/gitx"
+	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/gitx"
 )
 
 type Env struct {
 	Repo  gitx.Repo
 	Cfg   config.Config
 	State string
-	log   *syncWriter
-	clock func() time.Time
+	// Refill starts a pool fill that outlives this process. Open leaves it nil, so a library
+	// caller or a test never forks; the command line sets it to a detached `wk pool fill`.
+	Refill func()
+	log    *syncWriter
+	clock  func() time.Time
 }
 
 // Open resolves the repository holding dir and reads its config from home/<repo>.toml. All

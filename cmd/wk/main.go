@@ -11,25 +11,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/zach-short/landing-layer/internal/hive"
-	"github.com/zach-short/landing-layer/internal/viz"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/hive"
+	"github.com/zach-short/wk/internal/viz"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 const usage = `usage:
   wk [--repo <absolute dir>] template refresh
-  wk [--repo <absolute dir>] new <row> [--sparse]
+  wk [--repo <absolute dir>] new <row> [--sparse|--full]
   wk [--repo <absolute dir>] gc [--apply|--json]
   wk [--repo <absolute dir>] gc schedule install|uninstall
   wk [--repo <absolute dir>] viz [--addr <host:port>]
   wk [--repo <absolute dir>] hive
+  wk [--repo <absolute dir>] pool fill|status
+  wk [--repo <absolute dir>] hooks install|uninstall
+  wk hook worktree-create|worktree-remove|subagent-stop < <Claude Code hook input>
 
 The repository is the one holding --repo, or the current directory. Config is read from
 $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspace's absolute
-path on stdout and everything else on stderr.
+path on stdout and everything else on stderr. Without a flag it follows workspace.sparse;
+--sparse and --full override it.
 
 wk gc lists every worktree with its verdict and changes nothing; --apply removes the removable
 ones; --json prints the same verdicts as one JSON document for tools.
@@ -40,6 +45,17 @@ wk viz serves the hive page on --addr (default 127.0.0.1:8787). The page reads t
 verdicts on every load and changes nothing.
 wk hive draws the same hive in the terminal and reads the verdicts again every 3 seconds.
 Arrow keys select a cell, q quits. Like wk gc without --apply, it changes nothing.
+
+wk new takes a ready pool slot when there is one and then tops the pool up in the background
+(pool.size full and pool.sparse_size sparse slots); wk pool fill does the topping up in the
+foreground and wk pool status lists the slots. Its log is $WK_HOME/<repo>/pool.log.
+wk hooks install adds the WorktreeCreate, WorktreeRemove and SubagentStop hooks to the main
+checkout's and the template's .claude/settings.local.json and keeps every other key;
+uninstall removes only those entries.
+wk hook worktree-create reads Claude Code's JSON on stdin, makes a warm worktree, falls back to
+a plain git worktree when that fails, and prints the path. wk hook subagent-stop marks a
+stopped subagent's own worktree for gc, and never blocks the stop. wk hook worktree-remove
+removes a worktree the owner discarded. Their log is $WK_HOME/<repo>/hook.log.
 `
 
 const (
@@ -69,7 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return fail(stderr, env.RefreshTemplate(), exitError)
 	case rest[0] == "new":
-		row, sparse, err := parseNew(rest[1:])
+		row, checkout, err := parseNew(rest[1:])
 		if err != nil {
 			return fail(stderr, err, exitUsage)
 		}
@@ -77,7 +93,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(stderr, err, exitError)
 		}
-		path, err := env.New(row, sparse)
+		env.Refill = spawnFill(env)
+		path, err := env.New(row, checkout)
 		if err != nil {
 			return fail(stderr, err, exitError)
 		}
@@ -89,8 +106,107 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runViz(home, repoDir, rest[1:], stderr)
 	case rest[0] == "hive":
 		return runHive(home, repoDir, rest[1:], stderr)
+	case len(rest) == 2 && rest[0] == "pool":
+		return runPool(home, repoDir, rest[1], stdout, stderr)
+	case len(rest) == 2 && rest[0] == "hooks":
+		return runHooks(home, repoDir, rest[1], stdout, stderr)
+	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-create":
+		return runWorktreeCreate(home, stdout, stderr)
+	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-remove":
+		what, err := wk.WorktreeRemove(home, stdin)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "wk hook: %v\n", err)
+			return exitError
+		}
+		_, _ = fmt.Fprintln(stderr, "wk hook: "+what)
+		return exitOK
+	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "subagent-stop":
+		// Exit 2 from a SubagentStop hook would keep the subagent running, so this one always
+		// exits 0 and prints nothing on stdout, which Claude Code would read as a decision.
+		_ = wk.SubagentStop(home, stdin)
+		return exitOK
 	}
 	return fail(stderr, nil, exitUsage)
+}
+
+// stdin is swapped by the self-test, which feeds the hook its JSON.
+var stdin io.Reader = os.Stdin
+
+// runWorktreeCreate exits 2 on failure, which Claude Code reads as a blocking hook error, and
+// prints nothing on stdout then, because any stdout line would be taken as the path.
+func runWorktreeCreate(home string, stdout, stderr io.Writer) int {
+	path, err := wk.WorktreeCreate(home, stdin, stderr, func(env *wk.Env) { env.Refill = spawnFill(env) })
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "wk hook: %v\n", err)
+		return exitUsage
+	}
+	_, _ = fmt.Fprintln(stdout, path)
+	return exitOK
+}
+
+func runPool(home, repoDir, what string, stdout, stderr io.Writer) int {
+	if what != "fill" && what != "status" {
+		return fail(stderr, fmt.Errorf("unexpected argument to wk pool: %q", what), exitUsage)
+	}
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	if what == "status" {
+		return fail(stderr, env.PoolStatus(stdout), exitError)
+	}
+	_, _ = fmt.Fprintf(stderr, "wk pool fill at %s\n", time.Now().Format(time.RFC3339))
+	return fail(stderr, env.FillPool(), exitError)
+}
+
+func runHooks(home, repoDir, what string, stdout, stderr io.Writer) int {
+	if what != "install" && what != "uninstall" {
+		return fail(stderr, fmt.Errorf("unexpected argument to wk hooks: %q", what), exitUsage)
+	}
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	if what == "uninstall" {
+		return fail(stderr, env.HooksUninstall(stdout), exitError)
+	}
+	exe, err := installedExe()
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	return fail(stderr, env.HooksInstall(exe, stdout), exitError)
+}
+
+// spawnFill starts `wk pool fill` in a session of its own, from /, with its output in
+// pool.log: it outlives the wk new or hook that started it, nobody waits on it, and its cwd is
+// inside no worktree. A test binary never forks itself.
+func spawnFill(env *wk.Env) func() {
+	return func() {
+		exe, err := installedExe()
+		if err != nil || wk.TransientBinary(exe) {
+			return
+		}
+		log, err := os.OpenFile(env.PoolLogPath(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return
+		}
+		defer func() { _ = log.Close() }()
+		cmd := exec.Command(exe, "--repo", env.Repo.Primary, "pool", "fill")
+		cmd.Dir = "/"
+		cmd.Stdout, cmd.Stderr = log, log
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if cmd.Start() == nil {
+			_ = cmd.Process.Release()
+		}
+	}
+}
+
+func installedExe() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
 }
 
 // launchd is swapped by the self-test, so no test loads an agent into the owner's session.
@@ -140,10 +256,7 @@ func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
 	if what == "schedule uninstall" {
 		return fail(stderr, env.ScheduleUninstall(l, stdout), exitError)
 	}
-	exe, err := os.Executable()
-	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
-	}
+	exe, err := installedExe()
 	if err != nil {
 		return fail(stderr, err, exitError)
 	}
@@ -229,21 +342,25 @@ func splitRepoFlag(args []string) (string, []string, error) {
 	return cwd, args, err
 }
 
-func parseNew(args []string) (row string, sparse bool, err error) {
+func parseNew(args []string) (row string, checkout wk.Checkout, err error) {
 	for _, a := range args {
 		switch {
+		case (a == "--sparse" || a == "--full") && checkout != wk.DefaultCheckout:
+			return "", 0, fmt.Errorf("--sparse and --full exclude each other")
 		case a == "--sparse":
-			sparse = true
+			checkout = wk.SparseCheckout
+		case a == "--full":
+			checkout = wk.FullCheckout
 		case row == "" && len(a) > 0 && a[0] != '-':
 			row = a
 		default:
-			return "", false, fmt.Errorf("unexpected argument %q", a)
+			return "", 0, fmt.Errorf("unexpected argument %q", a)
 		}
 	}
 	if row == "" {
-		return "", false, fmt.Errorf("wk new needs a row")
+		return "", 0, fmt.Errorf("wk new needs a row")
 	}
-	return row, sparse, nil
+	return row, checkout, nil
 }
 
 func wkHome() (string, error) {

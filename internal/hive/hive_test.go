@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/zach-short/landing-layer/internal/wk"
+	"github.com/zach-short/wk/internal/wk"
 )
 
 var stamp = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
