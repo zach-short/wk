@@ -82,6 +82,9 @@ func judgeBash(store *Store, cfg Rules, roots []string, req Request) Decision {
 		return allow
 	}
 	for _, t := range WriteTargets(req.Cwd, req.Command) {
+		if t == openQuote {
+			return deny("wk: cannot tell which file this writes: the command has an open quote, and bash runs the lines before it; close the quote")
+		}
 		if d := judgePath(store, cfg, roots, "", t); !d.Allow {
 			d.Reason += fmt.Sprintf(" (the command writes %s)", t)
 			return d

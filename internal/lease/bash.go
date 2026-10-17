@@ -9,23 +9,30 @@ import (
 // (D11), without a shell parser (PD-4): `sed -i`, `tee`, the `>` family of redirections, `cp`
 // (its last argument), `mv` (every argument: the sources disappear), `rm`, `touch`, `git mv`,
 // `git rm`, and `python`, `python3` or `node` given a `-c` or `-e` program that opens a file for
-// writing. Leading `VAR=value` words and shell keywords are skipped, `cd` moves the directory
-// for what follows it, `git -C` for its own arguments, and a subshell's `cd` ends at its `)`.
+// writing; the program of `sh -c` or `bash -c`, and a heredoc fed to a shell, are walked as
+// commands. Leading `VAR=value` words, shell keywords and `exec` are skipped, `cd` moves the
+// directory for what follows it, `git -C` for its own arguments, and a subshell's `cd` ends at
+// its `)`.
 //
 // Targets are absolute. A word the shell would expand is narrowed to its literal directory
 // (`web/*.ts` is `web`), and one that could be anywhere (`$X/a`, `~/a`, a relative path after a
 // `cd` the walk cannot follow) is returned as written, not absolute, for the judgment to refuse.
-// A command the walk cannot split, such as one with an open quote, returns nothing. Every other
-// spelling passes: the walk fails closed only on what it recognises.
+// A word with a brace (`{web,docs}/x.ts`) narrows the same way. A command the walk cannot split
+// returns the single target openQuote, which the judgment refuses: bash runs every complete line
+// before it reports an open quote on a later one. Every other spelling passes: the walk fails
+// closed only on what it recognises.
 func WriteTargets(cwd, command string) []string {
 	words, ok := split(command)
 	if !ok {
-		return nil
+		return []string{openQuote}
 	}
 	w := walker{dir: absOrUnknown(cwd)}
 	w.run(words)
 	return w.targets
 }
+
+// openQuote is the target of a command with a quote that never closes, the one way a split fails.
+const openQuote = "<open quote>"
 
 // word is one word after quote removal, or one operator when op is set. exp is the index in text
 // of the first character the shell would expand, or -1 when the word is literal.
@@ -50,9 +57,18 @@ var redirections = map[string]int{
 
 type walker struct {
 	dir     string // "" when the walk cannot tell
-	saved   []string
+	sep     string // the operator that ended the previous command
+	frames  []frame
 	argv    []word
 	targets []string
+}
+
+// frame is one open `(`: the directory to restore at its `)`, and for a process substitution
+// (`>(...)`, `<(...)`) the command it sits inside, which goes on after the `)`.
+type frame struct {
+	dir  string
+	argv []word
+	sub  bool
 }
 
 func (w *walker) run(words []word) {
@@ -62,17 +78,21 @@ func (w *walker) run(words []word) {
 		switch {
 		case t.op == "":
 			w.argv = append(w.argv, t)
+		case isRedirect && i+1 < len(words) && words[i+1].op == "(":
+			i++
+			w.frames = append(w.frames, frame{dir: w.dir, argv: w.argv, sub: true})
+			w.argv = nil
 		case isRedirect:
 			if i+1 < len(words) && words[i+1].op == "" {
 				i++
 				w.redirect(kind, words[i])
 			}
 		default:
-			w.end()
+			w.end(t.op)
 			w.subshell(t.op)
 		}
 	}
-	w.end()
+	w.end("")
 }
 
 func (w *walker) redirect(kind int, target word) {
@@ -81,23 +101,31 @@ func (w *walker) redirect(kind int, target word) {
 	}
 }
 
-// subshell keeps a `cd` inside `( ... )` from reaching past its `)`.
+// subshell keeps a `cd` inside `( ... )` from reaching past its `)`, and takes up the command a
+// process substitution sat inside.
 func (w *walker) subshell(op string) {
 	switch {
 	case op == "(":
-		w.saved = append(w.saved, w.dir)
-	case op == ")" && len(w.saved) > 0:
-		w.dir = w.saved[len(w.saved)-1]
-		w.saved = w.saved[:len(w.saved)-1]
+		w.frames = append(w.frames, frame{dir: w.dir})
+	case op == ")" && len(w.frames) > 0:
+		f := w.frames[len(w.frames)-1]
+		w.frames = w.frames[:len(w.frames)-1]
+		w.dir = f.dir
+		if f.sub {
+			w.argv = f.argv
+		}
 	}
 }
 
-// end judges the simple command gathered so far. `pushd`, `popd`, `builtin cd` and
-// `command cd` move the directory somewhere the walk does not follow, so after them a relative
-// target is returned as written and refused.
-func (w *walker) end() {
+// end judges the simple command gathered so far, which sep ended. `pushd`, `popd`, `eval`,
+// `builtin cd`, `command cd` and a `cd` beside `|` or `&` (a subshell in bash, the current shell
+// in zsh) move the directory somewhere the walk does not follow, so after them a relative target
+// is returned as written and refused. A `case` pattern ends in a `)` that closes no subshell, so
+// after `case` no directory is known, the saved ones included.
+func (w *walker) end(sep string) {
 	argv := skipPrefix(w.argv)
-	w.argv = nil
+	async := isAsync(sep) || isAsync(w.sep)
+	w.argv, w.sep = nil, sep
 	if len(argv) == 0 {
 		return
 	}
@@ -105,7 +133,15 @@ func (w *walker) end() {
 	switch filepath.Base(argv[0].text) {
 	case "cd":
 		w.cd(args)
-	case "pushd", "popd":
+		if async {
+			w.dir = ""
+		}
+	case "case":
+		w.dir = ""
+		for i := range w.frames {
+			w.frames[i].dir = ""
+		}
+	case "pushd", "popd", "eval":
 		w.dir = ""
 	case "builtin", "command":
 		if len(args) > 0 && args[0].text == "cd" {
@@ -123,8 +159,25 @@ func (w *walker) end() {
 		w.git(args)
 	case "python", "python3", "node":
 		w.add(w.dir, inlineWrites(args)...)
+	case "sh", "bash", "zsh", "dash", "ksh":
+		w.shell(args)
 	}
 }
+
+// shell walks the program of `sh -c` and its kin, from the directory in effect. A flag cluster
+// holding `c` (`-c`, `-lc`, `-ec`) makes the first operand after it the program.
+func (w *walker) shell(args []word) {
+	for i, a := range args {
+		if len(a.text) > 1 && a.text[0] == '-' && a.text[1] != '-' && strings.ContainsRune(a.text, 'c') {
+			if ops := operands(args[i+1:]); len(ops) > 0 {
+				w.targets = append(w.targets, WriteTargets(w.dir, ops[0].text)...)
+			}
+			return
+		}
+	}
+}
+
+func isAsync(sep string) bool { return sep == "|" || sep == "|&" || sep == "&" }
 
 func (w *walker) add(dir string, words ...word) {
 	for _, t := range words {
@@ -194,7 +247,7 @@ func absOrUnknown(dir string) string {
 
 var keywords = map[string]bool{
 	"!": true, "{": true, "if": true, "then": true, "else": true, "elif": true,
-	"do": true, "while": true, "until": true, "time": true,
+	"do": true, "while": true, "until": true, "time": true, "exec": true,
 }
 
 func skipPrefix(argv []word) []word {
@@ -378,7 +431,9 @@ type splitter struct {
 	exp     int
 	bodies  []heredoc
 	pending *heredoc
+	line    int // index in out of the first word of the current line
 	arith   int // parentheses open inside `((` or `$((`, where `<<` is a shift
+	square  int // brackets open inside `$[`
 }
 
 type heredoc struct {
@@ -393,6 +448,7 @@ func split(s string) ([]word, bool) {
 			return nil, false
 		}
 	}
+	p.i = len(p.s)
 	p.flush()
 	return p.out, true
 }
@@ -408,7 +464,7 @@ func (p *splitter) step() bool {
 	case c == '#' && !p.in:
 		p.comment()
 	case c == '\\':
-		return p.escape()
+		p.escape()
 	case c == '\'':
 		return p.single()
 	case c == '"':
@@ -416,20 +472,48 @@ func (p *splitter) step() bool {
 	case strings.IndexByte(";&|<>()", c) >= 0:
 		p.operator()
 	default:
-		p.char(c, strings.IndexByte("$`*?[", c) >= 0 || c == '~' && !p.in)
+		p.bracket(c)
+		p.char(c, strings.IndexByte("$`*?[{", c) >= 0 || c == '~' && !p.in)
 		p.i++
 	}
 	return true
 }
 
+// bracket counts `$[ ... ]`, the older arithmetic form, where `<<` is a shift too.
+func (p *splitter) bracket(c byte) {
+	switch {
+	case c == '[' && (p.square > 0 || strings.HasSuffix(p.cur.String(), "$")):
+		p.square++
+	case c == ']' && p.square > 0:
+		p.square--
+	}
+}
+
 // newline ends a command and skips the heredoc bodies opened on the line. A `<<` that never got
 // its delimiter word is dropped, so the lines after it are still walked.
+//
+// A line that names a shell (`bash <<EOF`, `cat <<EOF | sh`) feeds the body to it as commands,
+// so the body is walked too.
 func (p *splitter) newline() {
 	p.flush()
 	p.pending = nil
+	if p.namesShell() {
+		p.bodies = nil
+	}
 	p.out = append(p.out, word{op: ";"})
+	p.line = len(p.out)
 	p.i++
 	p.skipBodies()
+}
+
+func (p *splitter) namesShell() bool {
+	for _, w := range p.out[p.line:] {
+		switch filepath.Base(w.text) {
+		case "sh", "bash", "zsh", "dash", "ksh":
+			return w.op == ""
+		}
+	}
+	return false
 }
 
 func (p *splitter) comment() {
@@ -446,15 +530,13 @@ func (p *splitter) char(c byte, expands bool) {
 	p.in = true
 }
 
-func (p *splitter) escape() bool {
-	if p.i+1 >= len(p.s) {
-		return false
-	}
-	if p.s[p.i+1] != '\n' {
+// escape keeps the next character. A backslash that ends the input is a continuation with
+// nothing after it, as both shells run it.
+func (p *splitter) escape() {
+	if p.i+1 < len(p.s) && p.s[p.i+1] != '\n' {
 		p.char(p.s[p.i+1], false)
 	}
 	p.i += 2
-	return true
 }
 
 func (p *splitter) single() bool {
@@ -508,7 +590,7 @@ func (p *splitter) operator() {
 	p.i += len(op)
 }
 
-// heredocOrArith opens a heredoc on `<<` or `<<-`, except inside `((` or `$((`, where `<<` is a
+// heredocOrArith opens a heredoc on `<<` or `<<-`, except inside `((`, `$((` or `$[`, where `<<` is a
 // shift and opening a heredoc would hide the lines after it. Any `((` counts as arithmetic: when
 // it was two subshells, a real heredoc inside is walked as commands, which can only refuse more.
 func (p *splitter) heredocOrArith(op string) {
@@ -517,7 +599,7 @@ func (p *splitter) heredocOrArith(op string) {
 		p.arith++
 	case op == ")" && p.arith > 0:
 		p.arith--
-	case (op == "<<" || op == "<<-") && p.arith == 0:
+	case (op == "<<" || op == "<<-") && p.arith == 0 && p.square == 0:
 		p.pending = &heredoc{tabs: op == "<<-"}
 	}
 }
@@ -542,20 +624,30 @@ func (p *splitter) reset() {
 }
 
 // skipBodies passes over the bodies of the heredocs opened on the line just ended, so a `>` or
-// an `rm` in a body is never read as a command.
+// an `rm` in a body is never read as a command. A body whose delimiter never comes is walked as
+// commands from its first line: whatever opened it by mistake, a missing heredoc can only
+// refuse more.
 func (p *splitter) skipBodies() {
 	for _, h := range p.bodies {
-		for p.i < len(p.s) {
-			line, _, _ := strings.Cut(p.s[p.i:], "\n")
-			p.i += len(line) + 1
-			if h.tabs {
-				line = strings.TrimLeft(line, "\t")
-			}
-			if line == h.delim {
-				break
-			}
+		if !p.skipBody(h) {
+			break
 		}
 	}
-	p.i = min(p.i, len(p.s))
 	p.bodies = nil
+}
+
+func (p *splitter) skipBody(h heredoc) bool {
+	start := p.i
+	for p.i < len(p.s) {
+		line, _, _ := strings.Cut(p.s[p.i:], "\n")
+		p.i = min(p.i+len(line)+1, len(p.s))
+		if h.tabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		if line == h.delim {
+			return true
+		}
+	}
+	p.i = start
+	return false
 }
