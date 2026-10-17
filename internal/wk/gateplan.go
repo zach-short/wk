@@ -1,6 +1,7 @@
 package wk
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +179,9 @@ func (e *Env) gatePlan(p plan, out io.Writer) (verdict, error) {
 	})
 	var v verdict
 	err := e.withTrial(tree, func(dir string) (err error) {
+		if v, err = e.refreshDeps(dir, tree, out); err != nil || v.red != nil {
+			return err
+		}
 		v, err = e.runGates(dir, out)
 		return err
 	})
@@ -205,20 +209,38 @@ func (e *Env) runGates(root string, out io.Writer) (verdict, error) {
 		if err := s.canStart(root, env); err != nil {
 			return v, err
 		}
-		rs, err := gate.Run(root, []gate.Gate{s.g}, env, nil, out)
-		if err == nil {
-			err = s.wrapperFailed(rs[0])
-		}
+		r, err := runGate(root, s, env, out)
 		if err != nil {
 			return v, err
 		}
-		v.results = append(v.results, rs...)
-		if r := rs[0]; r.Status == gate.Fail {
+		v.results = append(v.results, r)
+		if r.Status == gate.Fail {
 			v.red, v.paths = &r, failedPaths(root, s.g, r)
 			return v, nil
 		}
 	}
 	return v, nil
+}
+
+// runGate is gate.Run over one gate, with its echo held back until wrapperFailed has read the
+// result: a start error is logged as the start error with the output's tail, never as the
+// `fail, exit status 75` line gate.Run would have written first.
+func runGate(root string, s gateSpec, env map[string]string, out io.Writer) (gate.Result, error) {
+	var held bytes.Buffer
+	rs, err := gate.Run(root, []gate.Gate{s.g}, env, nil, &held)
+	if err != nil {
+		_, _ = io.Copy(out, &held)
+		return gate.Result{}, err
+	}
+	if err := s.wrapperFailed(rs[0]); err != nil {
+		_, _ = fmt.Fprintf(out, "%v\n", err)
+		for _, line := range gate.Tail(rs[0].Output) {
+			_, _ = fmt.Fprintf(out, "  %s\n", line)
+		}
+		return gate.Result{}, err
+	}
+	_, _ = io.Copy(out, &held)
+	return rs[0], nil
 }
 
 // failedPaths is gate.Paths over the gate's own directory with that directory joined back on,
@@ -269,10 +291,11 @@ func (e *Env) gateList() []gateSpec {
 	sf, found := e.slotsFile()
 	list := make([]gateSpec, len(e.Cfg.Gates.Run))
 	for i, r := range e.Cfg.Gates.Run {
-		g := gate.Gate{Name: r.Name, Dir: r.Dir, Run: r.Run, NeedsEnv: r.NeedsEnv}
+		g := gate.Gate{Name: r.Name, Dir: r.Dir, Run: r.Run, NeedsEnv: r.NeedsEnv, Timeout: time.Duration(r.TimeoutSeconds) * time.Second}
 		list[i] = gateSpec{g: g, argv0: r.Run[0]}
 		if found && e.WKExe != "" {
 			list[i].g, list[i].slotted = slotted(g, e.WKExe, sf)
+			list[i].wrapper = e.WKExe
 		}
 	}
 	return list

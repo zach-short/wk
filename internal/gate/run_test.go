@@ -3,7 +3,9 @@ package gate
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -85,6 +87,74 @@ func TestRunSkipsOnUnsetEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Error("the skipped gate ran")
+	}
+}
+
+// Row 5's N4: a needs_env variable set only in the env Run is given (the
+// worker's [gates.env]) counts, so the gate runs; set nowhere, it skips. Skips,
+// which the worker's start check reads, says the same.
+func TestRunNeedsEnvReadsGatesEnv(t *testing.T) {
+	const v = "WK_GATE_TEST_DB"
+	t.Setenv(v, "")
+	if err := os.Unsetenv(v); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	g := script(t, dir, "db", `test "$`+v+`" = gates-env`)
+	g.NeedsEnv = []string{v}
+	for _, tc := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{v: "gates-env"}, Pass},
+		{nil, Skip},
+		{map[string]string{"OTHER": "x"}, Skip},
+	} {
+		res, err := Run(t.TempDir(), []Gate{g}, tc.env, nil, &strings.Builder{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) != 1 || res[0].Status != tc.want {
+			t.Errorf("env %v: results = %+v; want %s", tc.env, res, tc.want)
+		}
+		if Skips(g, tc.env) != (tc.want == Skip) {
+			t.Errorf("env %v: Skips = %v; want %v", tc.env, Skips(g, tc.env), tc.want == Skip)
+		}
+	}
+}
+
+// A gate that runs past its timeout is killed with its whole process group: the
+// background child is gone too, and the result is a fail that says why.
+func TestRunKillsAGateThatRunsPastItsTimeout(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "bg.pid")
+	g := Gate{Name: "hang", Run: []string{"sh", "-c", "sleep 60 & echo $! > " + pidFile + "; sleep 60"}, Timeout: time.Second}
+	start := time.Now()
+	res, err := Run(t.TempDir(), []Gate{g}, nil, nil, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("Run took %s; want the kill after about 1s", took)
+	}
+	if len(res) != 1 || res[0].Status != Fail || res[0].Reason != "timed out after 1s" {
+		t.Fatalf("results = %+v; want a fail timed out after 1s", res)
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("the background sleep %d still runs after the timeout", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

@@ -74,6 +74,25 @@ func TestGatesValidation(t *testing.T) {
 			t.Errorf("%q loaded; want a refusal", body)
 		}
 	}
+	// Row 15 (row 5's N2 and the timeout): each refusal names the entry it refuses.
+	const vet = "[[gates.run]]\nname = \"vet\"\nrun = [\"go\", \"vet\"]\n"
+	for _, tc := range []struct{ body, want string }{
+		{vet + "needs_env = [\"\"]", "gates.run[0].needs_env[0] (vet)"},
+		{vet + "needs_env = [\"A=B\"]", "gates.run[0].needs_env[0] (vet)"},
+		{vet + "needs_env = [\"EZH_TEST_DB\", \"A B\"]", "gates.run[0].needs_env[1] (vet)"},
+		{vet + vet, "gates.run[1]: the name \"vet\" is gates.run[0]'s too"},
+		{"[gates]\ntrial_dir = \".\"", "gates.trial_dir \".\" is the main checkout itself"},
+		{"[gates]\ntrial_dir = \"./\"", "gates.trial_dir \"./\" is the main checkout itself"},
+		{"[gates]\ntrial_dir = \"a/..\"", "gates.trial_dir"},
+		{vet + "timeout_seconds = -1", "gates.run[0].timeout_seconds (vet) is -1"},
+	} {
+		if _, _, err := Load(write(t, tc.body)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: Load = %v; want a refusal naming %q", tc.body, err, tc.want)
+		}
+	}
+	if _, _, err := Load(write(t, vet+"timeout_seconds = 600\nneeds_env = [\"EZH_TEST_DB\"]")); err != nil {
+		t.Errorf("a gate with a timeout and a needs_env variable was refused: %v", err)
+	}
 }
 
 func TestShowPrintsTheGatesSection(t *testing.T) {

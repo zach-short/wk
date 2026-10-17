@@ -2,6 +2,7 @@ package wk
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zach-short/wk/internal/changeset"
+	"github.com/zach-short/wk/internal/config"
 	"github.com/zach-short/wk/internal/flock"
 	"github.com/zach-short/wk/internal/gate"
 	"github.com/zach-short/wk/internal/gitx"
@@ -389,14 +391,15 @@ func TestSlottedGateWithAMissingCommandBlamesNothing(t *testing.T) {
 }
 
 // Fix round 1, B1, and fix round 2: wk run exits 127 or 126 for a command it cannot find or
-// run, and 75 when slots.max_wait_seconds ran out; through the slot each is a start error, and
-// the changeset stays submitted. Exit 1 is still a fail.
+// run, and 75 when slots.max_wait_seconds ran out, each after a line of its own; through the
+// slot each is a start error, and the changeset stays submitted. Exit 1 is still a fail.
 func TestSlottedGateExit127IsAStartError(t *testing.T) {
 	for _, tc := range []struct {
 		exe, state string
 	}{
-		{"exit 127", changeset.Submitted}, {"exit 126", changeset.Submitted},
-		{"echo 'wk run: gave up after 1s waiting for a check place (slots.max_wait_seconds)' >&2; exit 75", changeset.Submitted},
+		{"echo 'wk run: true: command not found' >&2; exit 127", changeset.Submitted},
+		{"echo 'wk run: true: permission denied' >&2; exit 126", changeset.Submitted},
+		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; echo 'wk run: gave up after 1s waiting for a check place (slots.max_wait_seconds)' >&2; exit 75", changeset.Submitted},
 		{"exit 1", changeset.Failed},
 	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
@@ -405,6 +408,227 @@ func TestSlottedGateExit127IsAStartError(t *testing.T) {
 			t.Errorf("%s: loop = %v", tc.exe, err)
 		}
 		mustState(t, e, id, tc.state)
+	}
+}
+
+// Row 5's N-a: a slotted command that exits 127 (or 126, or 75) itself writes output of its own,
+// as bun 1.2.9 does for a package script naming a missing command, so the gate is a fail and the
+// changeset is blamed, and the queue keeps moving. So is a silent exit with no wk run line, and
+// a wk run line followed by the command's own.
+func TestSlottedCommandExit127IsAFail(t *testing.T) {
+	for _, exe := range []string{
+		`echo 'error: script "lint" exited with code 127' >&2; exit 127`,
+		"echo '/bin/sh: eslint: command not found' >&2; exit 127",
+		"exit 127",
+		"echo 'wk run: took a check place after 1s' >&2; echo 'lint: not found' >&2; exit 127",
+		"echo 'wk run: running unslotted: no machine file at /x' >&2; exit 126",
+		"echo 'wk run: took a check place after 1s' >&2; exit 75",
+	} {
+		e, id := slotFixture(t, "true", exe, "true")
+		if err := e.LandLoop(io.Discard); err != nil {
+			t.Errorf("%s: loop = %v; want the changeset failed and the loop on", exe, err)
+		}
+		mustState(t, e, id, changeset.Failed)
+	}
+}
+
+// Row 15's call on the shell in front of wk run: when the wk binary itself is gone, /bin/sh
+// exits 127 with a line naming that binary. The gate never ran, so it is a start error.
+func TestSlottedGateWithoutTheWkBinaryIsAStartError(t *testing.T) {
+	e, id := slotFixture(t, "true", "exit 0", "true")
+	if err := os.Remove(e.WKExe); err != nil {
+		t.Fatal(err)
+	}
+	err := e.LandLoop(io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "could not run") || !strings.Contains(err.Error(), e.WKExe) {
+		t.Fatalf("loop = %v; want the start error naming %s", err, e.WKExe)
+	}
+	mustState(t, e, id, changeset.Submitted)
+}
+
+// The landing log names a start error as one: the gate's output and the error, never the
+// `gate types: fail, exit status 75` line gate.Run would have echoed first.
+func TestSlottedStartErrorIsNotLoggedAsAFail(t *testing.T) {
+	e, id := slotFixture(t, "true", "echo 'wk run: gave up after 1s waiting for a check place (slots.max_wait_seconds)' >&2; exit 75", "true")
+	var out bytes.Buffer
+	if err := e.LandLoop(&out); err == nil {
+		t.Fatal("loop = nil; want the start error")
+	}
+	mustState(t, e, id, changeset.Submitted)
+	log := out.String()
+	if strings.Contains(log, "gate types: fail") || !strings.Contains(log, "gate types: exit status 75 through wk run --slot, which means its command could not run") || !strings.Contains(log, "  wk run: gave up after 1s") {
+		t.Fatalf("log:\n%s", log)
+	}
+	if !strings.Contains(log, "gate count: pass") {
+		t.Fatalf("the gate before the start error lost its line:\n%s", log)
+	}
+}
+
+// A slotted gate killed at its timeout while wk run still waited for a place never ran its
+// command: a start error. Killed after wk run took a place, it is a fail like any timeout.
+func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
+	for _, tc := range []struct{ exe, state string }{
+		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Submitted},
+		{"echo 'wk run: took a check place after 1s' >&2; sleep 60", changeset.Failed},
+	} {
+		e, id := slotFixture(t, "true", tc.exe, "true")
+		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
+		err := e.LandLoop(io.Discard)
+		if (tc.state == changeset.Submitted) != (err != nil && strings.Contains(err.Error(), "timed out after 1s through wk run --slot")) {
+			t.Errorf("%s: loop = %v", tc.exe, err)
+		}
+		r := mustState(t, e, id, tc.state)
+		if tc.state == changeset.Failed && !strings.Contains(r.Reason, "timed out after 1s") {
+			t.Errorf("failed record = %+v; want the timeout reason", r)
+		}
+	}
+}
+
+// Row 5's N4 at the start check: a slotted gate whose needs_env is met only by [gates.env] runs,
+// so canStart checks it and refuses its missing command; set nowhere, the gate skips unchecked.
+func TestSlottedGateNeedsEnvMetByGatesEnvIsChecked(t *testing.T) {
+	const v = "WK_TEST_SLOT_NEEDS"
+	for _, set := range []bool{true, false} {
+		e, id := slotFixture(t, "wk-test-missing-tool", "exit 1", "wk-test-missing-tool")
+		e.Cfg.Gates.Run[1].NeedsEnv = []string{v}
+		if set {
+			e.Cfg.Gates.Env[v] = "x"
+		}
+		err := e.LandLoop(io.Discard)
+		if set != (err != nil && strings.Contains(err.Error(), "wk-test-missing-tool is not on the gate's PATH")) {
+			t.Errorf("set in [gates.env] %v: loop = %v", set, err)
+		}
+		if !set {
+			mustState(t, e, id, changeset.Landed)
+		}
+	}
+}
+
+// Row 5's N-c: canStart decides executability as wk run does, with access(2). A file whose only
+// execute bit is the group's is executable by the mode bits but not for its owner.
+func TestCanStartUsesAccessLikeWkRun(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root, access(2) grants execute for any execute bit, so the mode bits and access agree and the case cannot be made")
+	}
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "tool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tool, 0o010); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(tool); err != nil || fi.Mode()&0o111 == 0 {
+		t.Fatalf("stat = %v, %v; want an execute bit set", fi, err)
+	}
+	s := gateSpec{g: gate.Gate{Name: "g"}, argv0: tool, slotted: true}
+	if err := s.canStart(dir, nil); err == nil || !strings.Contains(err.Error(), "not executable") {
+		t.Errorf("canStart(%s) = %v; want the refusal", tool, err)
+	}
+	s.argv0 = "tool"
+	if err := s.canStart(dir, map[string]string{"PATH": dir}); err == nil || !strings.Contains(err.Error(), "not on the gate's PATH") {
+		t.Errorf("canStart(tool on PATH) = %v; want the refusal", err)
+	}
+}
+
+// Row 5's N3: a worker stopped between the create and the marker leaves an unmarked trial and
+// trial.making naming it. The next worker removes it, makes the trial again and gates the
+// batch; the trial is marked and the intent record gone afterwards.
+func TestTrialInterruptedBeforeItsMarkerIsMadeAgain(t *testing.T) {
+	f, e, ws, _ := gateFixture(t, "1", "a")
+	f.Git(t, "worktree", "add", "--quiet", "--no-checkout", "--detach", e.TrialDir(), "main")
+	if err := os.WriteFile(e.trialIntent(), []byte(e.TrialDir()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, ws["a"], "web/a.ts", "export const a = 1;\n")
+	id := submit(t, e, ws["a"], "a", "")
+	loop(t, e)
+	mustState(t, e, id, changeset.Landed)
+	if err := checkTrialMarker(e.TrialDir()); err != nil {
+		t.Fatal(err)
+	}
+	if exists(e.trialIntent()) {
+		t.Fatal("trial.making is still there after the trial was marked")
+	}
+	if !exists(filepath.Join(e.TrialDir(), "web/a.ts")) {
+		t.Fatal("the trial made again does not hold the gated tree")
+	}
+}
+
+// The intent record never hands over a directory on a branch, which the trial never is.
+func TestTrialIntentNeverTakesABranch(t *testing.T) {
+	f, e, _, _ := gateFixture(t, "1")
+	f.Git(t, "worktree", "add", "--quiet", "-b", "someone", e.TrialDir(), "main")
+	if err := os.WriteFile(e.trialIntent(), []byte(e.TrialDir()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := e.withTrial(gitOut(t, f.Repo, "rev-parse", "main^{tree}"), func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "it is on a branch") || !exists(filepath.Join(e.TrialDir(), "web/use.ts")) {
+		t.Fatalf("withTrial = %v; want the refusal and the directory kept", err)
+	}
+}
+
+// postCloneFixture is gateFixture with template.post_clone replaced by a command that logs each
+// run and fails while bun.lock holds BROKEN; batch lands one changeset made from main.
+func postCloneFixture(t *testing.T) (e *Env, ran func() int, batch func(path, body string) string) {
+	t.Helper()
+	f, e, _, _ := gateFixture(t, "1")
+	log := filepath.Join(f.Root, "post-clone.log")
+	e.Cfg.Template.PostClone = []config.Command{{Run: []string{"sh", "-c", "echo run >> " + log + "; ! grep -q BROKEN bun.lock"}}}
+	n := 0
+	return e, func() int {
+			data, _ := os.ReadFile(log)
+			return strings.Count(string(data), "run\n")
+		}, func(path, body string) string {
+			n++
+			ws := filepath.Join(f.Root, fmt.Sprintf("pc-%d", n))
+			f.Git(t, "worktree", "add", "--quiet", "-b", fmt.Sprintf("pc-%d", n), ws, "main")
+			writeIn(t, ws, path, body)
+			id := submit(t, e, ws, path, "")
+			loop(t, e)
+			return id
+		}
+}
+
+// The trial's dependencies follow template.refresh_on: a batch that changes bun.lock runs
+// template.post_clone once more, the next batch with the same bun.lock does not, and a batch
+// that changes it back runs it again.
+func TestTrialRunsPostCloneWhenTheBatchChangesRefreshOn(t *testing.T) {
+	e, ran, batch := postCloneFixture(t)
+	lock := read(t, filepath.Join(e.Repo.Primary, "bun.lock"))
+	mustState(t, e, batch("web/a.ts", "export const a = 1;\n"), changeset.Landed)
+	base := ran()
+	for _, step := range []struct {
+		path, body string
+		more       int
+	}{
+		{"bun.lock", lock + "# new\n", 1},
+		{"web/b.ts", "export const b = 1;\n", 1},
+		{"bun.lock", lock, 2},
+	} {
+		mustState(t, e, batch(step.path, step.body), changeset.Landed)
+		if got := ran() - base; got != step.more {
+			t.Fatalf("after the %s batch post_clone ran %d more times; want %d", step.path, got, step.more)
+		}
+	}
+}
+
+// A post-clone run that fails is a red verdict named post_clone with bun.lock as its path, so
+// the changeset that changed bun.lock is failed and the queue keeps moving; the next batch,
+// back on the old bun.lock, runs post_clone again, because the failed run left the
+// dependencies in no known state.
+func TestTrialPostCloneFailureBlamesTheLockfileChange(t *testing.T) {
+	e, ran, batch := postCloneFixture(t)
+	lock := read(t, filepath.Join(e.Repo.Primary, "bun.lock"))
+	mustState(t, e, batch("web/a.ts", "export const a = 1;\n"), changeset.Landed)
+	base := ran()
+	r := mustState(t, e, batch("bun.lock", lock+"BROKEN\n"), changeset.Failed)
+	if r.Gate != "post_clone" || !slices.Equal(r.Paths, []string{"bun.lock"}) {
+		t.Fatalf("failed record = %+v; want gate post_clone naming bun.lock", r)
+	}
+	mustState(t, e, batch("web/b.ts", "export const b = 1;\n"), changeset.Landed)
+	if got := ran() - base; got != 2 {
+		t.Fatalf("post_clone ran %d more times; want the red run and the run back on the old bun.lock", got)
 	}
 }
 

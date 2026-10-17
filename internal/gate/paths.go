@@ -44,11 +44,12 @@ func Paths(root string, output []byte) []string {
 
 // candidates reads the names one line may hold. An indented line is never a
 // name of its own: tsc, golangci-lint and eslint indent quoted source and
-// per-problem lines.
+// per-problem lines. go vet puts "vet: " before a type error's position.
 func candidates(line string) []string {
 	if line == "" || line[0] == ' ' || line[0] == '\t' {
 		return nil
 	}
+	line = strings.TrimPrefix(line, "vet: ")
 	if m := position.FindStringSubmatch(line); m != nil {
 		return []string{m[1]}
 	}

@@ -53,13 +53,15 @@ type Gates struct {
 }
 
 // GateRun is one [[gates.run]] entry: Run is the argument vector, run in Dir under the trial's
-// root; a variable of NeedsEnv unset in the worker's environment makes the gate skip, which
-// never counts as a pass.
+// root; a variable of NeedsEnv unset in the environment the gate runs with (the worker's own
+// with [gates.env] over it) makes the gate skip, which never counts as a pass. A gate that runs
+// past TimeoutSeconds is killed and fails; 0 means no limit.
 type GateRun struct {
-	Name     string   `toml:"name"`
-	Dir      string   `toml:"dir"`
-	Run      []string `toml:"run"`
-	NeedsEnv []string `toml:"needs_env"`
+	Name           string   `toml:"name"`
+	Dir            string   `toml:"dir"`
+	Run            []string `toml:"run"`
+	NeedsEnv       []string `toml:"needs_env"`
+	TimeoutSeconds int      `toml:"timeout_seconds"`
 }
 
 // Workspace names and shapes a `wk new` workspace. Each SparseExclude entry is a directory, or
@@ -333,8 +335,8 @@ func (l Landing) validate() error {
 	return nil
 }
 
-// validate refuses a trial outside the main checkout, a batch of fewer than one, a negative
-// wait or floor, an empty cache name, and a gate with no name or no command, because the
+// validate refuses a trial outside the main checkout or at the checkout itself, a batch of
+// fewer than one, a negative wait or floor, an empty cache name, and a bad gate, because the
 // worker would otherwise find each of them only when it gates.
 func (g Gates) validate() error {
 	if g.TrialDir == "" {
@@ -343,6 +345,9 @@ func (g Gates) validate() error {
 	if err := checkRelative(g.TrialDir); err != nil {
 		return fmt.Errorf("gates.trial_dir: %w", err)
 	}
+	if filepath.Clean(g.TrialDir) == "." {
+		return fmt.Errorf("gates.trial_dir %q is the main checkout itself; the trial needs a directory of its own", g.TrialDir)
+	}
 	if g.BatchMax < 1 {
 		return fmt.Errorf("gates.batch_max is %d; it must be at least 1", g.BatchMax)
 	}
@@ -350,27 +355,54 @@ func (g Gates) validate() error {
 		return errors.New("gates.batch_idle_seconds and gates.min_free_mb must not be negative")
 	}
 	for i, v := range g.FreshCaches {
-		if v == "" || strings.ContainsAny(v, "= ") {
+		if !variableName(v) {
 			return fmt.Errorf("gates.fresh_caches[%d]: %q is not a variable name", i, v)
 		}
 	}
 	return g.validateRuns()
 }
 
+// validateRuns refuses a bad gate and two gates of one name, because the log, gates.json,
+// wk status and a failed changeset's gate line name a gate by its name alone.
 func (g Gates) validateRuns() error {
+	first := map[string]int{}
 	for i, r := range g.Run {
-		if r.Name == "" {
-			return fmt.Errorf("gates.run[%d].name is empty", i)
+		if err := r.validate(i); err != nil {
+			return err
 		}
-		if len(r.Run) == 0 || r.Run[0] == "" {
-			return fmt.Errorf("gates.run[%d] (%s): run is empty", i, r.Name)
+		if j, ok := first[r.Name]; ok {
+			return fmt.Errorf("gates.run[%d]: the name %q is gates.run[%d]'s too; each gate needs its own name", i, r.Name, j)
 		}
-		if err := checkRelative(r.Dir); err != nil {
-			return fmt.Errorf("gates.run[%d].dir: %w", i, err)
-		}
+		first[r.Name] = i
 	}
 	return nil
 }
+
+// validate refuses a gate with no name or no command, a dir outside the checkout, a needs_env
+// entry that is not a variable name (an empty one would make the gate skip for ever), and a
+// negative timeout.
+func (r GateRun) validate(i int) error {
+	if r.Name == "" {
+		return fmt.Errorf("gates.run[%d].name is empty", i)
+	}
+	if len(r.Run) == 0 || r.Run[0] == "" {
+		return fmt.Errorf("gates.run[%d] (%s): run is empty", i, r.Name)
+	}
+	if err := checkRelative(r.Dir); err != nil {
+		return fmt.Errorf("gates.run[%d].dir: %w", i, err)
+	}
+	for j, v := range r.NeedsEnv {
+		if !variableName(v) {
+			return fmt.Errorf("gates.run[%d].needs_env[%d] (%s): %q is not a variable name", i, j, r.Name, v)
+		}
+	}
+	if r.TimeoutSeconds < 0 {
+		return fmt.Errorf("gates.run[%d].timeout_seconds (%s) is %d; it must not be negative, and 0 means no limit", i, r.Name, r.TimeoutSeconds)
+	}
+	return nil
+}
+
+func variableName(v string) bool { return v != "" && !strings.ContainsAny(v, "= ") }
 
 // checkRelative refuses an absolute path or one that climbs out: every path in the file is
 // relative to the repository's main checkout and must stay inside it.

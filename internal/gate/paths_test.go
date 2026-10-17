@@ -31,6 +31,17 @@ var pathSamples = []struct {
 		want:   []string{"sub/sub.go"},
 	},
 	{
+		// Row 5's proof, first run: go vet prints a type error with a "vet: " prefix.
+		name:   "go vet type error",
+		output: "# probe\nvet: ./g.go:3:23: undefined: x\n",
+		want:   []string{"g.go"},
+	},
+	{
+		name:   "go vet prefix before a name that is not a file",
+		output: "vet: ./nothere.go:3:23: undefined: x\nvet: analysis skipped due to errors in package\n",
+		want:   nil,
+	},
+	{
 		name:   "gofmt -l",
 		output: "g.go\nsub/sub.go\n",
 		want:   []string{"g.go", "sub/sub.go"},

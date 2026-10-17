@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -27,10 +29,14 @@ const (
 const tailLines = 20
 
 // Gate is one configured command: Run is the argument vector, Dir is relative
-// to the root, and NeedsEnv names process variables without which it is skipped.
+// to the root, and NeedsEnv names variables without which it is skipped: unset
+// in the environment it runs with, the process's own with Run's env over it. A
+// gate still running after Timeout is killed with its children and fails; 0 is
+// no limit.
 type Gate struct {
 	Name, Dir     string
 	Run, NeedsEnv []string
+	Timeout       time.Duration
 }
 
 // Result is one gate's outcome. Output holds stdout and stderr together.
@@ -70,15 +76,31 @@ func runAll(root string, gates []Gate, env []string, log io.Writer) ([]Result, e
 }
 
 func runOne(root string, g Gate, env []string) (Result, error) {
-	for _, v := range g.NeedsEnv {
-		if _, ok := os.LookupEnv(v); !ok {
-			return Result{Name: g.Name, Status: Skip, Reason: v + " is unset"}, nil
-		}
+	if v, ok := unmet(g, env); ok {
+		return Result{Name: g.Name, Status: Skip, Reason: v + " is unset"}, nil
 	}
 	if len(g.Run) == 0 {
 		return Result{}, fmt.Errorf("gate %s has no command", g.Name)
 	}
 	return execute(root, g, env)
+}
+
+// Skips is whether Run would skip g with env added to the process environment,
+// so a caller that checks a gate before Run reads needs_env as Run does.
+func Skips(g Gate, env map[string]string) bool {
+	_, ok := unmet(g, environ(env, nil))
+	return ok
+}
+
+// unmet is the first variable of g.NeedsEnv that env, the environment the gate
+// runs with, does not set, so a variable set only in [gates.env] counts.
+func unmet(g Gate, env []string) (string, bool) {
+	for _, v := range g.NeedsEnv {
+		if !slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, v+"=") }) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // pipeGrace is how long Wait keeps reading after the gate process exits. A
@@ -92,16 +114,35 @@ func execute(root string, g Gate, env []string) (Result, error) {
 	cmd.Dir = filepath.Join(root, filepath.FromSlash(g.Dir))
 	cmd.Env, cmd.Stdout, cmd.Stderr, cmd.WaitDelay = env, &out, &out, pipeGrace
 	start := time.Now()
-	err := cmd.Run()
+	timedOut, err := runFor(cmd, g.Timeout)
 	r := Result{Name: g.Name, Status: Pass, Output: out.Bytes(), Seconds: time.Since(start).Seconds()}
 	var exit *exec.ExitError
 	switch {
+	case timedOut:
+		r.Status, r.Reason = Fail, fmt.Sprintf("timed out after %gs", g.Timeout.Seconds())
 	case errors.As(err, &exit):
 		r.Status, r.Reason = Fail, exit.Error()
 	case err != nil && !errors.Is(err, exec.ErrWaitDelay):
 		return Result{}, fmt.Errorf("gate %s: %w", g.Name, err)
 	}
 	return r, nil
+}
+
+// runFor runs cmd. With a limit, cmd leads a process group of its own, and the
+// whole group is killed when the limit runs out, because go test and bun leave
+// children that would hold the CPU and the output pipe after the leader dies.
+// Without one, cmd stays in the worker's group, as before the limit existed.
+func runFor(cmd *exec.Cmd, limit time.Duration) (timedOut bool, err error) {
+	if limit <= 0 {
+		return false, cmd.Run()
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return false, err
+	}
+	timer := time.AfterFunc(limit, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	err = cmd.Wait()
+	return !timer.Stop(), err
 }
 
 // freshCaches makes one directory per variable. On error it still returns the
@@ -154,6 +195,9 @@ func echo(log io.Writer, r Result) {
 		_, _ = fmt.Fprintf(log, "  %s\n", line)
 	}
 }
+
+// Tail is the end of a gate's output as Run echoes it to the log.
+func Tail(out []byte) []string { return tail(out, tailLines) }
 
 func tail(out []byte, n int) []string {
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
