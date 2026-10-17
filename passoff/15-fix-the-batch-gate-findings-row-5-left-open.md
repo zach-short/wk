@@ -92,3 +92,88 @@ GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -rac
 If it fails only on `TestHookPreToolUseTiming` in `internal/slot` under a load average above about 35, run it again when the load is lower, and report every run with its load.
 
 Hand back the gate output, the diffstat, each new test with its result, the review's findings and their outcomes, and the close-out section in this file. The owner then installs the timer with the `PATH` above when they choose to; after the lead lands this row, `GOTOOLCHAIN=local go install ./cmd/wk` from `main` puts the new binary where the worker runs it. Commit on your worktree branch only, with no `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Close-out, 2026-10-17
+
+Builder: Opus 5.5, one agent, in `.claude/worktrees/dl-row-15-build` on `dl/row-15-build`, from `main` at 7851ae9 (`git merge --ff-only main` said "Already up to date" before each gate). Build commit b361308; the review fixes and this section are in the commit after it.
+
+### What changed, by step
+
+1. N2, config. `Gates.validate` refuses a `trial_dir` whose `filepath.Clean` is `.` (`.` and `./`; `a/..` was already refused by `checkRelative`, which refuses any `..` part). `validateRuns` now calls `GateRun.validate` per entry and refuses a second gate of a name already used, naming both indexes. `GateRun.validate` refuses a `needs_env` entry that is empty or holds `=` or a space (the `fresh_caches` rule, now one function, `variableName`) and a negative `timeout_seconds`. Each refusal names the entry.
+2. N4. `runOne` reads `needs_env` from the environment slice the gate runs with (`unmet`; a name present anywhere in the slice is set), so `[gates.env]` counts. `gate.Skips(g, env)` gives the same answer from the env map, and `canStart` calls it in place of the old `skips`, which read the worker's environment. The comments on `GateRun` and `gate.Gate` and the README sentence say "the environment the gate runs with".
+3. N-a. `wrapperFailed` returns a start error for exit 75, 126 or 127 only when every non-empty line of the output is `wk run`'s (or the shell's line about the `wk` binary, below) and one of them is the line `wk run` writes as it gives up: `wk run: gave up after` for 75, `wk run: <argv0>: ` for 126 and 127. A slotted command's own 127, with output of its own, is now a fail and is blamed or bisected. The README sentences that said a slotted command's own 126 or 127 stops the queue are rewritten.
+   The `/bin/sh: ...: not found` line: it means the `wk` binary the gate is routed through is gone (removed, or mid-replacement), so the gate never ran. It is read as a start error when the line starts `/bin/sh: ` and holds the binary's path followed by `: ` (bash prints `/bin/sh: <wk>: No such file or directory`, dash `/bin/sh: 1: <wk>: not found`; the bash form was checked on this machine, exit 127). `canStart` does not check the binary first, because `WKExe` is the running worker's own binary, so it is missing only while it is being replaced.
+4. N-c. `executable` in `gatestart.go` uses `unix.Access(p, unix.X_OK)`, as `wk run` does.
+5. The landing log. `runGates` calls the new `runGate`, which gives `gate.Run` a buffer as its log, copies it to the log only when `wrapperFailed` returns nil, and otherwise writes the start error and then the output's tail (the new `gate.Tail`, the same 20 lines `gate.Run` echoes). `gate.Run`'s signature is unchanged.
+6. The `vet:` prefix. `candidates` strips a leading `vet: ` before the position match.
+7. A per-gate timeout. `timeout_seconds` on `[[gates.run]]` (0 is no limit) becomes `gate.Gate.Timeout` in `gateList`. `execute` calls `runFor`, which, with a limit, starts the gate with `Setpgid` and sends SIGKILL to the whole group when the limit runs out; the result is `fail`, reason `timed out after <n>s`. Without a limit the gate stays in the worker's process group, as before.
+   A killed `wk run --slot` frees its place: places and tickets are flocks (`internal/slot/queue.go`), which the kernel drops when the process dies. Seen live on 2026-10-17 15:36 EDT with a binary built from this branch and `WK_HOME` in the scratchpad (`[slots.check] capacity = 1`, `max_wait_seconds = 3`): a holder `wk run --slot check -- sh -c 'sleep 60 & sleep 60'` led its own group; a second run printed `waiting for a check place: 1 of 1 held by pid 26737 ...` and `gave up after 3s ...`, exit 75; after `kill -9 -26737` no `sleep 60` was left, and the next `wk run --slot check -- echo took` took the place at once (`real 0.00`), exit 0.
+   Proposed values for wk's four gates (`~/.wk/wk.toml`, not written): `gofmt` 60, `vet` 300, `test` 900 (`internal/wk` alone took 133 s at load 15 and 209 s at load 103 to 131 in this row's gates), `lint` 600. wk has no slots file, so none of the four waits for a place.
+8. N3. `ensureTrial` now makes the trial through `makeTrial`, which writes `~/.wk/<repo>/trial.making` (the trial's path) before `Env.create` and removes it after the marker. A trial directory without the marker that the record names is removed with `git worktree remove --force` (run in the main checkout, so only a worktree of this repository can go) and made again; one on a branch is refused, because the trial is always detached. Without the record, an unmarked directory is refused as before. A marked trial with a leftover record (a stop between the marker and the record's removal) only has the record removed.
+9. The trial's dependencies. `refreshDeps` (`trial.go`), called first in `gatePlan`'s gate function, so after the `read-tree` and still under `trial.lock`, runs `template.post_clone` in the trial (through `gate.Run`, one gate named `post_clone` per command, no `[gates.env]`, as `Env.create` runs them) when the tree's `refresh_on` blob differs from the recorded one. The record is `wk-trial-deps` beside the marker; before it exists, the blob at the trial's HEAD, which is the commit the trial was made from (`read-tree` never moves HEAD). The record says `unknown` while the commands run, so a stop or a failure makes the next batch run them again. A failure is a red verdict named `post_clone` with `refresh_on` as its path when the batch changes the file; see review B1 for the other case. `gitx.Blob` is not used: `blobAt` reads `rev-parse <tree>:<path>` directly. Brief step 9 says "in `withTrial`"; the call is in `gatePlan`'s closure, which `withTrial` runs right after the `read-tree`, because the result must be a verdict and `withTrial`'s callback returns only an error.
+10. The gate, below. 11. The review, below.
+
+### What is now fixed
+
+Row 5's N2, N3, N4, N-a and N-c; the landing log's `fail, exit status 75` line before a start error (audit 3's observation); and from "Left owed": the `vet:` prefix, the missing per-gate timeout, and the trial's dependencies after a lockfile change.
+
+### Questions answered
+
+- What a `/bin/sh` "not found" line in front of `wk run` means: the `wk` binary is gone; a start error (step 3).
+- Does a killed `wk run --slot` free its place: yes, seen live (step 7).
+
+### Build-level calls, each with its reversal
+
+- The 75, 126 and 127 rule also asks for `wk run`'s give-up line, not only that every line is `wk run`'s, because `wk run` also writes `took a ... place` and `running unslotted: ...` before a command that may then exit 127 silently. Reversal: drop `givesUp` and keep only the all-lines rule.
+- `/bin/sh`'s line about the `wk` binary counts as the wrapper's own (step 3). Reversal: drop `shellLine`; a missing `wk` binary is then a fail blamed on a changeset.
+- `Setpgid` only for a gate with a limit (step 7). Reversal: always, which gives every gate the same process shape but takes every gate out of the worker's group (see review N3).
+- A slotted gate that waited for a place and then timed out is a start error (review B2, below). Reversal: drop the timeout case in `neverRan`; the wait then counts as the tree's time, and a busy slot fails a changeset.
+- A failing `post_clone` for a batch that does not change `refresh_on` is a start error (review B1). Reversal, as the brief names it: every `post_clone` failure a start error; or every one red.
+- `TestGatesValidation`'s new rows check that the error names the entry, not only that `Load` refuses.
+
+### Tests, each with whether it fails with its fix turned off
+
+Each was run with only its fix disabled, then the file restored (`scratchpad/row-15/fixoff.py`, `fixoff2.py`, `fixoff3.py`, output in `fixoff.out`).
+
+- `TestGatesValidation` new rows: fail with the `trial_dir` check off (`.`, `./`), the `needs_env` check off (three rows), the duplicate check off, the timeout check off. The `a/..` row passes either way, because `checkRelative` refused it before this row.
+- `TestRunNeedsEnvReadsGatesEnv`: fails with `runOne` on the worker's environment.
+- `TestSlottedGateNeedsEnvMetByGatesEnvIsChecked`: fails with `canStart` on the worker's environment.
+- `TestSlottedCommandExit127IsAFail`: fails with the old rule (any 75, 126 or 127 a start error).
+- `TestSlottedGateExit127IsAStartError` (rows now print `wk run`'s real lines): passes; its new row (a line after the give-up line) fails with the give-up line read from the last line only.
+- `TestSlottedGateWithoutTheWkBinaryIsAStartError`: fails with `shellLine` off.
+- `TestCanStartUsesAccessLikeWkRun`: fails with the mode-bit rule. Skipped as root, with the reason in the skip message.
+- `TestSlottedStartErrorIsNotLoggedAsAFail`: fails with the echo written straight to the log.
+- `TestPaths` "go vet type error": fails with the prefix kept; its "not a file" row names nothing either way, as it should.
+- `TestRunKillsAGateThatRunsPastItsTimeout`: fails with only the leader killed (8 s, the background `sleep` alive).
+- `TestRunTimeoutAfterTheLeaderExitedIsNotATimeout`: fails without the signal check.
+- `TestSlottedGateTimeoutWhileWaitingIsAStartError`: fails with the timeout case off.
+- `TestTrialInterruptedBeforeItsMarkerIsMadeAgain`: fails with the intent record ignored. `TestTrialRefusesAnUnmarkedDirectory` still passes.
+- `TestTrialIntentNeverTakesABranch`: fails with the branch check off.
+- `TestTrialRunsPostCloneWhenTheBatchChangesRefreshOn` and `TestTrialPostCloneFailureBlamesTheLockfileChange`: fail with `refreshDeps` off.
+- `TestTrialPostCloneFailureWithoutALockfileChangeBlamesNothing`: fails with the tip-blob check off.
+
+### Review
+
+One Opus 5.5 reviewer in the detached worktree `.claude/worktrees/dl-row-15-review` at b361308, told to edit nothing. `git status --porcelain` printed nothing and `git diff --stat b361308` was empty afterwards; the worktree was removed with `git worktree remove`. Findings and outcomes:
+
+- B1 (blocking): after one failing `post_clone`, the record says `unknown`, so every later batch runs it, and an environment failure (a registry down) was red with path `bun.lock` for batches that never touched it; bisection then failed each one. Fixed: `refreshDeps` takes the tip's tree and is red only when the batch changes `refresh_on`, else a start error. Test `TestTrialPostCloneFailureWithoutALockfileChangeBlamesNothing`. A batch of one that changes the lockfile while the registry is down is still red and failed; nothing can tell that from a bad lockfile.
+- B2 (blocking as defined; the reviewer left it to the owner): the slot wait counts against `timeout_seconds`, so a long wait failed a changeset. Decided here, under the owner's delegation of judgment calls: a slotted gate that timed out after a `wk run: waiting for a` or `wk run: took a` line is a start error, because the time went to another workspace and a stop is loud and clears on the next worker; a slotted gate that never waited and times out is still a fail. Test rows in `TestSlottedGateTimeoutWhileWaitingIsAStartError`; README updated.
+- N1: the give-up line need not be last (`cannot write ... runs.log` can follow it). Fixed: it is looked for on any line. Test row added.
+- N2: a leader that exits by itself near the limit while a background child holds the pipe read as timed out. Fixed: a timeout needs a death by signal. Test `TestRunTimeoutAfterTheLeaderExitedIsNotATimeout`.
+- N3: `Setpgid` takes a timed gate out of the worker's group, so a Ctrl-C or a group kill of the worker leaves the gate (and a slotted gate's place) running, and the next worker could `read-tree` under it. Not fixed: left owed. No live gate sets `timeout_seconds` yet. The fix is to catch SIGINT, SIGTERM and SIGHUP in `runFor` and kill the group before exiting.
+- N4 (from row 11 and row 5's B1, not this row): a changeset that deletes or breaks a gate's own script reads as a start error and stops the queue. Left owed; out of scope.
+- N5: a create that fails before the directory exists left `trial.making` behind, which could later name a worktree a person makes there. Fixed: `makeTrial` removes the record when the create fails and nothing is at the path. No test (a create that fails before `worktree add` needs a broken template or pool).
+
+### Left owed
+
+- Review N3 (signals to a worker while a timed gate runs) and N4 (a changeset that breaks a gate's own command is a start error).
+- The owner's action on the plist `PATH`, unchanged.
+- The items "Not in scope" names: the re-gate that refuses a member clean only on top of a left-out changeset; rows 11 and 12's notes.
+- `timeout_seconds` values for wk's gates (proposed in step 7) are the owner's to write.
+
+### Gate
+
+`GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'` in the worktree:
+
+- 2026-10-17 15:38:37 to 15:41:07 EDT at b361308: exit 0, every package `ok` (`internal/wk` 132.9 s, `internal/gate` 5.7 s), `0 issues.`, 150 s, load 15.09 at the start and 25.66 at the end.
+- 2026-10-17 15:57:48 to 16:01:50 EDT on the final tree (review fixes): exit 0, every package `ok` (`internal/wk` 209.0 s, `internal/gate` 7.9 s, `internal/slot` 7.1 s), `0 issues.`, 241 s, load 102.95 at the start and 130.72 at the end. `TestHookPreToolUseTiming` passed at that load.

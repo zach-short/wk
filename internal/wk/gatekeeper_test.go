@@ -400,6 +400,8 @@ func TestSlottedGateExit127IsAStartError(t *testing.T) {
 		{"echo 'wk run: true: command not found' >&2; exit 127", changeset.Submitted},
 		{"echo 'wk run: true: permission denied' >&2; exit 126", changeset.Submitted},
 		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; echo 'wk run: gave up after 1s waiting for a check place (slots.max_wait_seconds)' >&2; exit 75", changeset.Submitted},
+		// The review's N1: wk run can still say something after it gives up.
+		{"echo 'wk run: gave up after 1s waiting for a check place (slots.max_wait_seconds)' >&2; echo 'wk run: cannot write /x/runs.log: permission denied' >&2; exit 75", changeset.Submitted},
 		{"exit 1", changeset.Failed},
 	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
@@ -464,12 +466,14 @@ func TestSlottedStartErrorIsNotLoggedAsAFail(t *testing.T) {
 	}
 }
 
-// A slotted gate killed at its timeout while wk run still waited for a place never ran its
-// command: a start error. Killed after wk run took a place, it is a fail like any timeout.
+// A slotted gate that waited for a place and then ran out of time lost its time to another
+// workspace's run, not to the tree: a start error, whether it was still waiting or had taken the
+// place (the review's B2). One that never waited and runs out of time is a fail like any timeout.
 func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
 	for _, tc := range []struct{ exe, state string }{
 		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Submitted},
-		{"echo 'wk run: took a check place after 1s' >&2; sleep 60", changeset.Failed},
+		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; echo 'wk run: took a check place after 1s' >&2; echo 'checking' >&2; sleep 60", changeset.Submitted},
+		{"echo 'checking' >&2; sleep 60", changeset.Failed},
 	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
 		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
@@ -569,8 +573,8 @@ func TestTrialIntentNeverTakesABranch(t *testing.T) {
 }
 
 // postCloneFixture is gateFixture with template.post_clone replaced by a command that logs each
-// run and fails while bun.lock holds BROKEN; batch lands one changeset made from main.
-func postCloneFixture(t *testing.T) (e *Env, ran func() int, batch func(path, body string) string) {
+// run and fails while bun.lock holds BROKEN; change submits one changeset made from main.
+func postCloneFixture(t *testing.T) (e *Env, ran func() int, change func(path, body string) string) {
 	t.Helper()
 	f, e, _, _ := gateFixture(t, "1")
 	log := filepath.Join(f.Root, "post-clone.log")
@@ -584,9 +588,7 @@ func postCloneFixture(t *testing.T) (e *Env, ran func() int, batch func(path, bo
 			ws := filepath.Join(f.Root, fmt.Sprintf("pc-%d", n))
 			f.Git(t, "worktree", "add", "--quiet", "-b", fmt.Sprintf("pc-%d", n), ws, "main")
 			writeIn(t, ws, path, body)
-			id := submit(t, e, ws, path, "")
-			loop(t, e)
-			return id
+			return submit(t, e, ws, path, "")
 		}
 }
 
@@ -594,7 +596,12 @@ func postCloneFixture(t *testing.T) (e *Env, ran func() int, batch func(path, bo
 // template.post_clone once more, the next batch with the same bun.lock does not, and a batch
 // that changes it back runs it again.
 func TestTrialRunsPostCloneWhenTheBatchChangesRefreshOn(t *testing.T) {
-	e, ran, batch := postCloneFixture(t)
+	e, ran, change := postCloneFixture(t)
+	batch := func(path, body string) string {
+		id := change(path, body)
+		loop(t, e)
+		return id
+	}
 	lock := read(t, filepath.Join(e.Repo.Primary, "bun.lock"))
 	mustState(t, e, batch("web/a.ts", "export const a = 1;\n"), changeset.Landed)
 	base := ran()
@@ -618,7 +625,12 @@ func TestTrialRunsPostCloneWhenTheBatchChangesRefreshOn(t *testing.T) {
 // back on the old bun.lock, runs post_clone again, because the failed run left the
 // dependencies in no known state.
 func TestTrialPostCloneFailureBlamesTheLockfileChange(t *testing.T) {
-	e, ran, batch := postCloneFixture(t)
+	e, ran, change := postCloneFixture(t)
+	batch := func(path, body string) string {
+		id := change(path, body)
+		loop(t, e)
+		return id
+	}
 	lock := read(t, filepath.Join(e.Repo.Primary, "bun.lock"))
 	mustState(t, e, batch("web/a.ts", "export const a = 1;\n"), changeset.Landed)
 	base := ran()
@@ -629,6 +641,37 @@ func TestTrialPostCloneFailureBlamesTheLockfileChange(t *testing.T) {
 	mustState(t, e, batch("web/b.ts", "export const b = 1;\n"), changeset.Landed)
 	if got := ran() - base; got != 2 {
 		t.Fatalf("post_clone ran %d more times; want the red run and the run back on the old bun.lock", got)
+	}
+}
+
+// The review's B1: a post-clone run that fails for a batch whose lockfile is the tip's (a
+// registry that is down, say, after the last run left the dependencies unknown) is a start
+// error. The changeset stays submitted, and the next batch runs post_clone again.
+func TestTrialPostCloneFailureWithoutALockfileChangeBlamesNothing(t *testing.T) {
+	e, ran, change := postCloneFixture(t)
+	batch := func(path, body string) string {
+		id := change(path, body)
+		loop(t, e)
+		return id
+	}
+	mustState(t, e, batch("web/a.ts", "export const a = 1;\n"), changeset.Landed)
+	gd, err := gitx.GitDir(e.TrialDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gd, trialDepsName), []byte("unknown\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.Cfg.Template.PostClone[0].Run[2] += "; exit 1"
+	base := ran()
+	id := change("web/b.ts", "export const b = 1;\n")
+	for pass := 1; pass <= 2; pass++ {
+		if err := e.LandLoop(io.Discard); err == nil || !strings.Contains(err.Error(), "the batch does not change bun.lock") {
+			t.Fatalf("pass %d: loop = %v; want the start error", pass, err)
+		}
+		if r := mustState(t, e, id, changeset.Submitted); ran() != base+pass || r.Gate != "" {
+			t.Fatalf("pass %d: post_clone ran %d more times, record %+v; want one run a pass and no blame", pass, ran()-base, r)
+		}
 	}
 }
 

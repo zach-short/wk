@@ -158,6 +158,20 @@ func TestRunKillsAGateThatRunsPastItsTimeout(t *testing.T) {
 	}
 }
 
+// The review's N2: a gate whose leader exits by itself is not timed out, even when the limit
+// runs out while Wait still reads the pipe a background child holds. The kill still clears the
+// child.
+func TestRunTimeoutAfterTheLeaderExitedIsNotATimeout(t *testing.T) {
+	g := Gate{Name: "bg", Run: []string{"sh", "-c", "sleep 5 & exit 0"}, Timeout: time.Second}
+	res, err := Run(t.TempDir(), []Gate{g}, nil, nil, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Status != Pass {
+		t.Fatalf("results = %+v; want a pass", res)
+	}
+}
+
 // Each run gets one fresh empty directory per cache variable, shared by its
 // gates and removed afterwards; the next run gets another.
 func TestRunFreshCaches(t *testing.T) {

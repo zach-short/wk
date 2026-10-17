@@ -75,6 +75,11 @@ func (e *Env) makeTrial(dir string) error {
 		return err
 	}
 	if _, err := e.create(dir, "", commit, false); err != nil {
+		if _, lerr := os.Lstat(dir); lerr != nil {
+			// Nothing was made, so the record may not outlive this pass and later name a
+			// directory someone else puts there.
+			_ = os.Remove(e.trialIntent())
+		}
 		return err
 	}
 	gd, err := gitx.GitDir(dir)
@@ -117,10 +122,13 @@ const trialDepsName = "wk-trial-deps"
 
 // refreshDeps runs template.post_clone in the trial when tree's template.refresh_on blob is not
 // the one its dependencies were made at, because read-tree changes tracked files only and a
-// batch that changes bun.lock would be gated over the old dependencies. A command that fails is
-// a red verdict named post_clone with refresh_on as its path, so blame finds the changeset that
-// changed the lockfile; one that cannot start is an error, as for any gate.
-func (e *Env) refreshDeps(dir, tree string, out io.Writer) (verdict, error) {
+// batch that changes bun.lock would be gated over the old dependencies. When the batch changes
+// refresh_on (tree's blob is not tipTree's), a command that fails is a red verdict named
+// post_clone with refresh_on as its path, so blame finds the changeset that changed it.
+// Otherwise the batch's lockfile is the tip's, and the failure (a registry that is down, a
+// dependency directory a stop left half written) says nothing about the batch: a start error.
+// So is a command that cannot start.
+func (e *Env) refreshDeps(dir, tree, tipTree string, out io.Writer) (verdict, error) {
 	on, cmds := e.Cfg.Template.RefreshOn, e.Cfg.Template.PostClone
 	if on == "" || len(cmds) == 0 {
 		return verdict{}, nil
@@ -144,6 +152,9 @@ func (e *Env) refreshDeps(dir, tree string, out io.Writer) (verdict, error) {
 		return verdict{}, err
 	}
 	if r := rs[len(rs)-1]; r.Status == gate.Fail {
+		if blobAt(dir, tipTree, on) == want {
+			return verdict{}, fmt.Errorf("post_clone in the trial: %s, and the batch does not change %s, so the failure says nothing about it; the next batch runs post_clone again", r.Reason, on)
+		}
 		return verdict{results: []gate.Result{r}, red: &r, paths: []string{on}}, nil
 	}
 	return verdict{}, os.WriteFile(record, []byte(want+"\n"), 0o644)

@@ -179,7 +179,7 @@ func (e *Env) gatePlan(p plan, out io.Writer) (verdict, error) {
 	})
 	var v verdict
 	err := e.withTrial(tree, func(dir string) (err error) {
-		if v, err = e.refreshDeps(dir, tree, out); err != nil || v.red != nil {
+		if v, err = e.refreshDeps(dir, tree, p.tipTree, out); err != nil || v.red != nil {
 			return err
 		}
 		v, err = e.runGates(dir, out)

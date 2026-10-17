@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -51,45 +52,65 @@ func (s gateSpec) canStart(root string, env map[string]string) error {
 	return fmt.Errorf("gate %s: %s is not on the gate's PATH (%s), so the gate cannot start", s.g.Name, s.argv0, path)
 }
 
-// wrapperFailed turns a slotted gate's fail into a start error when the gate's command never
-// ran: the output is the wrapper's alone (every non-empty line is wk run's, or the line /bin/sh
-// prints when the wk binary itself is missing) and its last line is the one wk run writes when
-// it gives up (internal/slot/run.go). That is exit 75, exitTempFail, after "gave up after" when
-// slots.max_wait_seconds ran out; 126, exitNotExecutable, or 127, exitNotFound, after a line
-// naming the command it could not run or find; and a timeout while wk run still waited for a
-// place. A slotted command that exits 75, 126 or 127 itself writes its own output, so it stays a
-// fail and is blamed like any red gate (row 5's N-a). Exit 2, wk run's usage error, is left a
-// fail, because tsc and many other gates exit 2 for a red tree.
+// wrapperFailed turns a slotted gate's fail into a start error when the fail says nothing about
+// the tree (internal/slot/run.go has the lines and codes it reads):
+//
+//   - Exit 75, exitTempFail, 126, exitNotExecutable, or 127, exitNotFound, when wk run never ran
+//     the command: the output is the wrapper's alone (every non-empty line is wk run's, or the
+//     line /bin/sh prints when the wk binary itself is missing) and holds the line wk run writes
+//     as it gives up: "gave up after" for 75, one naming the command for 126 and 127. A slotted
+//     command that exits 75, 126 or 127 itself writes its own output, so it stays a fail and is
+//     blamed like any red gate (row 5's N-a).
+//   - A timeout after wk run waited for a place: the wait counts against timeout_seconds, and
+//     time lost to another workspace's run is not the tree's fault. The next worker gates the
+//     batch again, and without the wait a hang is a fail.
+//
+// Exit 2, wk run's usage error, is left a fail, because tsc and many other gates exit 2 for a
+// red tree.
 func (s gateSpec) wrapperFailed(r gate.Result) error {
 	if !s.slotted || r.Status != gate.Fail {
 		return nil
 	}
 	lines := nonEmptyLines(r.Output)
-	if len(lines) == 0 || !s.notRun(r.Reason, lines[len(lines)-1]) {
+	if !s.neverRan(r.Reason, lines) {
 		return nil
-	}
-	for _, l := range lines {
-		if !strings.HasPrefix(l, wkRun) && !s.shellLine(l) {
-			return nil
-		}
 	}
 	return fmt.Errorf("gate %s: %s through wk run --slot, which means its command could not run: %s", s.g.Name, r.Reason, lines[len(lines)-1])
 }
 
 const wkRun = "wk run: "
 
-// notRun is whether last, the output's last line, is the line wk run (or /bin/sh in front of
-// it) writes when it exits with reason's status without running the command.
-func (s gateSpec) notRun(reason, last string) bool {
-	switch {
-	case reason == "exit status 75":
-		return strings.HasPrefix(last, wkRun+"gave up after ")
-	case reason == "exit status 126", reason == "exit status 127":
-		return strings.HasPrefix(last, wkRun+s.argv0+": ") || s.shellLine(last)
-	case strings.HasPrefix(reason, "timed out after "):
-		return strings.HasPrefix(last, wkRun+"waiting for a ")
+func (s gateSpec) neverRan(reason string, lines []string) bool {
+	if strings.HasPrefix(reason, "timed out after ") {
+		return slices.ContainsFunc(lines, waited)
+	}
+	if !slices.ContainsFunc(lines, func(l string) bool { return s.givesUp(reason, l) }) {
+		return false
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, wkRun) && !s.shellLine(l) {
+			return false
+		}
+	}
+	return true
+}
+
+// givesUp is whether l is the line wk run (or /bin/sh in front of it) writes when it exits with
+// reason's status without running the command. It need not be the last line: wk run can still
+// say it could not write runs.log afterwards.
+func (s gateSpec) givesUp(reason, l string) bool {
+	switch reason {
+	case "exit status 75":
+		return strings.HasPrefix(l, wkRun+"gave up after ")
+	case "exit status 126", "exit status 127":
+		return strings.HasPrefix(l, wkRun+s.argv0+": ") || s.shellLine(l)
 	}
 	return false
+}
+
+// waited is whether l is a line wk run writes only when the gate had to wait for a place.
+func waited(l string) bool {
+	return strings.HasPrefix(l, wkRun+"waiting for a ") || strings.HasPrefix(l, wkRun+"took a ")
 }
 
 // shellLine is the line /bin/sh prints when it cannot run the wk binary the gate is routed

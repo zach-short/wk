@@ -142,7 +142,14 @@ func runFor(cmd *exec.Cmd, limit time.Duration) (timedOut bool, err error) {
 	}
 	timer := time.AfterFunc(limit, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
 	err = cmd.Wait()
-	return !timer.Stop(), err
+	// A leader that exited by itself before the kill was not timed out, even when the kill came
+	// while Wait still read the pipe a background child held.
+	return !timer.Stop() && killed(cmd.ProcessState), err
+}
+
+func killed(ps *os.ProcessState) bool {
+	ws, ok := ps.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled()
 }
 
 // freshCaches makes one directory per variable. On error it still returns the
