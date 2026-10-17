@@ -1,5 +1,7 @@
 # 3. Build P2, path leases: integrate the daemon, the lease store, the board parser and the edit hook
 
+> **Claimed `IN FLIGHT` 2026-10-17.**
+
 *Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED). Prompt filled 2026-10-16 by row 2 from `docs/incomplete/landing-layer/PLAN-P2-P4.md` section 2.*
 
 **Model: Opus 5.5. Lane A. Waits on 2; 6, 7 and 8 (the P2 siblings); `/Users/zachshort/Projects/ezhomesteading/PASSOFF.md` item 200.**
