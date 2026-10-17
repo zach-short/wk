@@ -56,3 +56,71 @@ From the owner's research review of 2026-10-16, applied by the autopilot run bef
 ### Note from ezhomesteading item 200, 2026-10-17 02:15 EDT
 
 Item 200's integration lands on wk `main` before this row starts. It changes two files this row owns: `internal/wk/hooks.go` now calls `settings.InstallTwins` before `settings.Install`, and `cmd/wk/main.go` has `run`, `slots` and `hook pre-tool-use` verbs. Build on that state: merge `main` first and keep those verbs and that call order.
+
+## Close-out, 2026-10-17
+
+Builder: Opus 5.5, in the worktree `ap-row-3` on `ap/row-3`, from `main` at `26f14e3` (after `git merge --ff-only main` moved it from `5228e9c`). Built under the files decision: no `wk up`, no `wk down`, no `internal/wk/daemon.go`, no socket. The L3 question was not asked: it is deferred (owner's choice, 2026-10-16).
+
+### What changed and why
+
+- `internal/config/config.go`: the `[leases]` section (`enabled` false, `board` "PASSOFF.md", `single_writer` empty, `bash_guard` true), validated: the board is a relative path inside the main checkout, and each single-writer entry is a clean repository-relative path, because the judgment compares paths as written. `config.Show` prints the effective config as TOML under a comment naming the file and whether it was found (D26).
+- `internal/wk/lease.go` (new): `wk claim <row>`, `wk claim --none`, `wk lease add`, `wk release`, `wk status` on `~/.wk/<repo>/leases.json`, with an exclusive `flock` on `leases.lock` from read to rename, temp files older than one minute reaped before a write, an idempotent re-claim, the claims of gone worktrees reaped on every read and every claim, the common git directory recorded and a mismatch refused, and the canonical worktree roots refreshed from git in the claiming workspace. Globs are expanded against `git ls-files`; every token the parse cannot read, and every glob that matches nothing, is printed as `unread:`.
+- `internal/wk/leasehook.go` (new): `wk hook lease --repo <primary>`, described in the plan's "As built, P2".
+- `internal/settings/settings.go`: `Entry.OnFailure`, `LeaseEntries(primary)`, `Install(path, exe, extra...)`, which now writes every wk entry of one event (three on `PreToolUse` with leases on), and `IsWK` recognising the lease command. `internal/wk/hooks.go`: the lease entries go in only while `leases.enabled` is true, after the twins, with row 200's `InstallTwins` call order kept.
+- `cmd/wk/main.go`: the verbs `claim`, `lease add`, `release`, `status`, `config show` and `hook lease`, with usage text; row 200's `run`, `slots` and `hook pre-tool-use` are kept.
+- `internal/board/board.go`: `Column(text, row, header)`, so the "Files it owns" cell is found by its header (owner amendment), not as the last cell.
+- `internal/lease/judge.go`: `Request.Canon`, applied to each absolute `Bash` write target before it is placed. Finding of this integration: row 7's "Canonical paths" (`Resolve` reads no disk, so `rm /tmp/...` in a root under `/private/tmp` was outside every root and allowed). Test: `TestJudgeCanonPlacesBashTargets`.
+- `internal/daemon/daemon.go`, `client.go`: doc comments saying `Server` and `Client` are unused under the files decision.
+- `README.md`: "Path leases" (the claim, the hook entries, fail-closed, partial `Bash` coverage with row 7's gaps and over-refusals, the ledger files), the `[leases]` keys and `wk config show` under "Configuration".
+- `docs/incomplete/landing-layer/PLAN-P2-P4.md`: three section 0 rows for step 1, and "As built, P2" under section 2.
+- Tests: `internal/config/leases_test.go`, `internal/settings/lease_test.go`, `internal/wk/lease_test.go`, `cmd/wk/leases_test.go`, one case in `internal/board/board_test.go`, one in `internal/lease/judge_test.go`.
+- Outside the repository: `~/go/bin/wk` installed after the gate; `[leases]` with `enabled = false` appended to `~/.wk/ezhomesteading.toml` (with `backend/routes/routes.go`, `backend/main.go`, `HANDOFF.md`, `PASSOFF.md`); `~/.wk/wk.toml` made (the P1 defaults, `copy_files = [".claude/settings.local.json"]`, `[leases] enabled = false`). `~/.wk/machine.toml` and `~/.wk/ezhomesteading.slots.toml` were not touched.
+
+### Build-level calls, each with its reversal
+
+- The hook denies with the JSON form and exits 0 on every path, a deny included, so only the printed deny blocks. Reversal: exit 2 with the reason on stderr.
+- A panic inside the hook is a deny, because the guard fails closed (D12). Reversal: allow on a panic.
+- The wk-binary allow is narrowed to a single `wk` command with no `;`, `&`, `|`, `<`, `>`, newline, backtick or `$(`: the amendment's "first word" alone would let `wk status; rm web/x.ts` through. Reversal: test the first word only.
+- The `Bash` entry has no `onFailure` and is guarded by `|| true`; the edit entry has `onFailure: "block"` and no guard. A missing binary then refuses edits and leaves `Bash` free to reinstall it. Reversal: `onFailure` on the `Bash` entry too.
+- The worktree roots live in `leases.json` beside the store, not in a second file, so one rename keeps them consistent. Reversal: a `worktrees.json` written in the same lock.
+- The hook also finds, on disk, a worktree of this repository that the store does not list yet (a `.git` link into the common directory), so a worktree made after the last claim is unclaimed rather than part of the main checkout. Reversal: roots from the file alone.
+- The hook refuses a write into another worktree than the session's own (row 7's open finding, "Judge has no idea of the caller's root"). This lives in `internal/wk`, not in `lease.Judge`. Reversal: delete `callerRoot`.
+- The hook reads its state under the base name of `--repo`; `wk hooks install` refuses the lease entries when that is not the repository's name (a separate git directory), because the hook would read another config and allow. Reversal: put the name in the verb.
+- The proof used a binary built into the scratchpad and `WK_HOME` in the scratchpad, so `~/go/bin/wk` changed only after the gate and `~/.wk` holds no proof files. Reversal: rerun the proof with the installed binary and a `~/.wk/<name>.toml`.
+- `wk claim --none` records the row `none`; the store's `session` field is left empty, because no source for it is named. Reversal: a `--session` flag.
+
+### What is now fixed
+
+An edit to a path another workspace leases is refused by the hook, by `Edit` and by `sed -i`, with the holder's row and workspace named (proof in the plan). The P2 "Done when" is met except the dropped `wk down` step.
+
+### Questions answered
+
+- Step 1: the deny shape, the hook input fields and the `onFailure` behaviour on 2.1.301 (plan section 0).
+- The lead's own writes to `HANDOFF.md` and `PASSOFF.md`: the lead runs `wk claim --none` in the main checkout once, then `wk lease add HANDOFF.md PASSOFF.md` before it writes, and `wk release` frees them (README, "The ledger files").
+- `onFailure` on the `Bash` entry: no (call above).
+
+### Left owed
+
+- Leases are off in both repositories; turning them on is the owner's (hand-back below).
+- Not verified: the hook in a desktop-app session or a subagent with `isolation: "worktree"` (the proof used headless `claude -p` only); the guard in ezhomesteading with its real board; the hook while ezhomesteading row 214's slots hook shares `PreToolUse` with real gate rules.
+- Row 7's open findings stand: rule 4 over-refuses `cd web; cd ..; rm docs/a.md`, and the safe-set gaps listed in its sign-off. The caller-root rule above closes `cd ..; touch a/web/x.ts` from another worktree.
+- `board.Parse` prints an unread run with its leading punctuation (`unread: ; the rest of the docs`). Cosmetic.
+- A board cell such as row 7's (`` `internal/lease/` (`store.go`, ...) ``) leases `store.go` at the repository root, because each backtick token is read alone; the cell's author writes full paths.
+- The hook reaps gone worktrees in memory only; the file drops them at the next claim, `lease add` or `release`.
+- `internal/daemon`'s `Server` and `Client` are for a later row to delete.
+
+### As built
+
+`docs/incomplete/landing-layer/PLAN-P2-P4.md`, section 2, "As built, P2". Review: step 10's Opus review subagent was not spawned; the review is this run's independent audit.
+
+### Hand back
+
+Gate, from `ap-row-3` at `5a93108`: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'` exit 0; every package `ok` (`internal/wk` 45.5 s), `0 issues.`
+
+Proof: two `claude -p` sessions in workspaces made by `wk new`; session 2's `Edit` and `sed -i` on row 1's `web/page.ts` were refused by the hook, with the deny in each transcript and in `hook.log`; the hook took at most 20 ms over 20 runs; `wk claim` read every backtick path of the live wk board.
+
+To turn leases on, the owner:
+
+1. In `~/.wk/ezhomesteading.toml`, sets `enabled = true` under `[leases]`, then runs `wk hooks install` in `~/Projects/ezhomesteading`.
+2. In `~/.wk/wk.toml`, sets `enabled = true` under `[leases]`, then runs `wk --repo /Users/zachshort/Projects/wk hooks install`.
+3. From then on, every session runs `wk claim <row>` or `wk claim --none` in its workspace before its first edit, and the lead runs `wk claim --none` and `wk lease add HANDOFF.md PASSOFF.md` in the main checkout before it writes the ledger files.
