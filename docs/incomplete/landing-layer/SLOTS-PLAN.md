@@ -197,3 +197,54 @@ Asked 2026-10-16 at about 16:17 EDT in chat, in one batch, answered the same min
 2. Where the matcher may rewrite (SB-15): "Every statement (Recommended)". The parser is `mvdan.cc/sh/v3` v3.12.0, and gates inside `( )`, `{ }`, `if`, `while`, `until`, `for` and `case` bodies are rewritten; never inside a word or a function body.
 3. The `Bash` timeout of a rewritten call (SB-16): "Raise to 10 min (Recommended)". The hook sets `timeout` to 600,000 ms when the call sets less.
 4. The plan: "Approve all (Recommended)". Three phases, each in a fresh Opus session, with the amendments SB-4 (the repository's slot keys in `~/.wk/<repo>.slots.toml`), SB-11 (a nested run of any class passes through) and SB-12 (no trim in the main checkout, the template or a pool slot).
+
+## As built, phases 1 and 2
+
+Status: BUILT 2026-10-17 on branch `ap/row-200` of `~/Projects/wk`, written by the row 200 builder (Opus 5.5) before the land step's fast-forward, which waits on row 200's Fable audit. Nothing is installed: no `go install`, no `~/.wk/machine.toml` or `~/.wk/<repo>.slots.toml`, and no settings file was written. Row 214 installs, configures and runs phase 3.
+
+The work ran as four board rows in their own worktrees, not as SB-1's `~/Projects/wk-slots`: row 211 built phase 1's `internal/slot` core, row 212 the slots file, the matcher and the hook, row 213 the settings entry and the twins, and row 200 the CLI wiring, the twins in `wk hooks install`, and the README.
+
+Commits:
+
+- Row 211: `10b227ab6` (machine file, queue, `Run`, trim, status, `appendLog`) and `9a87fcb` (the test helpers clear `WK_SLOT_HELD`, row 211 audit finding 1).
+- Row 212: `813cd2f25` (slots file, matcher on `mvdan.cc/sh/v3` v3.12.0, `wk hook pre-tool-use`) and `ec9074e39` (wrapper-word misses logged, a word-based check for an existing `wk run`, row 212 audit N1 and N2).
+- Row 213: `004dee40a` (`PreToolUse` entry with the `|| true` guard, `IsWK` on the guarded form, `InstallTwins`).
+- Row 200: `7331304` (`wk run`, `wk slots [--json]`, `wk hook pre-tool-use` in `cmd/wk/main.go`; `wk.TrimAllowed`; `HooksInstall` writes the whole twin set before the hook, with the local file among the sources; `slot.Prefix` shared by the rewrite and the twins; the hook's log lines through `appendLog`, whose tab after the time is what `wk slots` counts; the README section "Cap heavy gates"). The land merge of wk `main` `75abc5a` into `ap/row-200` is `a3bcc7e`, with no conflict.
+
+Gates: the gate line (`test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...`, with `GOTOOLCHAIN=local` and a fresh lint cache) exited 0 with `0 issues` at `7331304` and again at `a3bcc7e` (`internal/wk` 72.3 s, `internal/slot` 5.7 s).
+
+Timing, phase 2's done-when: `wk hook pre-tool-use` from a built binary, fed the section 0.2 input with `cd web && bunx tsc --noEmit && bun run lint && bun run build`, a scratch `WK_HOME` holding the section 3 spellings and a scratch repository named `ezhomesteading`, measured with `/usr/bin/time -p`. Every run printed exactly the expected `updatedInput`. At `7331304`, three batches of 20: the first batch after the build had one run at 580 ms (the binary's first exec) and four at 50 to 110 ms; the warm batches averaged 17.5 ms and 19.0 ms, longest 40 ms and 50 ms. At `a3bcc7e`, after one untimed warm-up exec (340 ms): mean 26.5 ms, longest 40 ms. In process under `-race` (row 212): mean 14.8 ms. Expect one slow `Bash` call right after the install.
+
+By hand: `wk run --slot heavy -- sh -c 'exit 7'` printed 7; a SIGTERM death came through as a SIGTERM death; two capacity-1 `sleep 5` runs finished 5.02 s apart (row 211); `wk slots` printed the empty status, then the run; a miss written by the hook was counted by `wk slots`.
+
+SB-7 is read with this: a SIGQUIT, SIGUSR1 or SIGUSR2 that arrives during the wait ends `wk run` with 128 plus the number, not by the signal, because the Go runtime crashes on a reset SIGQUIT and ignores the reset SIGUSR1 and SIGUSR2 (row 211 audit finding 4).
+
+A binary built inside a nested worktree is stamped by `go version -m` with the enclosing checkout's commit, not the worktree's (`a7baf4b`, modified, for a build of `a3bcc7e`). Row 214 should build from wk `main`'s own checkout, where the stamp is true.
+
+Open findings, all non-blocking, one line each:
+
+- 211-2: `outcomeOf(nil)` panics (exit 2, no `runs.log` line) if `cmd.Wait` itself fails (`run.go:491-494`).
+- 211-3: an unwritable `slots.dir` prints two stderr lines where SB-9 says one.
+- 211-5: a signal during the trim is swallowed; Claude Code's SIGKILL 1.5 s later ends the trim with no `runs.log` line.
+- 211-6: a dead waiter's ticket behind the last live waiter stays on disk; it is never counted.
+- 211-7: the SIGINT and SIGHUP test cases skip when the runner ignores those signals (for example under `nohup`).
+- 211-8: 17 functions exceed L1's 15 lines.
+- 212-N3: `Rewrite` with an empty wk path yields `'' run ...`; the hook never passes one.
+- 212-N4: a hanging `git rev-parse` in the hook is bounded only by the settings entry's 5 s timeout.
+- 212-N5: a TOML syntax error in the slots file fails open even when the file said `fail_open = false`.
+- 212-N6: every hooked `Bash` call pays one `git` run before any spelling check.
+- 212-N7: wk's own gate line (`sh -c '...'`) is never slotted and is logged as a miss on every run.
+- 212-N8: two what-comments and three long functions in `match.go` and `slotsfile.go`.
+- 212-N9: a lone CR is whitespace to the parser and a word byte to the shells; no action.
+- 212-N10: a raised `timeout` of 600000 may exceed a lower `BASH_MAX_TIMEOUT_MS`; unverified, the variable is unset here.
+- 212-N11: zsh-only first words (`=bun`, `repeat`, `noglob`) run unslotted with no log line.
+- 213-N1: a hand-written rule in wk's twin shape in the local file is removed at the next install (in the README).
+- 213-N3: an empty list the owner wrote can be removed after a twin in it is uninstalled.
+- 213-N4: `wk hooks uninstall` refuses a file whose `permissions` value is malformed.
+- 213-N5: `InstallTwins` writes into a file whose `hooks` value is malformed; since row 200 writes twins first, such a file keeps twins that match no command while `Install` refuses it.
+- 213-N6: `IsWK` takes the base name of every word before the verb, as it did before row 213.
+- 213-N7, N9, N11: what-comments, four long functions, and an exported field nothing outside reads.
+- 213-N8: the `needsTwin` comment's startup-warning reason holds only for allow rules.
+- 200: twins are written only by `wk hooks install`, so a spelling or deny rule added later is wrapped without its deny twin until the next install.
+
+Row 200's Fable audit (the rewrite, exit status and signals, `needsTwin`) was running when this note was written; its verdict decides the fast-forward.

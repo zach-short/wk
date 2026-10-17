@@ -50,13 +50,118 @@ The template is a detached worktree at the base branch's commit, under `template
 
 ## The Claude Code hooks
 
-`wk hooks install` adds three hooks to `.claude/settings.local.json` in the main checkout and in the template. It keeps every other key in the file in its order, refuses a file that is not a JSON object, and changes nothing when the entries are already there. It never writes `~/.claude/settings.json` or a tracked settings file. `wk hooks uninstall` removes only wk's entries.
+`wk hooks install` adds four hooks to `.claude/settings.local.json` in the main checkout and in the template, with the permission twins of the gates the `PreToolUse` hook wraps (see "Permission twins" below). It keeps every other key in the file in its order, refuses a file that is not a JSON object, and changes nothing when the entries are already there. It never writes `~/.claude/settings.json` or a tracked settings file. `wk hooks uninstall` removes only wk's entries and twins.
 
 - `WorktreeCreate` runs `wk hook worktree-create`. Every worktree Claude Code makes, for a session, a desktop-app worktree session or a subagent with `isolation: "worktree"`, then comes from wk, named as Claude Code names its own (`.claude/worktrees/<name>` on `worktree-<name>`) and starting from the HEAD of the session that asked. Claude Code has no fallback when this hook fails, so wk falls back to a plain `git worktree add` whenever the warm path fails, and exits non-zero only when git cannot make a worktree either. Setting `WK_HOOK_FAIL=1` in the hook's command makes the warm path fail on purpose, to prove the fallback.
 - `SubagentStop` runs `wk hook subagent-stop`, which marks a stopped subagent's own worktree for `wk gc`. It marks nothing unless the worktree at the subagent's working directory is named for that subagent, and it always exits 0, because a failing stop hook would keep the subagent running.
 - `WorktreeRemove` runs `wk hook worktree-remove`. Claude Code sends it only when the owner discards a worktree explicitly; wk then removes it with `--force` and keeps its branch unless the base already holds it.
+- `PreToolUse`, on the `Bash` tool only, runs `wk hook pre-tool-use || true`, which routes gate commands through `wk run --slot` (see "Cap heavy gates" below). Its timeout is 5 seconds, and it goes after any other tool's `Bash` hook, such as a commit guard. A binary older than this hook prints its usage and exits 2, and exit 2 from a `PreToolUse` hook blocks the call, so the `|| true` turns an old binary into no answer and every `Bash` call runs unchanged. The guard needs Claude Code to run the command through a shell, which it does for a hook command with no `args`.
 
 Claude Code never removes a hook-made worktree by itself, so `wk gc` is what cleans up after agents. Every call is logged in `~/.wk/<repo>/hook.log`.
+
+## Cap heavy gates
+
+Each type check, lint or test run peaks near 1 GiB, and a web build near 2 GiB, so ten agents that start their gates together can exhaust a 16 GB machine. `wk run --slot <class>` makes them take turns. It holds one of the class's places while its command runs, and waits in arrival order while every place is held. The places are lock files under one directory, so the cap holds across every workspace and every repository on the machine.
+
+```bash
+wk run --slot heavy --trim web/.next/cache -- bun run build
+wk run --slot check -- bunx tsc --noEmit
+wk slots
+```
+
+`wk run` passes the command's input, output, signals and exit status through unchanged, and prints nothing when a place is free at once. When it has to wait, it prints one line as the wait starts, naming each holder, and one as the command starts. A command killed by `SIGINT`, `SIGTERM`, `SIGHUP` or `SIGKILL` makes `wk run` die of the same signal, so a shell script stops as it would have; any other signal gives 128 plus its number. A command that is not found gives 127, one that cannot be run gives 126, and a bad `wk run` argument list exits 2 with the usage text. Each `--trim` path, relative to the git top level, is removed after the command ends with any status, while the place is still held. `--keep` skips the trim, and it never runs in the main checkout, the template or a pool slot. A `wk run` inside another one (`WK_SLOT_HELD` is set) takes no place, so a build that starts a type check cannot deadlock against itself. Every slotted run appends one line to `runs.log` in the slots directory.
+
+`wk slots` lists each class with its capacity, the holder of each place, the waiters in queue order and the last five runs, then the count and the newest line of `missed.log` and `errors.log` from the last 24 hours. `wk slots --json` prints the same as one JSON document. It reads the places without taking one.
+
+### The hook
+
+`wk hook pre-tool-use` sees every `Bash` call before it runs. When the command holds a gate spelling of the repository's slots file, the hook returns the command with `<wk> run --slot <class> [--trim <path>]... -- ` inserted before that gate, and changes no other byte:
+
+```
+cd web && bunx tsc --noEmit && bun run lint && bun run build
+cd web && /Users/me/go/bin/wk run --slot check -- bunx tsc --noEmit && /Users/me/go/bin/wk run --slot check -- bun run lint && /Users/me/go/bin/wk run --slot heavy --trim web/.next/cache -- bun run build
+```
+
+It parses the command as bash, with `mvdan.cc/sh/v3`, and rewrites a gate in any statement position: after `&&`, `||`, `;`, `|` or `&`, and inside `( )`, `{ }`, `if`, `while`, `until`, `for` and `case`. It leaves a gate alone inside a word (`$( )`, backticks, `<( )`, the string of `bash -c`), inside a function body and after `time`, and it leaves the whole command alone when it does not parse or already holds `wk run`. Each spelling it leaves alone goes to `missed.log` with the reason, so the list of spellings can grow from evidence. A rewritten call also gets a `Bash` timeout of 600,000 ms, Claude Code's maximum, so a gate that waits for a place is not moved to the background after the default two minutes.
+
+The hook always exits 0. It returns nothing when there is no slots file, when nothing matches, or when its own deadline (`hook.timeout_ms`) has passed, and it logs its own failures to `errors.log`. The one exception is `hook.fail_open = false` with a slots file it cannot use: it then refuses every `Bash` call with a JSON deny, still with exit 0, until the file is fixed.
+
+### The two config files
+
+Both files are optional. Without `~/.wk/machine.toml`, `wk run` runs every command unslotted with one line on stderr. Without `~/.wk/<repo>.slots.toml`, the hook rewrites nothing.
+
+`~/.wk/machine.toml` holds the classes for the whole machine:
+
+```toml
+[slots]
+dir = "/Users/me/.wk/slots"
+order = "fifo"
+max_wait_seconds = 0
+min_free_mb = 0
+
+[slots.heavy]
+capacity = 1
+
+[slots.check]
+capacity = 2
+```
+
+`~/.wk/<repo>.slots.toml` holds one repository's gate spellings. It is a file of its own, and not a table in `~/.wk/<repo>.toml`, because a binary older than this feature never reads it: an unknown table in the repository's config would make that binary refuse the whole file and fail every worktree request.
+
+```toml
+[hook]
+fail_open = true
+timeout_ms = 200
+
+[[slots.match]]
+spelling = "bun run build"
+class = "heavy"
+trim_after = ["web/.next/cache"]
+
+[[slots.match]]
+spelling = "bunx tsc"
+class = "check"
+```
+
+The dials, with the values ezhomesteading uses:
+
+| Dial | File | Value | What it does |
+|---|---|---|---|
+| `slots.dir` | machine | `<WK_HOME>/slots`, written out as an absolute path | Where the places, the queue and the logs live |
+| `slots.order` | machine | `fifo` | `fifo` admits in arrival order; `any` takes no ticket, and any waiter may take a free place |
+| `slots.max_wait_seconds` | machine | 0, no limit | Above 0, a wait of that length ends with exit 75 |
+| `slots.min_free_mb` | machine | 0, off | Above 0, a waiter also waits until free, inactive and speculative memory (`vm_stat`) reaches it |
+| `slots.heavy.capacity` | machine | 1 | Runs of class `heavy` at once |
+| `slots.check.capacity` | machine | 2 | Runs of class `check` at once |
+| `slots.match`, class `heavy` | slots file | `next build`, `bun run build`, `bun run e2e`, `playwright test`, `go run ./cmd/lintgate`, `bunx next build`, `bunx playwright test` | The spellings that take a heavy place |
+| `slots.match`, class `check` | slots file | `tsc`, `bunx tsc`, `eslint`, `bun run lint`, `vitest`, `bun run test`, `go test`, `bunx eslint`, `bunx vitest` | The spellings that take a check place |
+| `trim_after` | slots file | `["web/.next/cache"]` on `next build`, `bun run build` and `bunx next build` only | The `--trim` paths the hook writes |
+| `hook.fail_open` | slots file | `true` | `false` refuses every `Bash` call while the slots file is broken |
+| `hook.timeout_ms` | slots file | 200 | The hook's own deadline; past it the hook returns nothing |
+
+No class name or spelling is built into wk. An unknown key in either file is an error, so a typo never drops a gate in silence. A spelling may be listed once only, a class name may hold only letters, digits, `-` and `_`, and a `trim_after` path must be relative and hold no `..`.
+
+### Fail open
+
+A gate must never turn red or green because of wk. Every failure of the machinery therefore runs the command unslotted, with one line on stderr that starts `wk run: running unslotted:` and one line in `errors.log`: a broken machine file, an unknown class, a slots directory wk cannot write, or any error in the queue. The hook fails open the same way. An error, a panic, a slow `git` or a broken slots file with `fail_open = true` leaves the command as the agent wrote it. The `|| true` in the settings entry covers the last case, a binary that has no `pre-tool-use` verb at all.
+
+### Permission twins
+
+Claude Code matches its permission rules against the command the hook returns, so `Bash(bun *)` does not cover `/Users/me/go/bin/wk run --slot heavy -- bun run build`. A wrapped gate would lose its allow rule, and a deny rule would stop refusing it with no sign. So `wk hooks install` writes a wrapped twin of every `Bash` allow, ask and deny rule that covers a spelling, into the original's own list. It reads the rules from `~/.claude/settings.json`, the tracked `.claude/settings.json` of the main checkout and the file it writes, and writes twins only into that local file. `Bash(bun *)` gains one twin for each prefix the hook can put before a `bun` gate:
+
+```
+Bash(/Users/me/go/bin/wk run --slot heavy --trim web/.next/cache -- bun *)
+Bash(/Users/me/go/bin/wk run --slot heavy -- bun *)
+Bash(/Users/me/go/bin/wk run --slot check -- bun *)
+```
+
+A twin allows exactly what its original allows, because `wk run` runs the words after `--` and nothing else. The twins come from the files as they are at install time, so run `wk hooks install` again after you change the slots file or a permission rule: until then, a new spelling is wrapped without its twins. A twin whose original rule is gone is removed at the next install, and `wk hooks uninstall` removes every rule that starts with `Bash(<absolute path>/wk run --slot `. A settings source that is not valid JSON stops the install before the file is changed.
+
+Two limits are known. A rule that starts with `VAR=value` words, such as `Bash(GOTOOLCHAIN=local go test *)`, gets no twin, because the hook puts its prefix after those words; no gate rule had that shape on 2026-10-16. And wk owns every rule of the twin shape in the local file. A rule in that shape that wk did not compute, written by hand or by the permission prompt's option to stop asking about a wrapped command, is removed at the next `wk hooks install` with no message. Put such a rule in `~/.claude/settings.json` or the tracked `.claude/settings.json`, which wk never writes.
+
+### Install order
+
+Once the `PreToolUse` hook is installed, `~/go/bin/wk` must always be built from a commit that has `wk run` and `wk hook pre-tool-use`. A binary from an older commit has neither: the `|| true` keeps every `Bash` call running, but nothing is slotted, every `Bash` call still starts one wk process, and any command that calls `wk run` itself fails with exit 2. So the order is: install the binary, write the two config files, then run `wk hooks install`, which reads the slots file to write the twins. In ezhomesteading the binary with this feature is installed by board row 214, not by the commit that adds it.
 
 ## Remove finished workspaces
 

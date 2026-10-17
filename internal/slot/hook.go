@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/zach-short/wk/internal/gitx"
@@ -200,18 +198,14 @@ func (h *hookRun) logError(msg string) {
 	h.log("errors.log", "hook pre-tool-use "+h.repo+": "+msg)
 }
 
-// log appends one line that starts with an RFC 3339 time, as hook.log's lines do, so `wk slots`
-// can count the last 24 hours. A failure to log is dropped: the hook must still answer.
+// log goes through appendLog, wk run's own writer, so every log in the slots directory has one
+// stamp and `wk slots` counts the hook's lines of the last 24 hours. A failure to log is
+// dropped: the hook must still answer.
 func (h *hookRun) log(name, line string) {
-	if h.deps.LogDir == "" || os.MkdirAll(h.deps.LogDir, 0o755) != nil {
+	if h.deps.LogDir == "" {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(h.deps.LogDir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
-	if err != nil {
-		return
-	}
-	_, _ = f.WriteString(h.deps.Now().Format(time.RFC3339) + " " + strings.ReplaceAll(line, "\n", " ") + "\n")
-	_ = f.Close()
+	_ = appendLog(h.deps.LogDir, name, line)
 }
 
 // hookResolveRepo runs only the first of gitx.Resolve's two git commands (SLOTS-PLAN.md 0.2),

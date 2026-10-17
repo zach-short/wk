@@ -381,6 +381,11 @@ func (w *matchWalk) insert(c *syntax.CallExpr, e MatchEntry) {
 	w.inserts = append(w.inserts, matchInsert{at: c.Args[0].Pos().Offset(), text: prefix})
 }
 
+// Prefix is the text Rewrite inserts before a command that matches e. `wk hooks install` builds
+// the permission twins from it (SB-17), so a twin and the rewritten command can never differ by
+// a byte. ok is false when a word cannot be quoted for the shell.
+func Prefix(wkExe string, e MatchEntry) (string, bool) { return matchPrefix(wkExe, e) }
+
 func matchPrefix(exe string, e MatchEntry) (string, bool) {
 	words := []string{exe, "run", "--slot", e.Class}
 	for _, p := range e.TrimAfter {
