@@ -354,10 +354,13 @@ func TestHookJudgesEverySpellingOfAPath(t *testing.T) {
 	mustClaim(t, e, a, "1")
 	mustClaim(t, e, b, "3")
 	_ = os.MkdirAll(filepath.Join(f.Root, "outside", "d"), 0o755)
+	_ = os.MkdirAll(filepath.Join(b, "docs", "inner"), 0o755)
 	for target, name := range map[string]string{
 		a + "/docs":           b + "/sub/e",
 		"../web/x.ts":         b + "/docs/lnk",
 		f.Root + "/outside/d": b + "/out",
+		"docs/inner":          b + "/p",
+		"../docs/inner":       b + "/web/q",
 	} {
 		_ = os.MkdirAll(filepath.Dir(name), 0o755)
 		if err := os.Symlink(target, name); err != nil {
@@ -373,10 +376,19 @@ func TestHookJudgesEverySpellingOfAPath(t *testing.T) {
 		{"Bash", "mv docs/lnk web/z.ts", docs},
 		{"Bash", "ln -sf ../web/page.ts docs/lnk", docs},
 		{"Edit", b + "/out/../web/page.ts", "web/page.ts is leased by row 1 in " + a},
+		{"Bash", "rm p/../lnk", docs},
+		{"Bash", "cd -P p/.. && rm lnk", docs},
 	} {
 		if got := hook(t, f, c.tool, b, c.arg); !containsFold(got, c.want) {
 			t.Errorf("%s %s: hook = %q; want %q", c.tool, c.arg, got, c.want)
 		}
+	}
+	if got := hook(t, f, "Bash", b+"/web", "cd q && rm ../lnk"); !containsFold(got, docs) {
+		t.Errorf("cd q && rm ../lnk from web: hook = %q; want %q", got, docs)
+	}
+	// Audit 3, N11: a shell never cleans `..` by text, so this writes outside every worktree.
+	if got := hook(t, f, "Bash", b, "echo x > out/../web/page.ts"); got != "" {
+		t.Errorf("a Bash write through a link to outside: hook = %q; want an allow", got)
 	}
 	if got := hook(t, f, "Edit", b, b+"/out/x.ts"); got != "" {
 		t.Errorf("an edit through a link to outside every worktree: hook = %q; want an allow", got)

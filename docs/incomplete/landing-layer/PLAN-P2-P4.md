@@ -133,9 +133,15 @@ Audit 1 (Opus 5.5, of `f0b1eb8`, report `docs/incomplete/autopilot-2026-10-16/re
 Audit 2 (Opus 5.5, of `1c4a1fd`, report `docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-2.md`) confirmed B1 to B4 closed, B4 included, and found three more silent allows. Outcomes, fix round 2 of 2026-10-17:
 
 - B5, a `cd` through a link and then `..` was cleaned by text: fixed. `moved` in `internal/lease/bash.go` keeps both the cleaned directory and the raw one for a `cd` operand with `..`, and `place` leaves a target uncleaned when its directory holds `..`. Test rows in `TestHookJudgesEverySpellingOfAPath` and two walk rows.
-- B6, a link at a leased path was judged at its target only: fixed. The hook judges every path also with its last component not followed (`entryPath`), so `rm`, `mv`, `ln -sf` and `git rm` of the link are refused. Same test.
+- B6, a link at a leased path was judged at its target only: fixed. The hook judges every path also with its last component not followed (`entryPath`), so `rm`, `mv`, `ln -sf` and `git rm` of the link are refused. Same test. As fix round 2 left it, `entryPath` cleaned the parent by text, which audit 3 found as B8; pass 2 closed it.
 - B7, an edit path a tool may clean by text: fixed. The hook judges every path also with `..` removed by text first (`cleanedPath`). Same test.
 - N7: test `TestLeaseHookPanicOutsideTheJudgmentDenies` covers the recover in `runLeaseHook`. N9: `checkTargets` takes a bool. N5, N6 (now ten walks of one command), N8 and N10: open.
+
+Audit 3 (Opus 5.5, of `53be9d5`, report `docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-3.md`) confirmed B5 to B7 closed and found B8. Outcomes, pass 2 of 2026-10-17, scoped by the lead under the owner's rule:
+
+- B8, a link entry reached through a link and then `..` was judged with the `..` cleaned by text (`rm p/../lnk`, `cd -P p/.. && rm lnk`, `cd q && rm ../lnk`): fixed. `entryPath` splits the raw path at its last `/` and reads the raw parent through links, so each `..` is applied after the link before it; a last component of `.`, `..` or nothing falls back to `kernelPath`. The raw directory the walk keeps for a `cd` with `..` reaches it unchanged. Rows in `TestHookJudgesEverySpellingOfAPath`.
+- N11, the cleaned spelling over-refused `Bash` with a wrong message: done. `cleanedPath` applies to the edit tools only, which also cuts one `Bash` command from ten walks to seven. A row checks that `echo x > out/../web/page.ts` is allowed while the `Edit` of the same path is denied.
+- N12, a cwd with a link loop kept its raw text: done; it is placed as an unplaceable marker again, as in `1c4a1fd`. N13: open.
 
 ## 3. P3, the landing queue
 

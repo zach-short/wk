@@ -151,7 +151,7 @@ func (h *leaseHook) judgeFolded(f leaseFile, l config.Leases, primary string) le
 	}
 	store := foldStore(f.Store, fold)
 	rules := lease.Rules{SingleWriter: foldAll(l.SingleWriter, fold), BashGuard: l.BashGuard}
-	for _, spell := range spellings {
+	for _, spell := range spellings(h.input.ToolName) {
 		req, err := h.request(spell)
 		if err != nil {
 			return lease.Decision{Reason: "wk: " + err.Error()}
@@ -168,15 +168,27 @@ func (h *leaseHook) judgeFolded(f leaseFile, l config.Leases, primary string) le
 	return lease.Decision{Allow: true}
 }
 
-// spellings are the paths one written path may reach. kernelPath follows every link as the
-// kernel does (audit 1, B3 and B4). entryPath stops before the last component, the directory
-// entry that rm, mv, ln and git rm act on when it is a link (audit 2, B6). cleanedPath removes a
-// `..` by text first, as a tool that normalises its path before it writes would (audit 2, B7).
-var spellings = []func(string) (string, bool){kernelPath, entryPath, cleanedPath}
+// spellings are the paths one written path of tool may reach. kernelPath follows every link as
+// the kernel does (audit 1, B3 and B4). entryPath follows the parent and stops before the last
+// component, the directory entry that rm, mv, ln and git rm act on when it is a link (audit 2, B6;
+// audit 3, B8). cleanedPath removes a `..` by text first, as an edit tool that normalises its path
+// before it writes would (audit 2, B7); a shell never does, so Bash does not get it (audit 3, N11).
+func spellings(tool string) []func(string) (string, bool) {
+	if tool == "Bash" {
+		return []func(string) (string, bool){kernelPath, entryPath}
+	}
+	return []func(string) (string, bool){kernelPath, entryPath, cleanedPath}
+}
 
+// entryPath splits the raw path at its last "/", so a `..` in the parent is applied after the
+// links before it; a last component of ".", ".." or nothing names no entry of its own.
 func entryPath(p string) (string, bool) {
-	dir, ok := kernelPath(filepath.Dir(p))
-	return filepath.Join(dir, filepath.Base(p)), ok
+	i := strings.LastIndex(p, "/")
+	if i < 0 || p[i+1:] == "" || p[i+1:] == "." || p[i+1:] == ".." {
+		return kernelPath(p)
+	}
+	dir, ok := kernelPath(cmp.Or(p[:i], "/"))
+	return filepath.Join(dir, p[i+1:]), ok
 }
 
 func cleanedPath(p string) (string, bool) { return kernelPath(filepath.Clean(p)) }
@@ -219,15 +231,15 @@ func foldStore(s lease.Store, fold func(string) string) lease.Store {
 // and an unplaceable target for Bash, so both deny.
 func (h *leaseHook) request(spell func(string) (string, bool)) (lease.Request, error) {
 	ti := h.input.ToolInput
-	canon := func(p string) string {
+	mark := func(spell func(string) (string, bool), p string) string {
 		k, ok := spell(p)
 		if !ok {
 			return "<a symlink loop or an unreadable link in " + p + ">"
 		}
 		return k
 	}
-	cwd, _ := kernelPath(h.input.Cwd)
-	req := lease.Request{Tool: h.input.ToolName, Cwd: cwd, Command: ti.Command, Canon: canon}
+	canon := func(p string) string { return mark(spell, p) }
+	req := lease.Request{Tool: h.input.ToolName, Cwd: mark(kernelPath, h.input.Cwd), Command: ti.Command, Canon: canon}
 	if p := cmp.Or(ti.FilePath, ti.NotebookPath); p != "" {
 		if !filepath.IsAbs(p) && filepath.IsAbs(h.input.Cwd) {
 			p = h.input.Cwd + "/" + p

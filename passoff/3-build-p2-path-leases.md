@@ -165,3 +165,18 @@ Build-level calls, each with its reversal:
 - One `Bash` command is now walked ten times per call (once to skip, then three times under each spelling; N6 and N10 grow); each walk is under 1 ms. Reversal: walk once and canonicalise the target list three times, which needs `Judge` to take targets.
 
 Not verified this round: what Claude Code 2.1.301 does with a `..` in `file_path` (B7 is closed for both behaviours) and whether its `Write` follows a dangling link. No `claude -p` was run, `go install` was not run and `~/.wk` was not touched.
+
+### Pass 2, 2026-10-17
+
+Why this pass exists: audit 3 of `53be9d5` (`docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-3.md`) confirmed B5 to B7 closed and found B8, a silent allow of B4's class that the B6 fix opened. The process holds a row after a third blocking audit. The lead decided by the owner's rule (prevent a silent failure first, keep work landing, least code) to run one pass scoped to exactly two changes, B8 and N11, with their tests and documents.
+
+What changed:
+
+- B8. `entryPath` in `internal/wk/leasehook.go` no longer calls `filepath.Dir`, which cleaned the parent by text. It splits the raw path at its last `/`, reads the raw parent with `kernelPath` (which applies each `..` after the link before it) and joins the last component as written; a last component of `.`, `..` or nothing falls back to `kernelPath` on the whole path. The walk already places a target under the raw directory of a `cd` with `..` without cleaning it, so `cd -P p/.. && rm lnk` and `cd q && rm ../lnk` reach `entryPath` unchanged. Three rows in `TestHookJudgesEverySpellingOfAPath` cover `rm p/../lnk`, `cd -P p/.. && rm lnk` and `cd q && rm ../lnk` from `web`, on real links; each fails against `53be9d5` and passes now.
+- N11. `spellings(tool)` gives `Bash` two spellings (`kernelPath`, `entryPath`) and the edit tools three (with `cleanedPath`). A row checks that `echo x > out/../web/page.ts` from wk-2 is allowed, where `out` points outside every worktree, while the `Edit` of `<wk-2>/out/../web/page.ts` is still denied.
+- N12. `request` places a cwd it cannot read (a link loop) as the unplaceable marker again, as `1c4a1fd` did, by one helper shared with the target spelling. N13 stays open.
+- README: the entry spelling reads the parent through links before it keeps the last component, and the cleaned spelling is for the edit tools only; the over-refusal list names the write through a link that sits in a directory leased elsewhere.
+
+Build-level call, with its reversal: the cleaned spelling applies to the edit tools only, because a shell never removes a `..` by text, and for `Bash` it only refused writes that land outside, with a message naming the wrong file. Reversal: give `Bash` all three spellings again, as `53be9d5` did.
+
+Not verified in this pass: what Claude Code 2.1.301 does with a `..` in `file_path` (the edit tools keep the cleaned spelling, so both behaviours are closed). No `claude -p` was run, `go install` was not run, and `~/.wk` was not touched.
