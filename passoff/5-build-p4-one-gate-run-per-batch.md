@@ -21,4 +21,12 @@ Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go te
 Ask before building: nothing; every call is in the plan (PD-6, PD-9 to PD-11). Only a fact that section 0 of the plan finds moved.
 Not in scope, whoever asks: `gates.parallel_tsc` and `gates.next_build_concurrency` (row 200's slots); a disk report in `wk status`; any change inside `internal/gate` or `internal/batch` beyond a finding of step 8 (fixed here and named); folding `/land-worktrees`.
 
-Hand back: the gate output, the proof, the As built note, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
+Hand back: the gate output, the proof, the As built note, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. Commit on your own worktree branch only; the lead merges, pushes and removes the worktree after the audit. No `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Owner amendments, 2026-10-16
+
+From the owner's research review of 2026-10-16, applied by the autopilot run before this row launched. They bind the build; where they differ from the steps above, they win.
+
+- Use a `wk-trial` marker in gc's skip list instead of `land-worktrees-trial`, which `/land-worktrees` force-removes. Add a queue-depth warning to `wk status`.
+- A separate Fable 5.1 session is fixing gc's stopped-subagent rule in `internal/wk/gc.go` (finding F1: a stopped subagent's worktree with a detached HEAD is removed with its commits on no ref). Land that fix before this row touches gc's skip list; do not edit `gc.go` until that fix is on `main`.
+- Bisection replaces `batch.Shrink`'s drop-the-last fallback: split the failing batch in two and re-gate each half; keep path mapping (`batch.Blame`) as a first guess only; set `gates.batch_max` from a measured gate time and landing rate. `internal/batch` is no longer owned by an open row (row 12 landed 2026-10-16 at 22:03 EDT), so this row may change it. This reverses part of D16 (owner's choice: yes, 2026-10-16; recorded in `DESIGN.md`).
