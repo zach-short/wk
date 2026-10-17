@@ -15,11 +15,11 @@ ezhomesteading, whose Claude Code hooks and launchd gc agent run the installed b
 ## The rules that get broken
 
 Each rule comes from the code or the README, not from an incident log: the ledger here
-started on 2026-10-16. Three have a test that fails when they are broken: the stdout rule
+started on 2026-10-16. Four have a test that fails when they are broken: the stdout rule
 (`cmd/wk/main_test.go:19-28`, `cmd/wk/main_test.go:176-177`), the `subagent-stop` exit
-(`cmd/wk/main_test.go:237`) and the `WK_HOOK_FAIL` fallback (`internal/wk/hook_test.go:72-87`).
-For the other four, no test was checked on 2026-10-16, so read the cited code before you change
-it.
+(`cmd/wk/main_test.go:237`), the `WK_HOOK_FAIL` fallback (`internal/wk/hook_test.go:72-87`) and
+the `go run` refusal (`cmd/wk/main_test.go:196-209`, `internal/wk/gc_test.go:489`). For the
+other three, no test was checked on 2026-10-16, so read the cited code before you change it.
 
 - **Print nothing on stdout but the path** in `wk new` and `wk hook worktree-create`. Claude Code
   reads any stdout line from the hook as the worktree path (`cmd/wk/main.go:145-146`), and
@@ -39,7 +39,7 @@ it.
   launchd (`README.md:146`).
 - **Install with `go install ./cmd/wk`, never `go run`.** Hooks and the gc agent run the binary
   at its absolute path, and wk refuses to install a `go run` build (`README.md:19`,
-  `internal/wk/hooks.go:25`, `cmd/wk/main.go:196`).
+  `internal/wk/hooks.go:25`, `internal/wk/schedule.go:35`).
 
 ## Stack
 
