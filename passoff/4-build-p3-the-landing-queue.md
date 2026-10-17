@@ -41,3 +41,100 @@ From the owner's research review of 2026-10-16, applied by the autopilot run bef
 ### Decided by the rule, 2026-10-16 22:51 EDT: files
 
 The kill test picked files (see row 3's amendments). Step 3's landing loop is therefore a detached run-to-completion worker, `wk land --loop` (the `spawnFill` pattern of P1), started by `wk submit` after it appends the record and by the launchd timer; one worker at a time under `~/.wk/<repo>/landing.lock`; each pass runs `landing.Ensure`, then for each `submitted` record `Predict` then `Land`, appends `landed` or `refused`, and exits when the queue holds no `submitted` record. Before each `Land` the worker appends a `landing` record carrying the predicted tree, and a pass that finds a `submitted` or `landing` record whose tree equals the tip's tree appends `landed` without a new commit (the journal of the amendment above; the kill test's F18). PD-13's "a pass every 5 s" becomes the launchd timer's interval plus the start on every `submit`. `internal/landing` keeps no state between passes (verified in the kill test's last section), so nothing of the daemon is needed. The plan's section 3 carries a dated note pointing here.
+
+## Close-out, 2026-10-17
+
+Built by a Fable 5.1 builder in the worktree `ap-row-4` on `ap/row-4`, from `main` at `e13aa27` (fast-forwarded from `5bf4e7d` before the first gate). Commits: `4774e55` (the code and its tests) and the commit that adds the README section, the As built note and this section. Not merged, not pushed; the lead lands it after the audit.
+
+What changed and why:
+
+- `internal/config/config.go`: the `[landing]` section (`enabled`, `ref`, `remote`, `push`, `require_review`) with the plan's defaults and validation (`ref` must start with `refs/heads/` and name a branch; `remote` not empty). Additive; `config.Show` prints it. `internal/config/landing_test.go` covers the defaults, the additive load, five refusals and the show.
+- `internal/changeset/queue.go`: the `Landing` state and the `Review` field on `Record`, which the owner amendments need (the journal line before the swap, and `require_review`). The queue's doc line now names its two writers.
+- `internal/wk/submit.go`: `Env.Submit` as the plan's scope item 1 and the amendment on listing what `add -A` includes; `workspaceOnly` is D15's refusal, shared with `wk sync`.
+- `internal/wk/landing.go`: `Env.LandLoop` (the worker), `landPass`, `landOne`, `Env.Sync` with `foldCommits`, `Env.Land`, `Env.LandApply` and the read-only `landingState`. Every ref write goes through `internal/landing`, except the fold's `update-ref refs/heads/<branch> <base> <head>`, which carries the old value.
+- `internal/wk/status.go`: `Env.Status` (the leases, then the queue) and `Env.QueueStatus`.
+- `internal/wk/landing_test.go`: eight tests, among them the section 3 proof in a fixture (two overlapping changesets, the refusal, the sync with markers, the resubmit, the landed tree against `landing.Predict`), the journal line landed without a commit and the empty submit landed without a commit, `require_review`, the refusals, the held lock, the fold, the dry run with a blocker and the apply with a stale hash and then the push to a bare remote, and the diverged ref in the worker and in `wk status`.
+- `cmd/wk/main.go`: `wk submit`, `wk sync`, `wk land [--loop | --apply --expect <hash>]`, `wk status` through `Env.Status`, `spawnLand` through `daemon.Spawn`, the usage text. `cmd/wk/landing_test.go`: the id alone on stdout, the included paths on stderr, the worker and status through the command line, and nine argument lists that must be usage errors.
+- `README.md`: the section "Land work through the queue" with the launchd plist, and the `[landing]` keys in "Configuration".
+- `docs/incomplete/landing-layer/PLAN-P2-P4.md`: "As built, P3" under section 3.
+
+Fixed: the three P3 scope items the siblings left to this row (the subcommands, the loop, the status) and the four owner amendments that are built (the journal line and the landed-without-a-commit rule; `wk sync` for a branch with commits; the list at submit time; `require_review`).
+
+Questions answered: the base of a changeset while the landing ref does not exist is the base branch's hash, where the first pass creates the ref; a `landing` record is re-predicted from its predicted tree, which merges onto a moved tip as its workspace tree would, so the record needs no second tree field; a refused swap ends the worker instead of looping; `wk sync` exits 1 on a conflict so a script sees it.
+
+Build-level calls, each with its reversal:
+
+- The gc amendment is not built (see the As built note for why: gc never forces, so an absorbed verdict could not remove a dirty worktree). Reversal: a queue read in `takeSurvey` and a `changeset.Tree` compare in `judge`. The owner may want this; it is a question below.
+- The worker reads the base branch from `workspace.base` (`main` by default), the one name the config already has. Reversal: a `landing.base` key.
+- `wk sync` folds commits with no flag, saying how many and that they stay in the reflog. Reversal: refuse as PD-7 did unless `--fold` is given.
+- A `submitted` or `landing` record whose tree, or whose prediction, is the tip's tree is `landed` at the tip. Reversal: an empty landing commit.
+- The timer's interval is 60 s in the plist text. Reversal: any other integer.
+
+Left owed: step 7 (the lead, at the land step); step 9 (this run's auditor); the gc amendment; row 10's duplicate tree builder in `landing.Sync` (the plan's "Not built" names row 4 as the one to fold it; not done, because `landing.Sync` takes a base and a tip, not a tree, and the fold would change `internal/landing`); row 12's `type State string` note; `internal/daemon`'s unused `Server` and `Client`, which `CLAUDE.md` says go after P3 lands.
+
+As built: `docs/incomplete/landing-layer/PLAN-P2-P4.md`, section 3, "As built, P3".
+
+Hand-back:
+
+- Gate, `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'`, run twice in `ap-row-4` on 2026-10-17: 11:01 EDT at load 6.76, every package `ok` (`internal/wk` 72.2 s, `internal/landing` 20.2 s), `0 issues.`, 1 min 28 s; 11:05 EDT at load 6.33, exit 0, `internal/wk` 70.0 s, `0 issues.`
+- Proof: `scratchpad/row-4/proof.sh` and `proof.out`; summary in the As built note. 127 git calls, 4 `update-ref` (three on the landing ref with the old value, one on `refs/heads/b` in the sync), 2 `commit-tree` with the predicted trees, no ref write naming `main`; `wk land --apply --expect <tip>` moved `main` to `dcb271e` and pushed it to the bare `origin.git`.
+- The config lines the lead writes after `GOTOOLCHAIN=local go install ./cmd/wk` from `main`:
+
+  `~/.wk/ezhomesteading.toml`, appended:
+
+  ```toml
+  [landing]
+  enabled = false
+  ```
+
+  `~/.wk/wk.toml`, appended:
+
+  ```toml
+  [landing]
+  enabled = true
+  ```
+
+  The other keys keep their defaults: `ref = "refs/heads/wk/landing"`, `remote = "origin"`, `push = true`, `require_review = false`.
+
+- The launchd timer for this repository, which the owner saves as `~/Library/LaunchAgents/com.github.zach-short.wk.landing.wk.plist` and loads with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.zach-short.wk.landing.wk.plist`:
+
+  ```xml
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+  	<key>Label</key>
+  	<string>com.github.zach-short.wk.landing.wk</string>
+  	<key>ProgramArguments</key>
+  	<array>
+  		<string>/Users/zachshort/go/bin/wk</string>
+  		<string>--repo</string>
+  		<string>/Users/zachshort/Projects/wk</string>
+  		<string>land</string>
+  		<string>--loop</string>
+  	</array>
+  	<key>EnvironmentVariables</key>
+  	<dict>
+  		<key>PATH</key>
+  		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  	</dict>
+  	<key>WorkingDirectory</key>
+  	<string>/</string>
+  	<key>StartInterval</key>
+  	<integer>60</integer>
+  	<key>RunAtLoad</key>
+  	<false/>
+  	<key>ProcessType</key>
+  	<string>Background</string>
+  	<key>StandardOutPath</key>
+  	<string>/Users/zachshort/.wk/wk/landing.log</string>
+  	<key>StandardErrorPath</key>
+  	<string>/Users/zachshort/.wk/wk/landing.log</string>
+  </dict>
+  </plist>
+  ```
+
+Questions for the owner, decided here by the rule (prevent a silent failure, keep work landing, the least code) and reversible:
+
+1. The gc amendment: is a reason line naming the landed changeset enough, or should gc clean the workspace (a `wk sync` by gc, which writes a workspace's index and tree)? Built: neither; `wk sync` by the workspace's session makes it clean.
+2. Should `wk sync` fold a branch's commits without a flag? Built: yes, with the count and the reflog said on stderr.

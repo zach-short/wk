@@ -206,6 +206,66 @@ The known over-refusals each cost one message. A command with `$` or a glob anyw
 
 In a repository whose `leases.single_writer` lists `HANDOFF.md` and `PASSOFF.md`, the lead session writes them from the main checkout under a lease of its own: `wk claim --none` there once, then `wk lease add HANDOFF.md PASSOFF.md` before it writes. While the lead holds them, another workspace's edit to either file is refused, and the lead's `wk release` frees them. A builder in a worktree cannot write the main checkout's copy in any case, because the hook refuses an edit into another worktree than the session's own.
 
+## Land work through the queue
+
+In a repository with `landing.enabled = true`, an agent lands its work with `wk submit` and never runs `git commit`, `git merge` or `git push` in a workspace. The landing commits are written by wk, each with the message `row <n>: <message>` in lowercase, the author from `git config`, and no trailer.
+
+```bash
+wk submit -m "add the page"          # the working tree becomes a changeset; prints its id
+wk submit -m "add the page" --row 12 # the row prefix; without --row it comes from wk claim
+wk submit -m "..." --review "audit 2" # the review a repository with require_review asks for
+wk sync                              # move the workspace to the landing tip, work carried across
+wk land                              # the landing tip against main, and what blocks a fast-forward
+wk land --apply --expect <hash>      # fast-forward main to the landing ref and push it
+wk status                            # every claim, then every changeset with its state
+```
+
+`wk submit` writes the workspace's working tree as a git tree through a private index, so tracked edits, deletions and untracked files that are not ignored are in and the workspace's own index is untouched; each included path is listed on stderr first. The changeset's base is the merge base of the workspace's HEAD and the landing tip. The changeset is appended to `~/.wk/<repo>/queue.jsonl` as `submitted`, its id is the only line on stdout, and the landing worker is started. `wk submit` refuses the main checkout, which is reserved for landing.
+
+The worker is `wk land --loop`, a process that runs to completion: it takes `~/.wk/<repo>/landing.lock`, so one worker runs at a time, and exits when no changeset is left to land. Each pass puts the landing ref (`landing.ref`, by default `refs/heads/wk/landing`) where it can land, creating it at `main` when it is missing and moving it to `main` when `main` moved ahead of it, then takes every submitted changeset in queue order: it predicts the merge of the changeset's tree onto the tip with `git merge-tree`, and on a clean result writes the commit with `commit-tree` and moves the ref with `update-ref <ref> <new> <old>`, so a ref that moved under it is refused and predicted again on the next pass. A conflict marks the changeset `refused` with the conflicting paths. Before each swap the worker appends a `landing` line with the predicted tree, and a changeset whose tree is already the tip's tree is marked `landed` without a new commit, so a worker killed between the swap and its last line never writes the same commit twice. When `main` and the landing ref each hold a commit the other does not, the worker stops and `wk status` says what to do. A landed workspace's leases are released. The worker's log is `~/.wk/<repo>/landing.log`.
+
+`wk sync` moves the workspace's branch to the landing tip and carries its uncommitted work across; on a conflict git's markers stay in the working tree, the paths are printed, and nothing is committed. A branch that carries commits of its own is folded first: the branch is moved back to its merge base with the tip, so the commits become uncommitted work in the tree, and they stay in the branch's reflog.
+
+Nothing moves `main` by itself in this phase. `wk land` prints the landing tip, `main`, and the dirty paths in the main checkout that a fast-forward would overwrite. `wk land --apply --expect <hash>` runs the fast-forward in the main checkout while the landing ref still holds `<hash>`, refuses a stale hash and any blocker, and then pushes `main` to `landing.remote` when `landing.push` is true.
+
+The worker also runs on a timer, so a changeset submitted while no worker could start is landed later. Save this as `~/Library/LaunchAgents/com.github.zach-short.wk.landing.<repo>.plist`, with the paths filled in, and load it with `launchctl bootstrap gui/$(id -u) <plist>`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.github.zach-short.wk.landing.REPO</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/USER/go/bin/wk</string>
+		<string>--repo</string>
+		<string>/Users/USER/Projects/REPO</string>
+		<string>land</string>
+		<string>--loop</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/</string>
+	<key>StartInterval</key>
+	<integer>60</integer>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/USER/.wk/REPO/landing.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/USER/.wk/REPO/landing.log</string>
+</dict>
+</plist>
+```
+
 ## Remove finished workspaces
 
 `wk gc` prints one line for every worktree except the main checkout, with a verdict and every reason behind it. It changes nothing. `wk gc --apply` removes the worktrees judged removable.
@@ -282,6 +342,13 @@ enabled = false                    # true turns the guard on; see "Path leases"
 board = "PASSOFF.md"               # the board wk claim reads, in the main checkout
 single_writer = []                 # paths an edit may touch only under its own lease
 bash_guard = true                  # walk Bash commands for writes
+
+[landing]
+enabled = false                    # true lets wk submit and the worker run; see "Land work through the queue"
+ref = "refs/heads/wk/landing"      # the ref the worker moves by compare-and-swap
+remote = "origin"                  # where wk land --apply pushes main
+push = true                        # push main after the fast-forward
+require_review = false             # refuse to land a changeset submitted without --review
 ```
 
 Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands and `[gates.env]`, are the defaults. `wk config show` prints the effective config as TOML, with the file it read and whether that file was found. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
