@@ -19,7 +19,7 @@ Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go te
 Ask before building: nothing.
 Not in scope, whoever asks: parsing the board (row 8), the socket (row 6), the hook, any subcommand or config key, a shell parser dependency (PD-4), D13 L3. A need outside your package is a finding for row 3 in your close-out, never an edit.
 
-Hand back: the gate output, the exported surface with each function's one-line contract, the list of recognised spellings as tested, the findings for row 3, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
+Hand back: the gate output, the exported surface with each function's one-line contract, the list of recognised spellings as tested, the findings for row 3, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. Commit on your own worktree branch only; the lead merges, pushes and removes the worktree after the audit. No `Co-Authored-By:` trailer and no "Generated with" line.
 
 ## Close-out, 2026-10-16
 
@@ -94,3 +94,62 @@ The second Opus 5.5 audit of `b8d2921` confirmed round 1 and found three more wr
 ## Held, 2026-10-16
 
 Built under the autopilot run of 2026-10-16 (`docs/incomplete/autopilot-2026-10-16/`), on branch `ap/row-7` in worktree `.claude/worktrees/ap-row-7`, commits 49d7b2c, b8d2921 (fix round 1) and 82e9dcf (fix round 2), gate green at each. Done: the lease store (`Claim` refuses a second claim until `Release`), `Resolve`, `Judge` for the five edit tools with exact tool names (every required probe right across three audits), and the `Bash` word walk with a 96-command table and 160 passing tests. Left: the word walk still allows a write in forms it claims to handle; three audits (Opus 5.5) each found new ones (round 1: `<<` in arithmetic, `pushd`; round 2: `$[`, a trailing backslash, brace expansion, an open quote on a later line; round 3: `..` after a glob or brace, a `cd` after `&&` or `||` that did not run, a heredoc piped to `sh` on a later line, `\'` inside `$'...'`, `<<` inside `${...}`). The findings are in `docs/incomplete/autopilot-2026-10-16/reports/row-7-audit-1.md`, `row-7-audit-2.md` and `row-7-audit-3.md`. A denylist word walk with no shell parser (PD-4) cannot be closed by another fix round: the row is held for the owner's call on the walk's design. Rows 3, 4 and 5 wait on this row.
+
+## Pass 2, 2026-10-16
+
+Built on `ap/row-7` by Opus 5.5, the model the row names, after `main` was merged in at `eb0c622` (the one conflict was this file; the Held section above is kept as it stands). The store and the edit judgment are unchanged; `bash.go` is rewritten, `judge.go` changes in `judgeBash` alone, and every exported signature is as pass 1 left it. No dependency and no change to `go.mod` (PD-4).
+
+### The design decision
+
+The owner's rule chose an allowlist because it prevents a silent allow, lands without the owner, and is the least code. Three audits had each found new wrong allows in the denylist walk, and every one of them sat in a part of the shell the walk tried to model: arithmetic, brace and glob expansion, `$'...'` quoting, `${...}`, a backslash at the end of the input, heredoc bodies it skipped. The walk now reads a command only when every byte is in the safe set of the commit guard's precedent (`raw_words`): ASCII letters and digits, space, tab, newline and `- _ . / = : , + @ ~ % ' " | & ; < > # !`. Any other byte refuses the whole command with "wk: cannot tell which file this writes: the command holds `X`, which the lease walk does not read; write it without that character or ask for the path in full". Inside the set no word can expand, so the code that modelled expansion is gone.
+
+### What changed
+
+- `WriteTargets` scans the command first and returns the one target `<character X>` for the first byte outside the set (a zsh numeric glob such as `<1-9>` is refused the same way, since it is a glob spelled in safe characters). `judgeBash` turns that target, and `<open quote>`, into its denial through `refusal()`.
+- Deleted as unreachable: arithmetic counting (`((`, `$((`, `$[`), glob and brace narrowing and the `exp` index in `place()`, process substitution and the subshell frames, backslash escapes and continuations, the heredoc-skipping machinery, and the Python and Node `-c` program reader (every write call in those languages needs a parenthesis).
+- Every heredoc body is walked as commands, and so is every here-string's word. A `<<` with no delimiter walks on.
+- Directory tracking keeps a set: every `cd`, `pushd`, `builtin cd` and `command cd`, wherever it sits, adds its directory and keeps the ones before it, so a later relative target is judged at each. `popd`, `cd -`, a bare `cd`, `pushd +1`, zsh's two-word `cd`, and a relative `cd` in a command that names `CDPATH` add an unknown directory. Past 16 directories the walk cannot tell. `eval` and `case` leave the directory unknown as before, and `eval`'s arguments, a `trap` program and an `alias` value are walked as commands (the last two from an unknown directory).
+- A table of wrappers is stripped before the verb, each with the options it may carry; any other option refuses the command (`sudo -D`, `env -C`, `env -S`, a long option): `command`, `builtin`, `exec -a`, `nohup`, `time -p`, `timeout`, `env` with assignments, `sudo -u`, `coproc`, `nice`, `busybox`, and zsh's `noglob`, `nocorrect`, `-` and `repeat`. `xargs` gives its command one operand the walk cannot see, so `xargs rm` is refused and `xargs grep` passes. A leading `NAME+=value` is skipped like `NAME=value`.
+- Verbs added: `unlink`, `rmdir`, `truncate`, `rsync`, `chmod` (every operand); `cp -t`, `ln`, `install`; `sed -I`; `dd of=`; `find -delete` (its starting points) and `find -exec` (refused); `tar` (its operands, and where it extracts); `gofmt -w`, `goimports -w`, `prettier --write`, `perl -i`, `awk -i`; `patch` (refused); `zsh -c`, `dash -c`, `ksh -c` and kin; a shell or `source` reading standard input (refused).
+- Git: `reset --hard` (also `--merge` and `--keep`), `clean`, `checkout` (all but `-b <new>` alone), `switch`, `restore`, `merge`, `pull`, `rebase`, `stash` (all but `list` and `show`), `apply`, `am`, `cherry-pick`, `revert`, `worktree remove` and `move`, `bisect`, `checkout-index`, `read-tree`, `sparse-checkout` and `mergetool` write the worktree root. `judgeWrite` resolves the target to its root and judges it on leases alone, so it is denied whenever another root holds a lease and allowed otherwise. `--git-dir`, `--work-tree` or any `GIT_` variable in the command make git's directory unknown; a `git -c` value is walked as a command from an unknown directory.
+- zsh redirections `>!`, `>>!`, `>>|`, `&>|`, `&>!`, `>&|`, `>&!` and `>>&` are writes. An unquoted word that starts with `~` or `=`, or holds `~` or `#`, cannot be placed (zsh expands them, the last two under `extended_glob`).
+
+### What is now fixed
+
+Every wrong allow in the three audits is closed, each by a table row: audit 1 B1 and B2, audit 2 K1, K2 and K3, and audit 3 B1 to B6 are refused by rule 1 or caught by the directory set (`test -f docs/Makefile && cd docs; rm web/x.ts` and `cd docs/web 2>/dev/null || cd web; rm x.ts` are denied at the old directory), and the heredoc piped to `sh` is walked. The audits' gap lists are caught or refused: backticks and `"$(...)"`, `command`, `nohup`, `timeout`, `gofmt -w`, `prettier --write`, `pathlib` (parentheses), `git apply`, `git stash pop`, `rsync`, `tar -C`, `awk -i inplace`, `FOO+=x`, `a[0]=1`, `sed -I ''`, `python3 -Bc`, `open(r'...')`, `node --eval=`, `eval 'rm ...'`, a shell function, `time -p`, `coproc`, `exec -a`, `source /dev/stdin <<EOF`, `unlink`, the whole-tree git writes, and `cd nope; rm web/x.ts`. My own hunt inside the safe set found and closed eleven more: `git checkout -f`, a here-string fed to `source /dev/stdin`, a pipe into `source /dev/stdin` or `bash -`, `CDPATH`, `ln` with one operand, `chmod`, `busybox`, `fish -c`, `git bisect`, the zsh redirections above, and `git -c alias.x='!rm ...'`. The walk table has 211 rows (96 in pass 1, each kept; a row whose command now holds an unsafe character expects the refusal), and the package runs 295 passing tests.
+
+### Over-refusals, for row 3's README
+
+- Any `$`, backtick, parenthesis, brace, bracket, `*`, `?`, backslash or non-ASCII byte anywhere in the command refuses the whole command, inside quotes too. So do a Python or Node program, a subshell, a command substitution, a `case` and a shell function.
+- A heredoc or here-string whose data holds a write-looking line refuses when that line names a leased path (`> there`, `rm x`), and an apostrophe in a heredoc body is an open quote, which refuses the command.
+- A `cd` makes a later relative target judged at two directories, the old and the new; after `popd`, `cd -`, a bare `cd`, `eval`, or a fifth `cd` that brings the directories past 16, a relative target is refused.
+- A wrapper option outside the table refuses (`timeout --foreground`, `nice -5`, `sudo -s`).
+- `xargs` with a writing verb, `patch`, `find -exec`, `bash` or `source` on standard input (a heredoc fed to a shell included) refuse.
+- A whole-tree git command (`git pull`, `git merge`, `git checkout <branch>`, bare `git checkout`, `git stash`) is denied whenever another root holds any lease, and anywhere a `GIT_` variable is named.
+- `tar -x` is judged as a write of the directory it runs in; `rsync` and `mv` judge every operand, the sources too; perl, awk and chmod judge their program or mode word as a path.
+- An unquoted word with `~` or `#` in it, or starting with `=`, cannot be placed.
+
+### Gaps that remain
+
+The safe set closes the characters; the verb table is still a denylist (D11), so these pass unseen:
+
+- Any program not in the table that writes: `make`, `go fmt`, `go mod tidy`, `go generate`, `npm install`, `curl -o`, `wget -O`, `unzip`, `sponge`, `cpio`, `git archive -o`, `git format-patch -o`, an editor driven by a script (`ed`, `ex`, `vim -c`), and a script run by name (`bash script.sh`, `./script.sh`, `source f`, `python3 f.py`).
+- An interpreter whose language calls without parentheses: `perl -e 'unlink "f"'`, `ruby -e 'File.delete "f"'`, sed's own `w` and `e` commands.
+- Wrappers outside the table: `stdbuf`, `ionice`, `flock`, `watch`, `caffeinate`, `script -c`, `su -c`, `parallel`, `doas`, `npx`.
+- A verb under another name: an alias or function from the shell profile, a git alias or hook from git config, `hash -p`, `enable -f`, a copy or link of a binary, `mapfile -C` and other builtins that keep a command for later.
+- The environment: a `CDPATH` exported by the profile (the walk follows `cd web` to the working directory's `web`), and zsh options set by the profile, such as `cdable_vars`.
+- A `cd` inside a shell function is now refused (a function needs braces or parentheses), but a function defined by the profile is not seen.
+
+### Build-level calls, each with its reversal
+
+- The extra wrappers (`nice`, `busybox`, the zsh precommand modifiers), the extra verbs of the hunt, the extra git tree writers (`--merge`, `--keep`, bare `stash`, `worktree move`, `bisect` and the plumbing four) and `checkout -f` go beyond the brief's list; each closes a silent allow inside the safe set. Reversal: drop the table entries.
+- A shell with no `-c` and no script, and `source` of `/dev/stdin`, are refused, so a heredoc fed to a shell is refused although its body is walked. Reversal: delete the `fromStdin` checks.
+- A whole-tree git write skips the single-writer rule, because the single-writer files are mostly untracked and no git command rewrites them; judging it there would refuse every `git merge` in a root that does not lease them. Reversal: pass the rules through in `judgeWrite`.
+- The deny message for a whole-tree write names the root as `.` ("wk: . is leased by row 9 in /r/c ... (the command writes /r/b)"), as pass 1 did for a directory target. Reversal: a separate message in `judgeWrite`.
+- A wrapper with an option it does not know refuses the command rather than guessing where the verb starts. Reversal: treat the option as a flag.
+- `bash.go` is 846 lines, against 653 after pass 1: the allowlist deleted about 250 lines of expansion handling, and the wrapper table, the git tree writers, the directory set and the rule 7 verbs added more. Reversal: drop the verbs beyond the brief's list.
+
+### Left owed
+
+- Row 3: the README states the over-refusals and the gaps above; `WriteTargets` returns `<character X>` and the `<...>` targets of unseen writes (`<xargs input>`, `<standard input>`, `<sudo option>`), which `Judge` refuses; a whole-tree git write appears in `WriteTargets` as the directory git runs in. The pass 1 findings for row 3 stand.
+- Not verified in a real shell: a scratch probe of the zsh claims (`>!`, `>>&`, `x<1-9>.ts`, `-`, `repeat`, `noglob`) and of `source /dev/stdin <<<` in bash 3.2 was denied by Claude Code's safety check because it ran `rm` inside `zsh -c`. The auditor should run it.

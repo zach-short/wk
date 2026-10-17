@@ -81,16 +81,33 @@ func judgeBash(store *Store, cfg Rules, roots []string, req Request) Decision {
 	if !cfg.BashGuard {
 		return allow
 	}
-	for _, t := range WriteTargets(req.Cwd, req.Command) {
-		if t == openQuote {
-			return deny("wk: cannot tell which file this writes: the command has an open quote, and bash runs the lines before it; close the quote")
-		}
-		if d := judgePath(store, cfg, roots, "", t); !d.Allow {
-			d.Reason += fmt.Sprintf(" (the command writes %s)", t)
+	for _, t := range writes(req.Cwd, req.Command) {
+		if d := judgeWrite(store, cfg, roots, t); !d.Allow {
 			return d
 		}
 	}
 	return allow
+}
+
+// judgeWrite judges one target of a `Bash` command. A write across a whole worktree is judged at
+// its root and on leases alone, so it is denied whenever another root holds a lease: the
+// single-writer paths are mostly files git does not track, which no git command rewrites.
+func judgeWrite(store *Store, cfg Rules, roots []string, t target) Decision {
+	if reason, ok := refusal(t.path); ok {
+		return deny("%s", reason)
+	}
+	path := t.path
+	if t.repo {
+		cfg.SingleWriter = nil
+		if root, _, ok := Resolve(roots, "", path); ok {
+			path = root
+		}
+	}
+	d := judgePath(store, cfg, roots, "", path)
+	if !d.Allow {
+		d.Reason += fmt.Sprintf(" (the command writes %s)", path)
+	}
+	return d
 }
 
 func judgePath(store *Store, cfg Rules, roots []string, cwd, path string) Decision {
