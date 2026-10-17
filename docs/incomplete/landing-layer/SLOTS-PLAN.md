@@ -248,3 +248,88 @@ Open findings, all non-blocking, one line each:
 - 200: twins are written only by `wk hooks install`, so a spelling or deny rule added later is wrapped without its deny twin until the next install.
 
 Row 200's Fable audit (the rewrite, exit status and signals, `needsTwin`) was running when this note was written; its verdict decides the fast-forward.
+
+## As built, phase 3
+
+Status: BUILT 2026-10-17 between 03:05 and 03:40 EDT by the row 214 builder (Opus 5.5), with four Haiku 5.5 gate runners. Nothing was committed. The hook is installed and stays installed: no session reported a refused or changed command to this builder, so no rollback was run.
+
+### The installed binary is not a build of wk `main`
+
+`~/go/bin/wk` is `vcs.revision=f0b1eb8eda7a9e3459400a29d1c4ef091670ed13`, `vcs.modified=false`, installed at 03:10:54. That commit is the tip of wk row 3's branch `ap/row-3` (path leases), which holds `b0d1839` (row 200) and adds `internal/lease`, `wk claim`, `wk config show` and the lease hook. Its `internal/slot` is identical to `main`; with `leases.enabled = false` its `wk hooks install` writes the same four entries and the same twins as `main` (`git diff main f0b1eb8 -- internal/wk/hooks.go internal/settings/settings.go`).
+
+The reason is a config written by another session. At 02:54:14 a session of the wk autopilot installed a binary built inside the nested worktree `ap-row-3` (stamped `26f14e3`, modified) and added a `[leases]` table (`enabled = false`, `board`, `single_writer`, `bash_guard`) to `~/.wk/ezhomesteading.toml` and `~/.wk/wk.toml`. A binary from `main` refuses those keys. This builder installed `main` (`dee8748`, from a clean clone, stamp true) at 03:06:37, and from then on every `WorktreeCreate` lost its warm path: `hook.log` at 03:09:18 shows `warm workspace failed: ... unknown keys: leases, leases.bash_guard, leases.board, leases.enabled, leases.single_writer`, then `plain fallback .../agent-abcfdbb3e1a27ee32 in 4.18s`, and `gc.log` has one line with the same refusal. `wk hooks install` refused the same file at 03:09:45. The binary from `f0b1eb8` (clean clone `<scratchpad>/wk-install-214-r3`) replaced it at 03:10:54; every create after that was warm, four of them at 03:16:58 (4.96 to 12.87 s). Reinstall from wk `main` after row 3 lands there (row 3 had a fix round at `1c4a1fd`, not on `main` when this note was written), and always with the same check: `go version -m ~/go/bin/wk` and `wk config show` from the ezhomesteading main checkout.
+
+A `go install` in the wk main checkout cannot stamp `vcs.modified=false` while `git status --porcelain` prints anything: Go counts the untracked `.claude/` as a change, and a personal-config stamp line in `docs/conventions-go.md` was also uncommitted. Both installs therefore came from a clean `git clone` of the commit into the session scratchpad.
+
+The wk gate line (`test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...`, `GOTOOLCHAIN=local`, a fresh lint cache) on `f0b1eb8`: the first run, at 03:12 while sibling sessions held both check places and the heavy place, failed only `TestHookPreToolUseTiming` (mean 55.7 ms over 20 runs, longest 131.8 ms, limit 50 ms); the rerun at 03:37 exited 0, every package `ok`, `0 issues`.
+
+### Steps 1 and 2: binary and config files
+
+After the install, `wk run --slot heavy -- true` exited 0 with the one line `wk run: running unslotted: no machine file at /Users/zachshort/.wk/machine.toml`, and `wk hook worktree-create </dev/null` exited 2 (`WorktreeCreate input: EOF`), its old behaviour.
+
+`~/.wk/machine.toml`: `[slots]` `dir = "/Users/zachshort/.wk/slots"`, `order = "fifo"`, `max_wait_seconds = 0`, `min_free_mb = 0`; `[slots.heavy]` `capacity = 1`; `[slots.check]` `capacity = 2`. `~/.wk/ezhomesteading.slots.toml`: `[hook]` `fail_open = true`, `timeout_ms = 200`, and 16 `[[slots.match]]` entries, the section 3 spellings: heavy `next build`, `bun run build`, `bunx next build` (each with `trim_after = ["web/.next/cache"]`), `bun run e2e`, `playwright test`, `bunx playwright test`, `go run ./cmd/lintgate`; check `tsc`, `bunx tsc`, `eslint`, `bunx eslint`, `bun run lint`, `vitest`, `bunx vitest`, `bun run test`, `go test`. `wk slots` printed both classes with every place free. The hook, fed the section 0.2 input with `cd web && bunx tsc --noEmit && bun run lint && bun run build`, printed exactly the phase 2 done-when `updatedInput`, with `timeout` 600000.
+
+### Step 3: the entry in a scratch project
+
+Scratch repository `<scratchpad>/hooktest-214/hooktest214`, whose `.claude/settings.local.json` was written by `wk --repo ... hooks install` with a scratch `HOME` (rules `Bash(bun *)`, `Bash(bunx *)`) and a scratch `WK_HOME`: the guarded `PreToolUse` entry (`matcher` `Bash`, `timeout` 5, `/Users/zachshort/go/bin/wk hook pre-tool-use || true`) and six twins. Headless runs, `--permission-mode default`, `--model haiku`, prompt "run: bun --version":
+
+| Run | Result |
+|---|---|
+| CLI 2.1.301, real `WK_HOME` (no slots file for `hooktest214`, so the hook passes through) | `1.2.9`, no prompt, no refusal |
+| CLI 2.1.301, scratch `WK_HOME` whose slots file lists `bun --version` as check | `1.2.9`, no prompt; scratch `runs.log`: `class=check exit=0 ... cmd=bun --version`, so the call was rewritten and its twin allowed it |
+| Bundled 2.1.299, the same | the same, a second `runs.log` line |
+| CLI 2.1.301, entry `<fake wk> hook pre-tool-use \|\| true`, the fake printing usage and exiting 2 | `1.2.9`; the fake logged its one invocation |
+| The same entry without `\|\| true` | the call was blocked: `PreToolUse:Bash hook error: [...fakebin/wk hook pre-tool-use]: usage: ...` |
+
+So Claude Code runs the entry through a shell, and the guard keeps a binary without the verb harmless.
+
+### Step 4: `wk hooks install` and the reload
+
+At 03:12:06, `wk hooks install` from the ezhomesteading main checkout updated `.claude/settings.local.json` and `.claude/worktrees/wk-template/.claude/settings.local.json` alike: the `PreToolUse` group above and seven allow twins (three each for `Bash(bun *)` and `Bash(bunx *)`, one for `Bash(go test *)`); 98 allow rules became 105, the 7 deny rules are unchanged, and none of them covers a spelling, so no deny twin. `grep -c 'run --slot'` prints 7 in each file. The first sibling gate took a place at 03:12:39, 33 s after the install (`bun run test` in `land-138`). This builder's own call `cd /Users/zachshort/Projects/ezhomesteading/web && bunx tsc --noEmit; echo "exit=$?"`, after a 60 s wait, printed `wk run: waiting for a check place: 2 of 2 held by ...; 1 ahead of this run` and `took a check place after 45.7s`, exited 2 (the main checkout's in-flight `story-art.tsx`), and wrote `class=check pid=4142 exit=2 wait=45.7s run=55.5s dir=/Users/zachshort/Projects/ezhomesteading/web cmd=bunx tsc --noEmit`.
+
+### Step 5: the live proof
+
+Sampler files: `<scratchpad>/row214-samples.log` (996 samples, 03:16:35 to 03:33:21) and `<scratchpad>/row214-samples-2.log` (148 samples, 03:34:39 to 03:37:07), one JSON line a second with `wk slots --json` and each top-level `next build`, `tsc --noEmit` and `eslint` process with its working directory and its holder class. `<scratchpad>` is `/private/tmp/claude-501/-Users-zachshort-Projects-ezhomesteading/a4c7695f-c286-455a-a645-7d0a944bc7a8/scratchpad`.
+
+`pgrep -f 'next build' | wc -l` printed 0 before the spawn. The four Haiku runners (`isolation: "worktree"`, background) got workspaces `agent-af89f1fd7b415b2a8` (A), `agent-a3146860aa8b9a63b` (B), `agent-a6625275a570f67f1` (C) and `agent-a72324aedbd8b51c4` (D) at base `9c56d5e75`, each ran the gate line once, and each returned an empty `git status --porcelain`. Web `tsc` is red on `main` itself, not only in the main checkout: `6ab242570` ("loading states", 2026-10-16 23:42) imports `./story-lottie/*.json` files that no commit holds. So each runner's `&&` line ended after `tsc`, and the builder ran `bun run lint; bun run build` in each workspace through the hook as four concurrent `Bash` calls of its own, then a second burst of three builds in A, B and C after the sampler was fixed (below).
+
+| Gate | A | B | C | D | Unwrapped in A (`bash <scratchpad>/web-gates.sh`) |
+|---|---|---|---|---|---|
+| `bunx tsc --noEmit` (runner, subagent call) | exit 2, waited 37.1 s | 2, 38.9 s | 2, 12.6 s | 2, 28.9 s | 2 |
+| `bun run lint` | 0, 56.3 s | 0, 56.9 s | 0, 80.5 s | 0, 82.1 s | 0 |
+| `bun run build`, burst 1 | 1, 0.0 s, ran 44.7 s | 1, 43.1 s, 68.4 s | 1, 81.7 s, 74.3 s | 1, 151.8 s, 43.2 s | 1 |
+| `bun run build`, burst 2 | 1, 0.0 s, 55.9 s | 1, 54.5 s, 26.5 s | 1, 79.4 s, 55.7 s | | |
+
+Every wrapped status in `runs.log` equals the unwrapped one, and each background call's own `echo` printed the same status as its `runs.log` line. Every wrapped build printed `wk run: trimmed web/.next/cache`.
+
+Sampler maxima. `wk slots`: heavy holders 1 (both files), check holders 2 (both), heavy waiters 3 (03:21:36), check waiters 8 (03:20:53). `ps`, slotted processes only: `tsc` 2, `eslint` 2, `next build` 1. `ps`, all processes: `tsc` 3 at 03:18:02, the third being a `claude -p` process in `~/Projects/hours` whose arguments held the text "tsc ... --noEmit" (another repository, not a type check); `eslint` 2. The first file's `next build` count is not evidence: Next.js sets `process.title` to `next-build (v16.3.8)` (`node_modules/next/dist/cli/next-build.js:42`), so the pattern saw a build only in its first second (4 of 224 samples with a build holding the heavy place). The fixed sampler matched `next-build` too: in the second file, 136 of 148 samples show the heavy place held by `bun run build` and exactly one `next-build` process, slotted; the maximum is 1.
+
+Unslotted processes, named with their working directory: this builder's unwrapped runs in A (03:25:05 to 03:27:18) and B and D (step 6); and a sibling session in `agent-a66ccb58ef75efd4a` (hooked: its `bunx vitest` runs are in `runs.log`) that ran `node node_modules/.bin/tsc --noEmit -p packages/core/tsconfig.json` (and `-p web`, `-p native`), `node node_modules/.bin/eslint --config ...`, and package lints as `node .../node_modules/.bin/eslint . --max-warnings N`, none of which starts with a spelling, so the hook neither wraps nor logs them.
+
+By 03:37:25, `runs.log` held 99 lines: check 80 (exit 0: 50, 1: 11, 2: 19; 51 waited; longest wait 89.9 s), heavy 19 (exit 0: 9, 1: 10; 7 waited; longest wait 151.8 s), most of them sibling sessions' gates.
+
+### Step 6: red through the wrapper
+
+On HEAD the syntax error does not isolate: with `const row214SyntaxError = ;` appended to B's `web/app/layout.tsx`, the build through the hook and the one through `<scratchpad>/row214/build-only.sh` both exited 1, but webpack reported the same five missing `story-lottie` modules in both and never reached the syntax error. So the test ran again on `c430c3e95`, the parent of `6ab242570`, in D (detached, `bun install --frozen-lockfile` unchanged): the clean build exited 0 wrapped (67.3 s, trimmed) and 0 unwrapped; with the same line appended, it exited 1 wrapped (17.2 s) and 1 unwrapped, both reporting `Expression expected` at `app/layout.tsx:112`. Both files were restored with `cp`, D was put back on `worktree-agent-a72324aedbd8b51c4` at `9c56d5e75`, and `git status --porcelain` is empty in B and D.
+
+### Step 7: disk
+
+The read-only `fts` plus `getattrlist(ATTR_CMNEXT_PRIVATESIZE)` walker (`<scratchpad>/row214/bin/privsize.c`; calibrated: a 10 MiB file and its `cp -c` clone read 0 private each, the survivor 10 MiB after the clone was removed) on D's `web/.next` right after the trimmed green build: 38,440,960 bytes, 36.66 MiB private, 813 files (`server` 21.70, `static` 5.58). That is under the 50 MiB of the done-when, against 758 MiB private for an untrimmed first build (`SLOTS-SCOPE.md` 1.3). C after a trimmed red build: 14.91 MiB.
+
+### `missed.log` and `errors.log`
+
+`errors.log` does not exist. `missed.log` has six lines, all sibling sessions', each a case the matcher leaves alone by design:
+
+1. 03:20:34 and 4. 03:26:28, `after the wrapper env`: `env -u EZH_TEST_DB go test -race -count=1 ./...` in a backend workspace; `env` with an option is a wrapper word, so that `go test` ran unslotted.
+2. 03:23:27, 3. 03:24:33 and 5. 03:26:55, `inside $( )`: `go test -race -count=1 -v ./services/ ./payments/ ./repository/` in a command substitution (for example `echo "after SKIP: $(go test ... | grep -c -- '--- SKIP')"`).
+6. 03:29:16, `the line already holds wk run`: a `go test ... -run 'TestAudit' .` line that ends `| grep -v '^wk run' | tail -15`. A sibling session filtered the wrapper's own lines out of its output, and `holdsWKRun` counts "wk run" inside any quoted word, so the whole line ran unslotted.
+
+### Open points for later
+
+- The 200 audit's finding 1: a covering `deny` or `ask` rule whose body does not begin with the spelling (a `VAR=`-led or compound body) gets no twin and no message. No such rule covers a gate in the three settings files today; the one non-twinned rule that holds a spelling word is `Bash(npx tsc *)`, and `npx tsc` is not a spelling.
+- Twins lag the slots file and the rule files until the next `wk hooks install`; rerun it after any change to either.
+- Reinstall from wk `main` once row 3 lands, and keep the shared `~/.wk/<repo>.toml` and the binary in step: any binary without the `leases` keys breaks warm workspace creation while the table is there.
+- Spellings that run gates unslotted with no log line: `node node_modules/.bin/tsc`, `node node_modules/.bin/eslint`, and a package lint started without the words `bun run lint`.
+- A model that filters `^wk run` out of its output unslots that line (`missed.log` line 6).
+- Web `tsc` and build are red on `main` since `6ab242570` (the missing `story-lottie` JSON files).
+- Sibling gates waited behind the proof: up to 8 check waiters and 3 heavy waiters at once.
