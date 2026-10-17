@@ -79,22 +79,24 @@ func pending(r changeset.Record) bool {
 	return r.State == changeset.Submitted || r.State == changeset.Landing
 }
 
-// landOne predicts r onto tip and lands it, and returns the new tip. A tree already on the tip
+// landOne predicts r onto tip and lands it, and returns the new tip. A review is demanded
+// first, so an empty submit is refused like any other (audit 1, N5). A tree already on the tip
 // (a landing record whose swap went through before a crash, or a submit that changed nothing)
 // is landed without a commit, so no duplicate commit is written (F18); a conflict is refused
 // with its paths (option P); otherwise the predicted tree is journalled as a landing line and
 // then committed by the compare-and-swap. A refused swap ends the pass with the error, and the
-// next pass predicts again from the landing line.
+// next pass predicts again from the submitted tree, never from the journalled prediction,
+// which is right only against the tip it was made on (audit 1, F1).
 func (e *Env) landOne(r changeset.Record, tip string, out io.Writer) (string, error) {
 	tipTree, err := gitx.Run(e.Repo.Primary, "rev-parse", tip+"^{tree}")
 	if err != nil {
 		return "", err
 	}
-	if r.Tree == tipTree {
-		return tip, e.markLanded(r, tip, out)
-	}
 	if e.Cfg.Landing.RequireReview && r.Review == "" {
 		return tip, e.refuse(r, nil, "no review; landing.require_review is true, submit again with --review", out)
+	}
+	if r.Tree == tipTree || r.Predicted == tipTree {
+		return tip, e.markLanded(r, tip, out)
 	}
 	result, conflicts, err := landing.Predict(e.Repo.Primary, r.Base, tip, r.Tree)
 	if err != nil {
@@ -106,7 +108,7 @@ func (e *Env) landOne(r changeset.Record, tip string, out io.Writer) (string, er
 	if result == tipTree {
 		return tip, e.markLanded(r, tip, out)
 	}
-	r.State, r.Tree, r.At = changeset.Landing, result, e.clock()
+	r.State, r.Predicted, r.At = changeset.Landing, result, e.clock()
 	if err := e.queue().Append(r); err != nil {
 		return "", err
 	}
@@ -236,7 +238,7 @@ func (e *Env) Land(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "%s %s (%s)\n%s %s\n", e.Cfg.Landing.Ref, orMissing(st.tip), st.note, e.Cfg.Workspace.Base, st.main)
+	_, _ = fmt.Fprintf(out, "%s %s (%s)\n%s %s\n%s", e.Cfg.Landing.Ref, orMissing(st.tip), st.note, e.Cfg.Workspace.Base, st.main, st.remote)
 	if !st.ahead {
 		return nil
 	}
@@ -278,10 +280,11 @@ func (e *Env) LandApply(expect string, out io.Writer) error {
 }
 
 // landingState is the read-only view `wk land` and `wk status` print: the two hashes and one
-// note on how they stand. ahead is whether the base branch can fast-forward to the tip.
+// note on how they stand. ahead is whether the base branch can fast-forward to the tip; remote
+// is a line, or "", saying the remote-tracking ref is behind the base branch (audit 1, N2).
 type landingState struct {
-	main, tip, note string
-	ahead           bool
+	main, tip, note, remote string
+	ahead                   bool
 }
 
 func (e *Env) landingState() (landingState, error) {
@@ -289,7 +292,7 @@ func (e *Env) landingState() (landingState, error) {
 	if err != nil {
 		return landingState{}, err
 	}
-	st := landingState{main: main}
+	st := landingState{main: main, remote: e.remoteBehind(main)}
 	st.tip, _ = gitx.Commit(e.Repo.Primary, e.Cfg.Landing.Ref)
 	repo := e.Repo.Primary
 	switch {
@@ -306,6 +309,19 @@ func (e *Env) landingState() (landingState, error) {
 		st.note = fmt.Sprintf("diverged from %s: the worker stops; merge by hand, or reset it with git update-ref %s %s %s", e.Cfg.Workspace.Base, e.Cfg.Landing.Ref, main, st.tip)
 	}
 	return st, nil
+}
+
+// remoteBehind is one line when the remote-tracking ref of the base branch is an ancestor of
+// the base branch and not at it, which a refused push after a fast-forward leaves (audit 1,
+// N2); "" when the ref is missing, at the branch, or not behind it. Running `wk land --apply
+// --expect <base hash>` again pushes it, because the fast-forward is then a no-op.
+func (e *Env) remoteBehind(main string) string {
+	remote, branch := e.Cfg.Landing.Remote, e.Cfg.Workspace.Base
+	at, err := gitx.Commit(e.Repo.Primary, "refs/remotes/"+remote+"/"+branch)
+	if err != nil || at == main || !gitx.IsAncestor(e.Repo.Primary, at, main) {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s is behind %s at %s, so the push did not go through; wk land --apply --expect %s pushes it\n", remote, branch, branch, shortHash(at), main)
 }
 
 func orMissing(hash string) string {

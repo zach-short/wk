@@ -24,7 +24,7 @@ func (e *Env) QueueStatus(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "%s %s (%s), %s %s\n", e.Cfg.Landing.Ref, orMissing(shortHash(st.tip)), st.note, e.Cfg.Workspace.Base, shortHash(st.main))
+	_, _ = fmt.Fprintf(out, "%s %s (%s), %s %s\n%s", e.Cfg.Landing.Ref, orMissing(shortHash(st.tip)), st.note, e.Cfg.Workspace.Base, shortHash(st.main), st.remote)
 	records, err := e.queue().Load()
 	if err != nil {
 		return err

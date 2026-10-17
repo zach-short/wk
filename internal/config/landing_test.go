@@ -40,6 +40,8 @@ func TestLandingValidation(t *testing.T) {
 		"[landing]\nref = \"refs/tags/v1\"",
 		"[landing]\nremote = \"\"",
 		"[landing]\nff_main = true",
+		"[landing]\nref = \"refs/heads/main\"",
+		"[workspace]\nbase = \"trunk\"\n[landing]\nref = \"refs/heads/trunk\"",
 	} {
 		if _, _, err := Load(write(t, body)); err == nil {
 			t.Errorf("%q loaded; want a refusal", body)

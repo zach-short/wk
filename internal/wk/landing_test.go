@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -155,7 +156,7 @@ func TestLoopLandsWhatIsAlreadyOnTheTipWithoutACommit(t *testing.T) {
 	loop(t, e)
 	tip := record(t, e, first).Commit
 	tipTree := gitOut(t, f.Repo, "rev-parse", tip+"^{tree}")
-	journal := changeset.Record{ID: "0123456789ab", State: changeset.Landing, Tree: tipTree, Base: tip, Message: "crashed", Workspace: a, At: e.clock()}
+	journal := changeset.Record{ID: "0123456789ab", State: changeset.Landing, Tree: record(t, e, first).Tree, Predicted: tipTree, Base: tip, Message: "crashed", Workspace: a, At: e.clock()}
 	if err := e.queue().Append(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +186,104 @@ func TestRequireReviewRefusesAChangesetWithoutOne(t *testing.T) {
 	loop(t, e)
 	if r := record(t, e, reviewed); r.State != changeset.Landed || r.Review != "audit 3" {
 		t.Fatalf("record = %+v", r)
+	}
+	// An empty submit, whose tree is the tip's, is refused like any other (audit 1, N5).
+	empty := submit(t, e, a, "nothing new", "")
+	loop(t, e)
+	if r := record(t, e, empty); r.State != changeset.Refused {
+		t.Fatalf("empty record = %+v; want it refused for the missing review", r)
+	}
+}
+
+// crashingGit puts a git first on PATH that fails the first swap of the landing ref, which is
+// what a worker killed between its landing line and the swap leaves behind, and passes every
+// other call through.
+func crashingGit(t *testing.T) {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	script := "#!/bin/bash\n" +
+		"if [ \"$3\" = update-ref ] && [ \"$4\" = refs/heads/wk/landing ] && [ -n \"${6:-}\" ] && [ ! -e \"$0.once\" ]; then touch \"$0.once\"; exit 137; fi\n" +
+		"exec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// After a crash before the swap, the rerun predicts from the submitted tree again. Predicting
+// from the journalled tree would carry everything the old tip had over the new one: here a's
+// page change, reverted by hand on main in between, would come back (audit 1, F1).
+func TestLoopAfterACrashLandsOnlyTheSubmittedChange(t *testing.T) {
+	f, e, a, b := landingFixture(t, io.Discard, "")
+	writeIn(t, a, "web/page.ts", "export const page = 'a';\n")
+	page := submit(t, e, a, "page", "")
+	loop(t, e)
+	if err := e.LandApply(record(t, e, page).Commit, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, b, "docs/incomplete/plan/PLAN.md", "# plan, edited in b\n")
+	id := submit(t, e, b, "plan", "")
+	crashingGit(t)
+	if err := e.LandLoop(io.Discard); err == nil {
+		t.Fatal("the worker survived the failed swap")
+	}
+	if r := record(t, e, id); r.State != changeset.Landing || r.Predicted == "" || r.Predicted == r.Tree {
+		t.Fatalf("record after the crash = %+v", r)
+	}
+	writeIn(t, f.Repo, "web/page.ts", "export const page = 1;\n")
+	f.Git(t, "commit", "--quiet", "--no-verify", "-am", "revert the page by hand on main")
+	loop(t, e)
+	r := record(t, e, id)
+	if r.State != changeset.Landed {
+		t.Fatalf("record = %+v", r)
+	}
+	if changed := gitOut(t, f.Repo, "diff", "--name-only", r.Commit+"^", r.Commit); changed != "docs/incomplete/plan/PLAN.md" {
+		t.Fatalf("the landing commit changed %q; want the submitted path alone", changed)
+	}
+	if got := gitOut(t, f.Repo, "show", r.Commit+":web/page.ts"); got != "export const page = 1;" {
+		t.Fatalf("the landed page = %q; the hand revert was undone", got)
+	}
+}
+
+// A push the remote refuses leaves main moved and origin behind; wk land and wk status say so
+// until a later apply pushes it (audit 1, N2).
+func TestLandAndStatusSayWhenThePushWasRefused(t *testing.T) {
+	f, e, a, _ := landingFixture(t, io.Discard, "")
+	f.Git(t, "push", "--quiet", "origin", "main")
+	hook := filepath.Join(f.Root, "origin.git", "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho refused by the test hook >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, a, "web/page.ts", "export const page = 'a';\n")
+	id := submit(t, e, a, "page", "")
+	loop(t, e)
+	tip := record(t, e, id).Commit
+	if err := e.LandApply(tip, io.Discard); err == nil || !strings.Contains(err.Error(), "refused by the test hook") {
+		t.Fatalf("apply against a refusing remote: %v", err)
+	}
+	var out bytes.Buffer
+	if err := e.Land(&out); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.QueueStatus(&out); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), "origin/main is behind main"); n != 2 {
+		t.Fatalf("%d behind lines, want 2:\n%s", n, out.String())
+	}
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.LandApply(tip, io.Discard); err != nil {
+		t.Fatalf("apply again, which pushes: %v", err)
+	}
+	out.Reset()
+	if err := e.Land(&out); err != nil || strings.Contains(out.String(), "behind") {
+		t.Fatalf("land after the push: %v\n%s", err, out.String())
 	}
 }
 

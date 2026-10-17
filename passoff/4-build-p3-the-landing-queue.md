@@ -60,7 +60,7 @@ What changed and why:
 
 Fixed: the three P3 scope items the siblings left to this row (the subcommands, the loop, the status) and the four owner amendments that are built (the journal line and the landed-without-a-commit rule; `wk sync` for a branch with commits; the list at submit time; `require_review`).
 
-Questions answered: the base of a changeset while the landing ref does not exist is the base branch's hash, where the first pass creates the ref; a `landing` record is re-predicted from its predicted tree, which merges onto a moved tip as its workspace tree would, so the record needs no second tree field; a refused swap ends the worker instead of looping; `wk sync` exits 1 on a conflict so a script sees it.
+Questions answered: the base of a changeset while the landing ref does not exist is the base branch's hash, where the first pass creates the ref; a `landing` record is re-predicted from its submitted tree (`Tree`), never from the journalled prediction, which is right only against the tip it was made on; the prediction is journalled in a second field, `Predicted` (corrected in fix round 1, F1; the first build re-predicted from the prediction, which was wrong); a refused swap ends the worker instead of looping; `wk sync` exits 1 on a conflict so a script sees it.
 
 Build-level calls, each with its reversal:
 
@@ -69,6 +69,7 @@ Build-level calls, each with its reversal:
 - `wk sync` folds commits with no flag, saying how many and that they stay in the reflog. Reversal: refuse as PD-7 did unless `--fold` is given.
 - A `submitted` or `landing` record whose tree, or whose prediction, is the tip's tree is `landed` at the tip. Reversal: an empty landing commit.
 - The timer's interval is 60 s in the plist text. Reversal: any other integer.
+- The landing line journals the prediction in a second field, `Predicted`, and `Tree` stays the submitted tree for the record's whole life, so a rerun after a crash predicts from what was submitted (fix round 1, F1). Reversal: the single field of the first build, which carried the old tip's changes over a moved tip and is the defect.
 
 Left owed: step 7 (the lead, at the land step); step 9 (this run's auditor); the gc amendment; row 10's duplicate tree builder in `landing.Sync` (the plan's "Not built" names row 4 as the one to fold it; not done, because `landing.Sync` takes a base and a tip, not a tree, and the fold would change `internal/landing`); row 12's `type State string` note; `internal/daemon`'s unused `Server` and `Client`, which `CLAUDE.md` says go after P3 lands.
 
@@ -138,3 +139,17 @@ Questions for the owner, decided here by the rule (prevent a silent failure, kee
 
 1. The gc amendment: is a reason line naming the landed changeset enough, or should gc clean the workspace (a `wk sync` by gc, which writes a workspace's index and tree)? Built: neither; `wk sync` by the workspace's session makes it clean.
 2. Should `wk sync` fold a branch's commits without a flag? Built: yes, with the count and the reflog said on stderr.
+
+### Fix round 1, 2026-10-17
+
+From audit 1 (`docs/incomplete/autopilot-2026-10-16/reports/row-4-audit-1.md`), after `git merge --no-edit main` brought `941667c` and the row state files (`6a840d4`).
+
+- F1 (blocking, fixed): `changeset.Record` has `Predicted` (`omitempty`), the tree the landing line journals; `Tree` is the submitted tree for the record's whole life. `landOne` predicts from `r.Tree` and `r.Base` on every pass, sets `r.Predicted` on the landing line, and lands without a commit when `Tree` or `Predicted` equals the tip's tree. `TestLoopLandsWhatIsAlreadyOnTheTipWithoutACommit` sets the new field on its hand-made journal. New test `TestLoopAfterACrashLandsOnlyTheSubmittedChange`: `a` lands and is applied; `b`, two landings behind, edits one file; a git on PATH fails the first swap, as a killed worker leaves it; main moves ahead with a hand revert of `a`'s file; the rerun lands a commit whose diff against its parent is the one submitted path, and the reverted file keeps the revert. Reproduced live too: `proof.sh` section 8 (`proof-fix1.out`): `c` at M0 edits `docs/NOTES.md`, killed before the swap (the shim's `WK_KILL_ON_SWAP`), the landing line holds `tree` and `predicted`, main moves ahead with the revert of `web/page.ts`, the rerun lands `7a7a627` on top of main with `1 file changed` (`docs/NOTES.md`) and `page.ts = 1`.
+- N1 (fixed): `Config.validate` refuses `landing.ref == "refs/heads/" + workspace.base`; two rows in `TestLandingValidation` (`main`, and `trunk` with `workspace.base = "trunk"`).
+- N2 (fixed): `landingState` reads `refs/remotes/<remote>/<base>`; when it is an ancestor of the base branch and not at it, `wk land` and `wk status` print one line saying it is behind and that `wk land --apply --expect <base hash>` pushes it (the fast-forward is then a no-op). `TestLandAndStatusSayWhenThePushWasRefused`: a `pre-receive` hook in the bare remote exits 1; the apply fails with the hook's message, both commands print the line, the hook is removed, the apply again pushes, and the line is gone.
+- N5 (fixed): the `require_review` check comes before the tip-tree shortcut; `TestRequireReviewRefusesAChangesetWithoutOne` adds an empty submit without a review, refused.
+- N3 (open): `wk submit` appends to the queue with no lock, relying on `O_APPEND` and one write per line; a line torn by a crash mid-write fails `Load` for every reader until a hand repair.
+- N4 (open): `foldCommits` moves the branch before `landing.Sync` runs; a failure after the fold leaves the branch at the merge base with the work in the tree and the reflog hash on stderr.
+- N6 (open): `spawnLand` returns silently when `installedExe` fails or the binary is transient; the record stays `submitted` for the timer.
+
+Line counts after the fix: `landing.go` 340, `submit.go` 113 (`Submit` 40 lines, unchanged), `status.go` 52; `landOne` 31.

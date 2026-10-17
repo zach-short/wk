@@ -234,6 +234,11 @@ func (c Config) validate() error {
 	if err := c.Landing.validate(); err != nil {
 		return err
 	}
+	// The worker would then move the base branch by itself, which only wk land --apply does
+	// until P4 (PD-6; row 4 audit 1, N1).
+	if c.Landing.Ref == "refs/heads/"+c.Workspace.Base {
+		return fmt.Errorf("landing.ref %q is the base branch workspace.base, which only wk land --apply moves", c.Landing.Ref)
+	}
 	if c.Pool.Size < 0 || c.Pool.SparseSize < 0 {
 		return fmt.Errorf("pool.size and pool.sparse_size must not be negative")
 	}

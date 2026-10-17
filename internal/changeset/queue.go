@@ -25,13 +25,16 @@ const (
 	Failed    = "failed"
 )
 
-// Record is one line of the queue: a changeset at one state. Commit is set on landed, Paths
-// on refused (the conflicts) and failed (the paths the gate named), Gate and Reason on gated
-// and failed. Review names the changeset's review, which landing.require_review demands.
+// Record is one line of the queue: a changeset at one state. Tree is the submitted tree for the
+// record's whole life; Predicted is the merged tree the landing line journals, which is only
+// right against the tip it was predicted on (row 4 audit 1, F1). Commit is set on landed,
+// Paths on refused (the conflicts) and failed (the paths the gate named), Gate and Reason on
+// gated and failed. Review names the changeset's review, which landing.require_review demands.
 type Record struct {
 	ID        string    `json:"id"`
 	State     string    `json:"state"`
 	Tree      string    `json:"tree"`
+	Predicted string    `json:"predicted,omitempty"`
 	Base      string    `json:"base"`
 	Message   string    `json:"message"`
 	Row       string    `json:"row,omitempty"`
