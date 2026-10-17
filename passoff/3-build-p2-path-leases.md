@@ -51,6 +51,6 @@ From the owner's research review of 2026-10-16, applied by the autopilot run bef
 - The hook (`wk hook lease --repo <primary>`) reads `leases.json` itself and judges with `lease.Judge`; its worktree list comes from a file that `wk claim` and `wk release` maintain beside the store, never from git (PD-2 holds). D12's "deny when the socket does not answer" has no equivalent and is dropped.
 - Everything else in this row stands, including the `Bash` targets computed in the hook's own process, the wk-binary allow, the exit-2 and panic rules, the `onFailure` entries, the reaping of leases whose root is gone, the header lookup, the common-git-directory check, and the lead's own writes to the ledger files.
 
-### Note from ezhomesteading item 200, 2026-10-17 02:20 EDT
+### Note from ezhomesteading item 200, 2026-10-17 02:15 EDT
 
 Item 200's integration lands on wk `main` before this row starts. It changes two files this row owns: `internal/wk/hooks.go` now calls `settings.InstallTwins` before `settings.Install`, and `cmd/wk/main.go` has `run`, `slots` and `hook pre-tool-use` verbs. Build on that state: merge `main` first and keep those verbs and that call order.
