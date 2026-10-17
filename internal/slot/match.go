@@ -34,7 +34,7 @@ func Rewrite(command, wkExe string, sf SlotsFile) (out string, changed bool, mis
 		return command, false, matchUnparsed(command, spellings, err), err
 	}
 	w := matchWalk{src: command, exe: wkExe, spellings: spellings}
-	w.wrapped = matchHoldsWKRun(command, matchQuote(wkExe))
+	w.wrapped = w.holdsWKRun(file)
 	w.stmts(file.Stmts)
 	if len(w.inserts) == 0 {
 		return command, false, w.missed, nil
@@ -149,7 +149,7 @@ func (w *matchWalk) call(c *syntax.CallExpr) {
 	s, literal, ok := w.lookup(c.Args)
 	switch {
 	case !ok:
-		w.nestedShell(c, "")
+		w.unmatched(c, "")
 	case !literal:
 		w.miss(c, "quoted spelling")
 	case w.wrapped:
@@ -190,24 +190,55 @@ func (w *matchWalk) missAll(n syntax.Node, reason string) {
 			if _, _, found := w.lookup(c.Args); found {
 				w.miss(c, reason)
 			} else {
-				w.nestedShell(c, reason)
+				w.unmatched(c, reason)
 			}
 		}
 		return true
 	})
 }
 
-// nestedShell records a spelling in the string an `eval` or a `<shell> -c` runs. The string is
-// one word to this parser, so it is searched as text, for missed.log only.
-func (w *matchWalk) nestedShell(c *syntax.CallExpr, outer string) {
-	reason, ok := matchNestedShell(c)
-	if !ok || !matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings) {
+// unmatched records a spelling in a command whose first words spell none: in the string an
+// `eval` or a `<shell> -c` runs, or after a wrapper word. Neither is rewritten, for missed.log
+// only (SB-15).
+func (w *matchWalk) unmatched(c *syntax.CallExpr, outer string) {
+	reason, ok := w.nestedShellReason(c)
+	if !ok {
+		reason, ok = w.wrapperReason(c)
+	}
+	if !ok {
 		return
 	}
 	if outer != "" {
 		reason = outer
 	}
 	w.miss(c, reason)
+}
+
+// The string a nested shell runs is one word to this parser, so it is searched as text.
+func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
+	reason, ok := matchNestedShell(c)
+	return reason, ok && matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings)
+}
+
+// A wrapper runs a command made of its later words, so a gate behind one runs unslotted. It is
+// logged, not rewritten, because the wrapper's own options sit between it and the gate. The set
+// is closed on purpose: any word before a spelling would also log `grep eslint`.
+var matchWrappers = map[string]bool{"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "timeout": true, "xargs": true}
+
+func (w *matchWalk) wrapperReason(c *syntax.CallExpr) (string, bool) {
+	if len(c.Args) < 2 {
+		return "", false
+	}
+	name := path.Base(c.Args[0].Lit())
+	if !matchWrappers[name] {
+		return "", false
+	}
+	for i := 1; i < len(c.Args); i++ {
+		if _, _, found := w.lookup(c.Args[i:]); found {
+			return "after the wrapper " + name, true
+		}
+	}
+	return "", false
 }
 
 var matchShells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}
@@ -232,11 +263,38 @@ func matchNestedShell(c *syntax.CallExpr) (string, bool) {
 }
 
 func (w *matchWalk) isWKRun(c *syntax.CallExpr) bool {
-	if len(c.Args) < 2 || c.Args[1].Lit() != "run" {
-		return false
+	return len(c.Args) >= 2 && w.isWKWord(c.Args[0]) && c.Args[1].Lit() == "run"
+}
+
+func (w *matchWalk) isWKWord(word *syntax.Word) bool {
+	v, ok := matchUnquoted(word)
+	return ok && (v == w.exe || path.Base(v) == "wk")
+}
+
+// holdsWKRun reads the parsed words, never the raw text, so a comment that mentions wk run does
+// not hold the line back. Two words "wk" and "run" in a row count wherever they sit, and so does
+// "wk run" inside one quoted word, whatever punctuation follows it.
+func (w *matchWalk) holdsWKRun(file *syntax.File) bool {
+	found := false
+	syntax.Walk(file, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.CallExpr:
+			found = found || w.callHoldsWKRun(n)
+		case *syntax.Word:
+			found = found || matchWKRun.MatchString(w.text(n.Pos(), n.End()))
+		}
+		return !found
+	})
+	return found
+}
+
+func (w *matchWalk) callHoldsWKRun(c *syntax.CallExpr) bool {
+	for i := 0; i+1 < len(c.Args); i++ {
+		if w.isWKWord(c.Args[i]) && c.Args[i+1].Lit() == "run" {
+			return true
+		}
 	}
-	first := c.Args[0].Lit()
-	return first == w.exe || path.Base(first) == "wk"
+	return false
 }
 
 // lookup finds the longest spelling the first words spell once quotes and escapes are removed,
@@ -356,13 +414,7 @@ func (w *matchWalk) text(from, to syntax.Pos) string {
 	return w.src[min(from.Offset(), end):end]
 }
 
-// The wk path may be typed by hand, or spelled by its base name, so the check reads the text
-// too: anything that looks like a wk run, even inside quotes, leaves the line alone and logged.
-var matchWKRun = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])wk\s+run(\s|$)`)
-
-func matchHoldsWKRun(command, quotedExe string) bool {
-	return matchWKRun.MatchString(command) || (quotedExe != "" && strings.Contains(command, quotedExe+" run"))
-}
+var matchWKRun = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])wk\s+run([^A-Za-z0-9_.-]|$)`)
 
 func matchUnparsed(command string, spellings []matchSpelling, err error) []Missed {
 	if !matchMentions(command, spellings) {
