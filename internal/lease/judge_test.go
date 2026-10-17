@@ -73,6 +73,12 @@ func TestJudge(t *testing.T) {
 		{"Bash with no write", bash("/r/main", `git status && ls -la`), allow},
 		{"Bash write outside every root", bash("/r/b", `go test ./... > /tmp/out 2>&1`), allow},
 		{"Bash write to an own lease", bash(rootB, `touch api/x.go`), allow},
+		{"Bash write after an arithmetic shift", bash("/r/b", "echo $((1<<2))\nrm web/x.ts"), Decision{Reason: heldByA + " (the command writes /r/b/web/x.ts)"}},
+		{"Bash write after pushd", bash("/r/b", `pushd web && rm x.ts`), Decision{Reason: `wk: cannot tell which file this writes ("x.ts"); give the path in full (the command writes x.ts)`}},
+		{"lower-case bash is not Bash", Request{Tool: "bash", Cwd: "/r/b", Command: "rm web/x.ts"}, Decision{Reason: `wk: cannot tell which file the tool "bash" writes; give the path in full`}},
+		{"unknown tool with a path is judged as an edit", Request{Tool: "Frobnicate", Path: "/r/b/web/x.ts"}, Decision{Reason: heldByA}},
+		{"unknown tool with nothing to judge", Request{Tool: "Frobnicate", Cwd: "/r/b"}, Decision{Reason: `wk: cannot tell which file the tool "Frobnicate" writes; give the path in full`}},
+		{"NotebookEdit", Request{Tool: "NotebookEdit", Path: "/r/b/web/x.ts"}, Decision{Reason: heldByA}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

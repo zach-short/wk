@@ -29,10 +29,15 @@ type Store struct {
 	Workspaces map[string]Workspace `json:"workspaces"`
 }
 
-// Claim records root's claim on row, replacing any claim root held before. It refuses when a
-// lease is malformed or overlaps a lease another root holds, and names that root and its row.
+// Claim records root's claim on row. It refuses a root that has claimed already, because a
+// builder and its auditor share one root (option H) and a new claim would drop leases the other
+// relies on; it refuses a lease that is malformed or overlaps a lease another root holds, and
+// names that root and its row.
 func (s *Store) Claim(root, row, session string, leases []string) error {
 	root = filepath.Clean(root)
+	if ws, ok := s.Workspaces[root]; ok {
+		return fmt.Errorf("%s has already claimed row %s; run `wk release` there first", root, ws.Row)
+	}
 	if err := s.check(root, leases); err != nil {
 		return err
 	}

@@ -58,6 +58,16 @@ func TestWriteTargets(t *testing.T) {
 		{"cd the walk cannot follow", `cd $X && rm y`, []string{"y"}},
 		{"single-quoted $ is literal", `touch 'a$b'`, []string{"/w/a$b"}},
 		{"unrecognised write passes", `find . -name x -delete`, nil},
+		{"shift in $(( )) opens no heredoc", "echo $((1<<2))\nrm web/x.ts", []string{"/w/web/x.ts"}},
+		{"shift in (( )) opens no heredoc", "(( x = 1 << 2 ))\nrm y", []string{"/w/y"}},
+		{"nested parentheses in arithmetic", "echo $(( (1+2) << 3 ))\nrm y", []string{"/w/y"}},
+		{"heredoc in a subshell is still skipped", "(cat <<EOF\nrm x\nEOF\n)", nil},
+		{"<< with no delimiter keeps walking", "cat <<\nrm y\nrm z", []string{"/w/y", "/w/z"}},
+		{"pushd is not followed", `pushd web && rm x.ts`, []string{"x.ts"}},
+		{"popd is not followed", `popd; rm x`, []string{"x"}},
+		{"builtin cd is not followed", `builtin cd web && rm x`, []string{"x"}},
+		{"command cd is not followed", `command cd web; rm x`, []string{"x"}},
+		{"cd - is not followed", `cd - && rm x`, []string{"x"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

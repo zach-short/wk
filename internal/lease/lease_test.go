@@ -47,13 +47,18 @@ func TestClaimRefusesAnOverlapAndNamesTheHolder(t *testing.T) {
 	}
 }
 
-func TestClaimAgainReplaces(t *testing.T) {
+func TestClaimTwiceRefuses(t *testing.T) {
 	var s Store
 	mustClaim(t, &s, "/r/a", "7", "web/")
-	mustClaim(t, &s, "/r/a/", "9", "api/")
-	if got := s.Workspaces["/r/a"]; got.Row != "9" || !slices.Equal(got.Leases, []string{"api/"}) {
-		t.Errorf("after a second claim = %+v", got)
+	err := s.Claim("/r/a/", "9", "s2", []string{"api/"})
+	if err == nil || err.Error() != "/r/a has already claimed row 7; run `wk release` there first" {
+		t.Errorf("second Claim error = %v", err)
 	}
+	if got := s.Workspaces["/r/a"]; got.Row != "7" || !slices.Equal(got.Leases, []string{"web/"}) {
+		t.Errorf("a refused second claim changed the first: %+v", got)
+	}
+	s.Release("/r/a")
+	mustClaim(t, &s, "/r/a", "9", "api/")
 }
 
 func TestClaimRefusesMalformedLeases(t *testing.T) {

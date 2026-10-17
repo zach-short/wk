@@ -55,15 +55,29 @@ func Resolve(roots []string, cwd, path string) (root, rel string, ok bool) {
 	return root, filepath.ToSlash(rel), true
 }
 
+// editTools are the tools that carry a file path, named exactly as Claude Code sends them.
+var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
+
 // Judge decides one tool call, in this order: a path the judgment cannot place is denied; a path
 // in no root is allowed; a root that has not claimed is denied (D10); a path another root leases
 // is denied with its row and root; a single-writer path this root does not lease is denied
 // (D13 L1); anything else is allowed. A `Bash` call is judged on every file WriteTargets finds,
 // and one denial denies the command.
+//
+// Tool names match exactly (`Bash`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`). To fail
+// closed, any other tool that carries a path is judged as an edit, and any other tool without
+// one is denied, even with a command: `bash` in lower case is not `Bash`.
 func Judge(store *Store, cfg Rules, roots []string, req Request) Decision {
-	if req.Tool != "Bash" {
+	switch {
+	case req.Tool == "Bash":
+		return judgeBash(store, cfg, roots, req)
+	case editTools[req.Tool] || req.Path != "":
 		return judgePath(store, cfg, roots, req.Cwd, req.Path)
 	}
+	return deny("wk: cannot tell which file the tool %q writes; give the path in full", req.Tool)
+}
+
+func judgeBash(store *Store, cfg Rules, roots []string, req Request) Decision {
 	if !cfg.BashGuard {
 		return allow
 	}

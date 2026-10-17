@@ -92,7 +92,9 @@ func (w *walker) subshell(op string) {
 	}
 }
 
-// end judges the simple command gathered so far.
+// end judges the simple command gathered so far. `pushd`, `popd`, `builtin cd` and
+// `command cd` move the directory somewhere the walk does not follow, so after them a relative
+// target is returned as written and refused.
 func (w *walker) end() {
 	argv := skipPrefix(w.argv)
 	w.argv = nil
@@ -103,6 +105,12 @@ func (w *walker) end() {
 	switch filepath.Base(argv[0].text) {
 	case "cd":
 		w.cd(args)
+	case "pushd", "popd":
+		w.dir = ""
+	case "builtin", "command":
+		if len(args) > 0 && args[0].text == "cd" {
+			w.dir = ""
+		}
 	case "sed":
 		w.add(w.dir, sedFiles(args)...)
 	case "tee", "rm", "touch", "mv":
@@ -226,26 +234,22 @@ func sedFiles(args []word) []word {
 	var rest []word
 	for i := 0; i < len(args); i++ {
 		a := args[i].text
+		var in, s, next bool
 		switch {
 		case a == "--":
 			rest = append(rest, args[i+1:]...)
 			i = len(args)
-		case a == "--expression" || a == "--file":
-			script = true
-			i++
-		case strings.HasPrefix(a, "--expression=") || strings.HasPrefix(a, "--file="):
-			script = true
-		case strings.HasPrefix(a, "--in-place"):
-			inPlace = true
 		case strings.HasPrefix(a, "--"):
+			in, s, next = sedLong(a)
 		case len(a) > 1 && a[0] == '-':
-			in, s, next := sedCluster(a[1:])
-			inPlace, script = inPlace || in, script || s
-			if in && a == "-i" && i+1 < len(args) && args[i+1].text == "" || next {
-				i++
-			}
+			in, s, next = sedCluster(a[1:])
+			next = next || a == "-i" && i+1 < len(args) && args[i+1].text == ""
 		default:
 			rest = append(rest, args[i])
+		}
+		inPlace, script = inPlace || in, script || s
+		if next {
+			i++
 		}
 	}
 	if !inPlace {
@@ -255,6 +259,20 @@ func sedFiles(args []word) []word {
 		rest = rest[1:]
 	}
 	return rest
+}
+
+// sedLong reads one long option: `--in-place` edits in place, and `--expression` or `--file`
+// give the script, from the next word when no `=` joins them.
+func sedLong(a string) (inPlace, script, next bool) {
+	switch {
+	case strings.HasPrefix(a, "--in-place"):
+		return true, false, false
+	case a == "--expression" || a == "--file":
+		return false, true, true
+	case strings.HasPrefix(a, "--expression=") || strings.HasPrefix(a, "--file="):
+		return false, true, false
+	}
+	return false, false, false
 }
 
 // sedCluster reads one short-flag cluster as sed does: `i` takes the rest as its suffix, and
@@ -360,6 +378,7 @@ type splitter struct {
 	exp     int
 	bodies  []heredoc
 	pending *heredoc
+	arith   int // parentheses open inside `((` or `$((`, where `<<` is a shift
 }
 
 type heredoc struct {
@@ -385,14 +404,9 @@ func (p *splitter) step() bool {
 		p.flush()
 		p.i++
 	case c == '\n':
-		p.flush()
-		p.out = append(p.out, word{op: ";"})
-		p.i++
-		p.skipBodies()
+		p.newline()
 	case c == '#' && !p.in:
-		for p.i < len(p.s) && p.s[p.i] != '\n' {
-			p.i++
-		}
+		p.comment()
 	case c == '\\':
 		return p.escape()
 	case c == '\'':
@@ -406,6 +420,22 @@ func (p *splitter) step() bool {
 		p.i++
 	}
 	return true
+}
+
+// newline ends a command and skips the heredoc bodies opened on the line. A `<<` that never got
+// its delimiter word is dropped, so the lines after it are still walked.
+func (p *splitter) newline() {
+	p.flush()
+	p.pending = nil
+	p.out = append(p.out, word{op: ";"})
+	p.i++
+	p.skipBodies()
+}
+
+func (p *splitter) comment() {
+	for p.i < len(p.s) && p.s[p.i] != '\n' {
+		p.i++
+	}
 }
 
 func (p *splitter) char(c byte, expands bool) {
@@ -474,10 +504,22 @@ func (p *splitter) operator() {
 		p.flush()
 	}
 	p.out = append(p.out, word{op: op})
-	if op == "<<" || op == "<<-" {
+	p.heredocOrArith(op)
+	p.i += len(op)
+}
+
+// heredocOrArith opens a heredoc on `<<` or `<<-`, except inside `((` or `$((`, where `<<` is a
+// shift and opening a heredoc would hide the lines after it. Any `((` counts as arithmetic: when
+// it was two subshells, a real heredoc inside is walked as commands, which can only refuse more.
+func (p *splitter) heredocOrArith(op string) {
+	switch {
+	case op == "(" && (p.arith > 0 || strings.HasPrefix(p.s[p.i+1:], "(")):
+		p.arith++
+	case op == ")" && p.arith > 0:
+		p.arith--
+	case (op == "<<" || op == "<<-") && p.arith == 0:
 		p.pending = &heredoc{tabs: op == "<<-"}
 	}
-	p.i += len(op)
 }
 
 func (p *splitter) flush() {
