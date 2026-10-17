@@ -315,7 +315,11 @@ type gateLog struct {
 func (l *gateLog) record(v verdict, err error, at time.Time) {
 	l.Gates, l.At = nil, at
 	for _, r := range v.results {
-		l.Gates = append(l.Gates, fmt.Sprintf("%s %s %s (%.1fs)", r.Name, r.Status, r.Reason, r.Seconds))
+		line := r.Name + " " + r.Status
+		if r.Reason != "" {
+			line += ", " + r.Reason
+		}
+		l.Gates = append(l.Gates, fmt.Sprintf("%s (%.1fs)", line, r.Seconds))
 	}
 	switch {
 	case err != nil:
