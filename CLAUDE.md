@@ -14,17 +14,21 @@ ezhomesteading, whose Claude Code hooks and launchd gc agent run the installed b
 
 ## The rules that get broken
 
-These rules compile and pass tests when broken. Each comes from the code or the README, not
-from an incident log: the ledger here started on 2026-10-16.
+Each rule comes from the code or the README, not from an incident log: the ledger here
+started on 2026-10-16. Three have a test that fails when they are broken: the stdout rule
+(`cmd/wk/main_test.go:19-28`, `cmd/wk/main_test.go:176-177`), the `subagent-stop` exit
+(`cmd/wk/main_test.go:237`) and the `WK_HOOK_FAIL` fallback (`internal/wk/hook_test.go:72-87`).
+For the other four, no test was checked on 2026-10-16, so read the cited code before you change
+it.
 
 - **Print nothing on stdout but the path** in `wk new` and `wk hook worktree-create`. Claude Code
-  reads any stdout line from the hook as the worktree path (`cmd/wk/main.go:144-145`), and
+  reads any stdout line from the hook as the worktree path (`cmd/wk/main.go:145-146`), and
   `cd "$(wk new 12)"` captures all of stdout (`README.md:30`). Progress goes to stderr.
 - **Keep `wk hook subagent-stop` at exit 0.** A non-zero exit keeps the subagent running
   (`cmd/wk/main.go:133-137`).
 - **Keep `wk hook worktree-create` working when the warm path fails.** Claude Code has no
   fallback, so wk falls back to a plain `git worktree add` (`README.md:55`). Prove it with
-  `WK_HOOK_FAIL=1` (`internal/wk/hook.go:18`).
+  `WK_HOOK_FAIL=1` (`internal/wk/hook.go:18-20`).
 - **Rename a field of `wk.Report` only together with the page that reads it**
   (`internal/wk/report.go:9-10`, read by `internal/viz/index.html`).
 - **Never let `gc` force.** It runs `git worktree remove` without `--force` and deletes a branch
@@ -35,7 +39,7 @@ from an incident log: the ledger here started on 2026-10-16.
   launchd (`README.md:146`).
 - **Install with `go install ./cmd/wk`, never `go run`.** Hooks and the gc agent run the binary
   at its absolute path, and wk refuses to install a `go run` build (`README.md:19`,
-  `internal/wk/hooks.go:15-18`).
+  `internal/wk/hooks.go:25`, `cmd/wk/main.go:196`).
 
 ## Stack
 
@@ -127,7 +131,7 @@ GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -rac
 ```
 
 Each block above was run green on 2026-10-16 in a worktree at `a4d4ed2`. The whole line took
-about 44 s, of which `internal/wk` took about 40 s under `-race`. It also ran green in a
+45 to 50 s, of which `internal/wk` took 40 to 46 s under `-race`. It also ran green in a
 `git archive HEAD` copy with an empty module cache, so it needs no `.git` directory.
 
 Install, which replaces the binary that ezhomesteading's hooks and gc agent run (see "Never do
@@ -161,7 +165,7 @@ GOTOOLCHAIN=local go install ./cmd/wk
 - **No CI runs these gates.** A push to `main` checks nothing.
 
 **What an agent cannot verify here.** The interactive screens need a TTY: the guided setup and
-home screen of a bare `wk` (`cmd/wk/main.go:81`) and `wk hive`. The `wk viz` page needs a
+home screen of a bare `wk` (`cmd/wk/main.go:89-90`) and `wk hive`. The `wk viz` page needs a
 browser. A real launchd load, a real Claude Code hook call and a `df` disk measurement need the
 owner's machine and a live repository; the tests stub launchd and use throwaway repositories.
 For these, end with the exact command and what should appear, and let the owner run it.
@@ -176,6 +180,11 @@ installed `~/go/bin/wk` was built from `30989b5` with a dirty tree (`go version 
 - `HANDOFF.md`: what is true: environment, settled decisions, a one-line log. Search it for the topic at hand.
 - `PASSOFF.md`: what is next, one row per item; each item's prompt is its own file in `passoff/`.
 
+## Git
+
+Claude may run `git add`, `git commit` and `git push`. Add no `Co-Authored-By:` trailer and no
+"Generated with" line.
+
 ## Never do this
 
 - Run `go install ./cmd/wk` from a branch that is not on `main`. ezhomesteading's hooks
@@ -186,4 +195,3 @@ installed `~/go/bin/wk` was built from `30989b5` with a dirty tree (`go version 
   `internal/testrepo` fixtures.
 - Add a byte-copy fallback for non-APFS systems. The refusal is the design
   (`internal/clone/clone_other.go`).
-- Claude may run `git add`, `git commit` and `git push`.
