@@ -177,8 +177,8 @@ installed `~/go/bin/wk` was built from `30989b5` with a dirty tree (`go version 
 
 ## Where work is written down
 
-- `HANDOFF.md`: what is true: environment, settled decisions, a one-line log. Search it for the topic at hand.
-- `PASSOFF.md`: what is next, one row per item; each item's prompt is its own file in `passoff/`.
+- `HANDOFF.md` says what is true: environment, settled decisions, a one-line log. Search it for the topic at hand.
+- `PASSOFF.md` says what is next, one row per item; each item's prompt is its own file in `passoff/`.
 
 ## Git
 
