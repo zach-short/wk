@@ -18,6 +18,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/daemon"
 	"github.com/zach-short/wk/internal/gitx"
 	"github.com/zach-short/wk/internal/hive"
 	"github.com/zach-short/wk/internal/setup"
@@ -41,6 +42,9 @@ const usage = `usage:
   wk [--repo <absolute dir>] release
   wk [--repo <absolute dir>] status
   wk [--repo <absolute dir>] config show
+  wk [--repo <absolute dir>] submit -m <message> [--row <n>] [--review <ref>]
+  wk [--repo <absolute dir>] sync
+  wk [--repo <absolute dir>] land [--loop | --apply --expect <hash>]
   wk hook worktree-create|worktree-remove|subagent-stop|pre-tool-use < <Claude Code hook input>
   wk hook lease --repo <absolute main checkout> < <Claude Code hook input>
   wk run [--slot <class>] [--keep] [--trim <path>]... -- <command> [args...]
@@ -86,6 +90,18 @@ that does not edit. wk lease add widens the claim, wk release drops it, and wk s
 every claim. The store is $WK_HOME/<repo>/leases.json.
 wk config show prints the effective config of $WK_HOME/<repo>.toml as TOML, and whether the
 file was found.
+
+wk submit, in a workspace with landing.enabled true, writes the working tree as a changeset
+(the row from the claim, or --row), appends it to $WK_HOME/<repo>/queue.jsonl, prints its id
+as the only line on stdout, and starts the landing worker. wk land --loop is that worker: one
+at a time under landing.lock, it lands every submitted changeset onto landing.ref in order by
+compare-and-swap, refuses one that conflicts, and exits when the queue is empty; its log is
+$WK_HOME/<repo>/landing.log. wk sync moves the workspace to the landing tip with its work
+carried across; a conflict leaves git's markers in the tree. wk land prints the landing tip
+against the base branch and the dirty paths in the main checkout that block a fast-forward;
+wk land --apply --expect <hash> fast-forwards the base branch to the landing ref while it
+still holds <hash>, then pushes it to landing.remote when landing.push is true. wk status
+lists every changeset after the leases.
 wk hook lease judges one Edit, Write, MultiEdit, NotebookEdit or Bash call against the leases
 when leases.enabled is true. It prints Claude Code's deny on stdout, logs each deny to
 $WK_HOME/<repo>/hook.log, and always exits 0. wk hooks install adds its two PreToolUse entries
@@ -165,6 +181,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSlots(home, rest[1:], stdout, stderr)
 	case rest[0] == "claim" || rest[0] == "lease" || rest[0] == "release" || rest[0] == "status":
 		return runLeases(home, repoDir, rest, stdout, stderr)
+	case rest[0] == "submit":
+		return runSubmit(home, repoDir, rest[1:], stdout, stderr)
+	case len(rest) == 1 && rest[0] == "sync":
+		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.Sync(repoDir, stdout) })
+	case rest[0] == "land":
+		return runLand(home, repoDir, rest[1:], stdout, stderr)
 	case len(rest) == 2 && rest[0] == "config" && rest[1] == "show":
 		return runConfigShow(home, repoDir, stdout, stderr)
 	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-create":
@@ -268,11 +290,80 @@ func runLeases(home, repoDir string, rest []string, stdout, stderr io.Writer) in
 	case len(rest) == 1 && rest[0] == "release":
 		err = env.Release(repoDir, stdout)
 	case len(rest) == 1 && rest[0] == "status":
-		err = env.LeaseStatus(stdout)
+		err = env.Status(stdout)
 	default:
 		return fail(stderr, fmt.Errorf("unexpected arguments: %q", strings.Join(rest, " ")), exitUsage)
 	}
 	return fail(stderr, err, exitError)
+}
+
+// runLanding opens the repository and runs one landing command through it.
+func runLanding(home, repoDir string, stderr io.Writer, cmd func(*wk.Env) error) int {
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	return fail(stderr, cmd(env), exitError)
+}
+
+// runSubmit is wk submit: the id is the only line on stdout, and the worker is started after
+// the line is appended, so a submit never waits on a landing.
+func runSubmit(home, repoDir string, args []string, stdout, stderr io.Writer) int {
+	flags, err := parseSubmit(args)
+	if err != nil {
+		return fail(stderr, err, exitUsage)
+	}
+	return runLanding(home, repoDir, stderr, func(env *wk.Env) error {
+		if err := env.Submit(repoDir, flags["-m"], flags["--row"], flags["--review"], stdout); err != nil {
+			return err
+		}
+		spawnLand(env, stderr)
+		return nil
+	})
+}
+
+// parseSubmit reads -m, --row and --review, each with one value that does not start with "-".
+func parseSubmit(args []string) (map[string]string, error) {
+	flags := map[string]string{}
+	for i := 0; i < len(args); i += 2 {
+		a := args[i]
+		if (a != "-m" && a != "--row" && a != "--review") || i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+			return nil, fmt.Errorf("unexpected argument to wk submit: %q", strings.Join(args[i:], " "))
+		}
+		flags[a] = args[i+1]
+	}
+	if flags["-m"] == "" {
+		return nil, errors.New("wk submit needs -m with a message")
+	}
+	return flags, nil
+}
+
+// runLand is wk land: the dry run alone, --loop for the worker, --apply --expect <hash> for
+// the fast-forward. --apply without --expect is a usage error, never a move.
+func runLand(home, repoDir string, args []string, stdout, stderr io.Writer) int {
+	what := strings.Join(args, " ")
+	switch {
+	case what == "":
+		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.Land(stdout) })
+	case what == "--loop":
+		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.LandLoop(stdout) })
+	case len(args) == 3 && args[0] == "--apply" && args[1] == "--expect" && args[2] != "" && args[2][0] != '-':
+		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.LandApply(args[2], stdout) })
+	}
+	return fail(stderr, fmt.Errorf("unexpected arguments to wk land: %q", what), exitUsage)
+}
+
+// spawnLand starts `wk land --loop` detached, as spawnFill does, with its output in
+// landing.log. A test binary never forks itself; a failure to start is said, because the
+// launchd timer runs the worker later and the changeset is already in the queue.
+func spawnLand(env *wk.Env, stderr io.Writer) {
+	exe, err := installedExe()
+	if err != nil || wk.TransientBinary(exe) {
+		return
+	}
+	if err := daemon.Spawn(exe, []string{"--repo", env.Repo.Primary, "land", "--loop"}, env.LandingLogPath()); err != nil {
+		_, _ = fmt.Fprintf(stderr, "wk: the landing worker did not start (%v); the timer runs it, or run wk land --loop\n", err)
+	}
 }
 
 // runConfigShow prints the effective config, or why the file cannot be read (D26).

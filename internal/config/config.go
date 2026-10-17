@@ -97,6 +97,18 @@ type Leases struct {
 	BashGuard    bool     `toml:"bash_guard"`
 }
 
+// Landing is the landing queue (PLAN-P2-P4.md section 3). With Enabled, `wk submit` appends to
+// the queue and starts the worker, which moves Ref by compare-and-swap; Remote is where
+// `wk land --apply` pushes the base branch when Push is set (D20). RequireReview refuses to
+// land a changeset that names no review (owner amendment, 2026-10-16); off, D20 stands.
+type Landing struct {
+	Enabled       bool   `toml:"enabled"`
+	Ref           string `toml:"ref"`
+	Remote        string `toml:"remote"`
+	Push          bool   `toml:"push"`
+	RequireReview bool   `toml:"require_review"`
+}
+
 type Config struct {
 	Template  Template  `toml:"template"`
 	Gates     Gates     `toml:"gates"`
@@ -106,6 +118,7 @@ type Config struct {
 	New       New       `toml:"new"`
 	Pool      Pool      `toml:"pool"`
 	Leases    Leases    `toml:"leases"`
+	Landing   Landing   `toml:"landing"`
 }
 
 const (
@@ -131,10 +144,11 @@ func Defaults() Config {
 			Dir:    ".claude/worktrees/" + NamePlaceholder,
 			Branch: "worktree-" + NamePlaceholder,
 		},
-		GC:     GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60},
-		New:    New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
-		Pool:   Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
-		Leases: Leases{Board: "PASSOFF.md", SingleWriter: []string{}, BashGuard: true},
+		GC:      GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60},
+		New:     New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
+		Pool:    Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
+		Leases:  Leases{Board: "PASSOFF.md", SingleWriter: []string{}, BashGuard: true},
+		Landing: Landing{Ref: "refs/heads/wk/landing", Remote: "origin", Push: true},
 	}
 }
 
@@ -217,6 +231,9 @@ func (c Config) validate() error {
 	if err := c.Leases.validate(); err != nil {
 		return err
 	}
+	if err := c.Landing.validate(); err != nil {
+		return err
+	}
 	if c.Pool.Size < 0 || c.Pool.SparseSize < 0 {
 		return fmt.Errorf("pool.size and pool.sparse_size must not be negative")
 	}
@@ -261,6 +278,19 @@ func (l Leases) validate() error {
 		if err := checkRelative(p); err != nil || base == "" || base == "." || path.Clean(base) != base {
 			return fmt.Errorf("leases.single_writer[%d]: %q is not a clean path relative to the main checkout", i, p)
 		}
+	}
+	return nil
+}
+
+// validate refuses a ref outside refs/heads/, because the worker's compare-and-swap and
+// `wk land` both read it as a branch, and an empty remote, which git would read as a URL.
+func (l Landing) validate() error {
+	const heads = "refs/heads/"
+	if !strings.HasPrefix(l.Ref, heads) || len(l.Ref) == len(heads) {
+		return fmt.Errorf("landing.ref %q must start with %s and name a branch", l.Ref, heads)
+	}
+	if l.Remote == "" {
+		return fmt.Errorf("landing.remote is empty")
 	}
 	return nil
 }

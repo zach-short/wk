@@ -13,9 +13,12 @@ import (
 )
 
 // The states a changeset moves through, one appended line each (PD-8). P3 writes the first
-// three; P4 adds gated and failed.
+// four; P4 adds gated and failed. Landing is the worker's journal line before its
+// compare-and-swap (owner amendment of 2026-10-16, the kill test's F18): its Tree is the
+// predicted tree, so a crash between the swap and the landed line is found on the next pass.
 const (
 	Submitted = "submitted"
+	Landing   = "landing"
 	Refused   = "refused"
 	Landed    = "landed"
 	Gated     = "gated"
@@ -24,7 +27,7 @@ const (
 
 // Record is one line of the queue: a changeset at one state. Commit is set on landed, Paths
 // on refused (the conflicts) and failed (the paths the gate named), Gate and Reason on gated
-// and failed.
+// and failed. Review names the changeset's review, which landing.require_review demands.
 type Record struct {
 	ID        string    `json:"id"`
 	State     string    `json:"state"`
@@ -33,6 +36,7 @@ type Record struct {
 	Message   string    `json:"message"`
 	Row       string    `json:"row,omitempty"`
 	Workspace string    `json:"workspace"`
+	Review    string    `json:"review,omitempty"`
 	Commit    string    `json:"commit,omitempty"`
 	Paths     []string  `json:"paths,omitempty"`
 	Gate      string    `json:"gate,omitempty"`
@@ -40,7 +44,8 @@ type Record struct {
 	At        time.Time `json:"at"`
 }
 
-// Queue is the JSONL file at Path. The daemon is its only writer; a reader folds it with Load.
+// Queue is the JSONL file at Path. `wk submit` appends the submitted line and the landing
+// worker every later one (PD-8 as amended); a reader folds it with Load.
 type Queue struct {
 	Path string
 }
