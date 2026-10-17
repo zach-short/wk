@@ -90,6 +90,7 @@ func TestJudge(t *testing.T) {
 		{"Bash cd to a missing directory", bash("/r/b", `cd nope; rm web/x.ts`), Decision{Reason: heldAtB}},
 		{"Bash heredoc piped to sh", bash("/r/b", "cat <<EOF |\nrm web/x.ts\nEOF\nsh"), Decision{Reason: heldAtB}},
 		{"Bash apostrophe in a heredoc body", bash("/r/b", "cat <<EOF > notes.md\ndon't\nEOF\nrm web/x.ts # it's gone"), Decision{Reason: heldAtB}},
+		{"Bash space before a heredoc delimiter", bash("/r/b", "cat << EOF > notes.md\ndon't\nEOF\nrm web/x.ts # it's gone"), Decision{Reason: heldAtB}},
 		{"Bash heredoc with no end", bash("/r/b", "cat <<EOF > docs/a.md\ndon't\nrm web/x.ts"), Decision{Reason: "wk: cannot tell which file this writes: a heredoc in the command has no end line; end it with its delimiter alone on a line"}},
 		{"Bash eval", bash("/r/b", `eval 'rm web/x.ts'`), Decision{Reason: heldAtB}},
 		{"Bash time -p", bash("/r/b", `time -p rm web/x.ts`), Decision{Reason: heldAtB}},

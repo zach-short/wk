@@ -796,7 +796,7 @@ func (p *splitter) run() ([]word, string) {
 		}
 	}
 	p.flush()
-	if p.failed == "" && len(p.open) > 0 {
+	if p.failed == "" && (len(p.open) > 0 || p.pending != nil) {
 		p.failed = openHeredoc
 	}
 	if p.failed != "" {
@@ -812,6 +812,10 @@ func (p *splitter) step() bool {
 		p.i++
 	case c == '\n':
 		p.flush()
+		if p.pending != nil {
+			p.failed = openHeredoc
+			return false
+		}
 		p.out = append(p.out, word{op: ";"})
 		p.i++
 		return p.bodies()
@@ -821,6 +825,7 @@ func (p *splitter) step() bool {
 		return p.quote(c)
 	case strings.IndexByte(";&|<>", c) >= 0:
 		p.operator()
+		return p.failed == ""
 	default:
 		p.expands = p.expands || c == '~' || c == '#' || c == '=' && !p.in
 		p.cur.WriteByte(c)
@@ -858,6 +863,9 @@ func (p *splitter) operator() {
 	} else {
 		p.flush()
 	}
+	if p.pending != nil {
+		p.failed = openHeredoc
+	}
 	p.out = append(p.out, word{op: op})
 	p.i += len(op)
 	if (op == "<<" || op == "<<-") && !p.body {
@@ -865,16 +873,17 @@ func (p *splitter) operator() {
 	}
 }
 
-// flush ends the open word. The word after `<<` is its delimiter; a `<<` followed by an operator
-// or a newline has none and opens nothing.
+// flush ends the open word. The first word after `<<`, spaces and tabs allowed between them, is
+// its delimiter. A `<<` followed by an operator, a newline or the end of the input has none, and
+// refuses the command like a heredoc with no end.
 func (p *splitter) flush() {
 	if p.in {
 		p.out = append(p.out, word{text: p.cur.String(), expands: p.expands})
 		if p.pending != nil {
 			p.open = append(p.open, heredoc{delim: p.cur.String(), tabs: p.pending.tabs})
 		}
+		p.pending = nil
 	}
-	p.pending = nil
 	p.reset()
 }
 
