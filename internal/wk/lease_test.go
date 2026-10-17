@@ -346,3 +346,39 @@ func TestHookPanicIsADeny(t *testing.T) {
 		t.Fatalf("hook printed %q", out.String())
 	}
 }
+
+// Audit 2, B5, B6 and B7: a cd through a link and then `..`, a link at a leased path, and an edit
+// path a tool may clean by text before it writes.
+func TestHookJudgesEverySpellingOfAPath(t *testing.T) {
+	f, e, a, b := leaseFixture(t)
+	mustClaim(t, e, a, "1")
+	mustClaim(t, e, b, "3")
+	_ = os.MkdirAll(filepath.Join(f.Root, "outside", "d"), 0o755)
+	for target, name := range map[string]string{
+		a + "/docs":           b + "/sub/e",
+		"../web/x.ts":         b + "/docs/lnk",
+		f.Root + "/outside/d": b + "/out",
+	} {
+		_ = os.MkdirAll(filepath.Dir(name), 0o755)
+		if err := os.Symlink(target, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, docs := "is in the workspace "+a, "docs/lnk is leased by row 1 in "+a
+	for _, c := range []struct{ tool, arg, want string }{
+		{"Bash", "cd sub/e/../web && touch page.ts", other},
+		{"Bash", "cd -P sub/e/../web && echo x > new.ts", other},
+		{"Bash", "rm docs/lnk", docs},
+		{"Bash", "git rm docs/lnk", "is leased by row 1 in " + a},
+		{"Bash", "mv docs/lnk web/z.ts", docs},
+		{"Bash", "ln -sf ../web/page.ts docs/lnk", docs},
+		{"Edit", b + "/out/../web/page.ts", "web/page.ts is leased by row 1 in " + a},
+	} {
+		if got := hook(t, f, c.tool, b, c.arg); !containsFold(got, c.want) {
+			t.Errorf("%s %s: hook = %q; want %q", c.tool, c.arg, got, c.want)
+		}
+	}
+	if got := hook(t, f, "Edit", b, b+"/out/x.ts"); got != "" {
+		t.Errorf("an edit through a link to outside every worktree: hook = %q; want an allow", got)
+	}
+}

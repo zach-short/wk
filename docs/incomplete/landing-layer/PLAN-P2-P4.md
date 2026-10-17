@@ -130,6 +130,13 @@ Audit 1 (Opus 5.5, of `f0b1eb8`, report `docs/incomplete/autopilot-2026-10-16/re
 - N1, a panic outside the hook's judgment gave no output: fixed; every panic of the verb prints the deny. N2: test `TestHookPanicIsADeny`. N3: the README and the hand-back say that existing workspaces keep the settings they were made with. N4: the README lines on links, the edit entries and the heredoc apostrophe are corrected.
 - N5 (any binary named `wk` passes the wk allow) and N6 (one `Bash` command is walked three times): open.
 
+Audit 2 (Opus 5.5, of `1c4a1fd`, report `docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-2.md`) confirmed B1 to B4 closed, B4 included, and found three more silent allows. Outcomes, fix round 2 of 2026-10-17:
+
+- B5, a `cd` through a link and then `..` was cleaned by text: fixed. `moved` in `internal/lease/bash.go` keeps both the cleaned directory and the raw one for a `cd` operand with `..`, and `place` leaves a target uncleaned when its directory holds `..`. Test rows in `TestHookJudgesEverySpellingOfAPath` and two walk rows.
+- B6, a link at a leased path was judged at its target only: fixed. The hook judges every path also with its last component not followed (`entryPath`), so `rm`, `mv`, `ln -sf` and `git rm` of the link are refused. Same test.
+- B7, an edit path a tool may clean by text: fixed. The hook judges every path also with `..` removed by text first (`cleanedPath`). Same test.
+- N7: test `TestLeaseHookPanicOutsideTheJudgmentDenies` covers the recover in `runLeaseHook`. N9: `checkTargets` takes a bool. N5, N6 (now ten walks of one command), N8 and N10: open.
+
 ## 3. P3, the landing queue
 
 (Amended 2026-10-16 22:51 EDT under the owner's daemon-or-files rule, decided "files" by `docs/incomplete/integration/KILL-TEST.md`: the landing loop is a detached run-to-completion worker `wk land --loop` started by `wk submit` and by the launchd timer, not a goroutine of a daemon; a `landing` record journals the predicted tree before each CAS. The binding text is row 4's item file, "Decided by the rule".)

@@ -140,26 +140,52 @@ func (h *leaseHook) judge(primary string) lease.Decision {
 	return h.judgeFolded(f, cfg.Leases, primary)
 }
 
-// judgeFolded judges with every path folded to lower case on a volume that ignores case (audit 1,
-// B1): there `WEB/Page.ts` is the file `web/page.ts` leases, and the judgment compares bytes.
+// judgeFolded judges the call under each spelling of its paths, with every path folded to lower
+// case on a volume that ignores case (audit 1, B1): there `WEB/Page.ts` is the file `web/page.ts`
+// leases, and the judgment compares bytes. One deny denies the call.
 func (h *leaseHook) judgeFolded(f leaseFile, l config.Leases, primary string) lease.Decision {
+	insensitive := caseInsensitive(primary)
 	fold := func(p string) string { return p }
-	if caseInsensitive(primary) {
+	if insensitive {
 		fold = strings.ToLower
 	}
-	req, err := h.request()
-	if err != nil {
-		return lease.Decision{Reason: "wk: " + err.Error()}
+	store := foldStore(f.Store, fold)
+	rules := lease.Rules{SingleWriter: foldAll(l.SingleWriter, fold), BashGuard: l.BashGuard}
+	for _, spell := range spellings {
+		req, err := h.request(spell)
+		if err != nil {
+			return lease.Decision{Reason: "wk: " + err.Error()}
+		}
+		roots := foldAll(h.roots(f, primary, req), fold)
+		req = folded(req, fold)
+		if d := checkTargets(roots, req, insensitive); !d.Allow {
+			return d
+		}
+		if d := lease.Judge(&store, rules, roots, req); !d.Allow {
+			return d
+		}
 	}
-	roots := foldAll(h.roots(f, primary, req), fold)
+	return lease.Decision{Allow: true}
+}
+
+// spellings are the paths one written path may reach. kernelPath follows every link as the
+// kernel does (audit 1, B3 and B4). entryPath stops before the last component, the directory
+// entry that rm, mv, ln and git rm act on when it is a link (audit 2, B6). cleanedPath removes a
+// `..` by text first, as a tool that normalises its path before it writes would (audit 2, B7).
+var spellings = []func(string) (string, bool){kernelPath, entryPath, cleanedPath}
+
+func entryPath(p string) (string, bool) {
+	dir, ok := kernelPath(filepath.Dir(p))
+	return filepath.Join(dir, filepath.Base(p)), ok
+}
+
+func cleanedPath(p string) (string, bool) { return kernelPath(filepath.Clean(p)) }
+
+func folded(req lease.Request, fold func(string) string) lease.Request {
 	canon := req.Canon
 	req.Path, req.Cwd = fold(req.Path), fold(req.Cwd)
 	req.Canon = func(p string) string { return fold(canon(p)) }
-	if d := checkTargets(roots, req, fold); !d.Allow {
-		return d
-	}
-	store := foldStore(f.Store, fold)
-	return lease.Judge(&store, lease.Rules{SingleWriter: foldAll(l.SingleWriter, fold), BashGuard: l.BashGuard}, roots, req)
+	return req
 }
 
 // caseInsensitive reports whether the volume holding primary ignores letter case, as APFS and HFS+
@@ -188,19 +214,20 @@ func foldStore(s lease.Store, fold func(string) string) lease.Store {
 	return out
 }
 
-// request builds the judgment's request with the edit's path and the cwd read as the kernel reads
-// them, and Canon doing the same for each Bash target; a link loop or an unreadable link is an
-// error for an edit and an unplaceable target for Bash, so both deny.
-func (h *leaseHook) request() (lease.Request, error) {
+// request builds the judgment's request with the edit's path and each Bash target read by spell,
+// and the cwd as the kernel reads it; a link loop or an unreadable link is an error for an edit
+// and an unplaceable target for Bash, so both deny.
+func (h *leaseHook) request(spell func(string) (string, bool)) (lease.Request, error) {
 	ti := h.input.ToolInput
 	canon := func(p string) string {
-		k, ok := kernelPath(p)
+		k, ok := spell(p)
 		if !ok {
 			return "<a symlink loop or an unreadable link in " + p + ">"
 		}
 		return k
 	}
-	req := lease.Request{Tool: h.input.ToolName, Cwd: canon(h.input.Cwd), Command: ti.Command, Canon: canon}
+	cwd, _ := kernelPath(h.input.Cwd)
+	req := lease.Request{Tool: h.input.ToolName, Cwd: cwd, Command: ti.Command, Canon: canon}
 	if p := cmp.Or(ti.FilePath, ti.NotebookPath); p != "" {
 		if !filepath.IsAbs(p) && filepath.IsAbs(h.input.Cwd) {
 			p = h.input.Cwd + "/" + p
@@ -286,7 +313,7 @@ func linksInto(gitFile, dir, common string) bool {
 // under that worktree's claim (row 7 close-out). A session whose cwd is in no worktree of the
 // repository may write no worktree at all (audit 1, B2). On a case-folding volume it also denies a
 // non-ASCII path, whose other spellings (Unicode normalisation) it cannot compare.
-func checkTargets(roots []string, req lease.Request, fold func(string) string) lease.Decision {
+func checkTargets(roots []string, req lease.Request, insensitive bool) lease.Decision {
 	own, _, _ := lease.Resolve(roots, "", req.Cwd)
 	for _, t := range targets(req) {
 		root, rel, in := lease.Resolve(roots, "", t)
@@ -296,7 +323,7 @@ func checkTargets(roots []string, req lease.Request, fold func(string) string) l
 			return lease.Decision{Reason: fmt.Sprintf("wk: %s is in the workspace %s, and this session works outside every workspace of the repository (%s); work from inside %s", t, root, req.Cwd, root)}
 		case root != own:
 			return lease.Decision{Reason: fmt.Sprintf("wk: %s is in the workspace %s, and this session works in %s; edit the copy in %s", t, root, own, own)}
-		case fold("A") == "a" && strings.IndexFunc(rel, func(r rune) bool { return r > 127 }) >= 0:
+		case insensitive && strings.IndexFunc(rel, func(r rune) bool { return r > 127 }) >= 0:
 			return lease.Decision{Reason: fmt.Sprintf("wk: cannot compare the non-ASCII path %s on a volume that ignores case; rename it in ASCII", rel)}
 		}
 	}

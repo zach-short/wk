@@ -147,3 +147,21 @@ Build-level calls, each with its reversal:
 Hand-back, added: a workspace keeps the settings it was made with. After setting `enabled = true` (or back to false), run `wk hooks install`, which writes the main checkout's and the template's `.claude/settings.local.json` only, then copy the main checkout's file into each existing workspace, or remove and make each workspace again. Running `wk --repo <workspace> hooks install` does not reach a workspace's own file.
 
 Not verified this round: whether Claude Code 2.1.301's `Write` follows a dangling link (B3) or keeps a `..` in `file_path` (B4), and whether a session's hook `cwd` can lie outside its project (B2); no `claude -p` was run. `go install` was not run and `~/.wk` was not touched, so `~/go/bin/wk` is still the code of `5a93108`.
+
+### Fix round 2, 2026-10-17
+
+Audit 2 of `1c4a1fd` (`docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-2.md`) confirmed B1 to B4 closed and found three more silent allows. Each now denies, and each test row fails against `1c4a1fd` and passes now (run with the new test files over `git archive 1c4a1fd`).
+
+- B5, a `cd` through a link and then `..`. `moved` in `internal/lease/bash.go` now adds, for a `cd` operand with a `..`, the raw directory beside the text-cleaned one, so each later target is judged at both. `place` in the same file needed one more condition: a relative target is not cleaned when its directory holds a `..`, or the raw directory would be cleaned again when the target is joined to it. These are the only changes to the walk. Three walk rows that expected the cleaned directory alone now list the raw one too.
+- B6, a link at a leased path. The hook judges every path under three spellings, in `judgeFolded`: `kernelPath` (every link followed), `entryPath` (the parent followed, the last component not), and `cleanedPath` (`..` removed by text, then every link followed). A deny under any spelling denies the call. `rm docs/lnk`, `git rm docs/lnk`, `mv docs/lnk web/z.ts` and `ln -sf ../web/page.ts docs/lnk` are refused when `docs/` is leased elsewhere.
+- B7, an edit path a tool may clean by text: `cleanedPath` above, so `<wk-2>/out/../web/page.ts` is refused whether Claude Code cleans the path or not.
+- N7: `TestLeaseHookPanicOutsideTheJudgmentDenies` makes the first write of the deny panic and checks that `runLeaseHook` prints the deny and exits 0. N9: `checkTargets` takes a bool.
+- The fix round 1 note called the judgment of `rm` of a link at its target an over-refusal only. That was wrong: it let the removal of a leased link pass (B6). The README now says that a write through a link is judged at the link and at its target.
+
+Build-level calls, each with its reversal:
+
+- Every path is judged under all three spellings, for every verb and every tool, not only for the verbs that act on a directory entry. Writing through a link that sits in a directory another workspace leases is now refused even when the write lands elsewhere. Over-refusal only. Reversal: pass the entry spelling only for `rm`, `rmdir`, `unlink`, `mv`, `ln`, `git rm` and `git mv` targets, which needs the verb carried on each target of the walk.
+- A `cd` operand with a `..` keeps two directories, so a later relative target is judged at one more place, and the walk reaches its 16-directory bound sooner. Reversal: keep only the raw directory, which loses bash's logical `cd`.
+- One `Bash` command is now walked ten times per call (once to skip, then three times under each spelling; N6 and N10 grow); each walk is under 1 ms. Reversal: walk once and canonicalise the target list three times, which needs `Judge` to take targets.
+
+Not verified this round: what Claude Code 2.1.301 does with a `..` in `file_path` (B7 is closed for both behaviours) and whether its `Write` follows a dangling link. No `claude -p` was run, `go install` was not run and `~/.wk` was not touched.

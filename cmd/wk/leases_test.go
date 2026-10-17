@@ -48,3 +48,30 @@ func TestClaimStatusAndConfigShow(t *testing.T) {
 		t.Errorf("claim with no row: exit %d", code)
 	}
 }
+
+// panicOnce panics on its first write and keeps every later one.
+type panicOnce struct {
+	bytes.Buffer
+	panicked bool
+}
+
+func (p *panicOnce) Write(b []byte) (int, error) {
+	if !p.panicked {
+		p.panicked = true
+		panic("write failed")
+	}
+	return p.Buffer.Write(b)
+}
+
+// Audit 2, N7: a panic outside wk.LeaseHook, here in printing its deny, still prints a deny and
+// exits 0.
+func TestLeaseHookPanicOutsideTheJudgmentDenies(t *testing.T) {
+	feed(t, `{`)
+	var out panicOnce
+	if code := runLeaseHook([]string{"--repo", "/nowhere"}, &out); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), `"permissionDecision":"deny"`) || !strings.Contains(out.String(), "the lease hook failed (write failed)") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}

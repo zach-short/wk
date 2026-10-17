@@ -215,14 +215,15 @@ func (w *walker) add(dirs []string, words ...word) {
 	}
 }
 
-// place makes a target absolute against dir, or returns it as written when it cannot. A target
-// with a `..` is not cleaned: the kernel applies the `..` after following any symlink before it,
-// so only a caller that reads the disk (Request.Canon) may remove it.
+// place makes a target absolute against dir, or returns it as written when it cannot. A path
+// with a `..`, in the target or in dir, is not cleaned: the kernel applies the `..` after
+// following any symlink before it, so only a caller that reads the disk (Request.Canon) may
+// remove it.
 func place(dir string, t word) string {
 	switch {
 	case t.expands:
 		return t.text
-	case slices.Contains(strings.Split(t.text, "/"), ".."):
+	case dotDot(t.text) || dotDot(dir) && !filepath.IsAbs(t.text):
 		if filepath.IsAbs(t.text) || dir == "" {
 			return t.text
 		}
@@ -234,6 +235,8 @@ func place(dir string, t word) string {
 	}
 	return filepath.Join(dir, t.text)
 }
+
+func dotDot(p string) bool { return slices.Contains(strings.Split(p, "/"), "..") }
 
 func absOrUnknown(dir string) string {
 	if filepath.IsAbs(dir) {
@@ -278,10 +281,17 @@ func (w *walker) follows(dir string) bool {
 	return true
 }
 
+// moved is where a `cd` to `to` lands from each of dirs. A path with a `..` lands at two places:
+// the text-cleaned one, where bash's logical `cd` goes, and the raw one, which the caller reads
+// through symlinks, where `cd -P` goes and where bash goes when the logical path does not exist.
 func moved(dirs []string, to word) []string {
 	var out []string
 	for _, d := range dirs {
-		out = append(out, absOrUnknown(place(d, to)))
+		p := place(d, to)
+		out = append(out, absOrUnknown(p))
+		if dotDot(p) && filepath.IsAbs(p) {
+			out = append(out, p)
+		}
 	}
 	return out
 }
