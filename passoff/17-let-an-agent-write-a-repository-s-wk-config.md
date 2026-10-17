@@ -90,3 +90,10 @@ Done when the five tests pass, each fails with its fix off, and the gate exits 0
 **Gate** (worktree `dl-row-17-build`, `GOTOOLCHAIN=local`): every package `ok`, `0 issues.`, exit 0. Wall time 1:07 (67 s; the `internal/wk` package took 60 s). Load average at start `3.28 2.69 3.43`, at end `3.35 2.87 3.44`, so `TestHookPreToolUseTiming` was not at risk.
 
 **Not done, by the prompt's scope.** The command was not run against any real repository. No hook, schedule or template warm is run by `setup --yes`.
+
+### Sign-off, 2026-10-17
+
+- Builder: Sonnet 5.5, worktree `.claude/worktrees/dl-row-17-build`, branch `dl/row-17-build`, one pass, no relay. The lead made the worktree with `git worktree add`.
+- Verdict: not audited: Mechanical, loud. A wrong config fails `config.Load` or the tests, and the command writes nothing over an existing file. The gate exited 0 (1:07, load 3.28 to 3.35).
+- Commit state: landed on `main` by fast-forward after this commit.
+- Open, minor: `--print` also prints when a config exists. It writes nothing, so it works as a preview.
