@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -271,13 +272,18 @@ func TestHookPreToolUseTiming(t *testing.T) {
 	}
 	// A 5 s deadline, so the stdout check proves the real-git rewrite at any machine load; the
 	// 200 ms deadline is TestHookPreToolUseDeadline's, with a stub resolver.
-	env := hookTestSetup(t, strings.Replace(matchTestSlotsTOML, "timeout_ms = 200", "timeout_ms = 5000", 1))
+	slots := strings.Replace(matchTestSlotsTOML, "timeout_ms = 200", "timeout_ms = 5000", 1)
+	if slots == matchTestSlotsTOML {
+		t.Fatal("matchTestSlotsTOML no longer holds timeout_ms = 200, so the 5 s deadline was not set")
+	}
+	env := hookTestSetup(t, slots)
 	env.deps.Resolve = nil
 	input := strings.Replace(hookTestInput("Bash", `{"command":"`+hookTestGateLine+`","description":"Run the web gates"}`), "/r/ezhomesteading", web, 1)
 	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{` +
 		`"command":"cd web && /x/wk run --slot check -- bunx tsc --noEmit && /x/wk run --slot check -- bun run lint && /x/wk run --slot heavy --trim web/.next/cache -- bun run build",` +
 		`"description":"Run the web gates","timeout":600000}}}` + "\n"
 	var total, longest time.Duration
+	shortest := time.Duration(math.MaxInt64)
 	runs := make([]string, 0, 20)
 	cpuStart := hookTestCPU(t)
 	for range 20 {
@@ -287,16 +293,24 @@ func TestHookPreToolUseTiming(t *testing.T) {
 		if got != want {
 			t.Fatalf("stdout\n got %s\nwant %s", got, want)
 		}
-		total, longest = total+took, max(longest, took)
+		total, shortest, longest = total+took, min(shortest, took), max(longest, took)
 		runs = append(runs, fmt.Sprintf("%.1f", float64(took.Microseconds())/1000))
 	}
 	cpu, mean := (hookTestCPU(t)-cpuStart)/20, total/20
-	t.Logf("HookPreToolUse, 20 runs, wall ms: %s; wall mean %.1f ms, longest %.1f ms; CPU mean %.1f ms", strings.Join(runs, " "),
-		float64(mean.Microseconds())/1000, float64(longest.Microseconds())/1000, float64(cpu.Microseconds())/1000)
-	if cpu >= 50*time.Millisecond {
-		t.Errorf("mean CPU time %v per run over 20 runs; the bound is 50 ms", cpu)
+	t.Logf("HookPreToolUse, 20 runs, wall ms: %s; wall mean %.1f ms, shortest %.1f ms, longest %.1f ms; CPU mean %.1f ms", strings.Join(runs, " "),
+		float64(mean.Microseconds())/1000, float64(shortest.Microseconds())/1000, float64(longest.Microseconds())/1000, float64(cpu.Microseconds())/1000)
+	if cpu >= hookTestCPUBound {
+		t.Errorf("mean CPU time %v per run over 20 runs; the bound is %v", cpu, hookTestCPUBound)
+	}
+	// The shortest run, not the mean, meets the production deadline: a loaded machine stretches
+	// some of the 20 runs but not all, while a resolver slower than the deadline stretches every
+	// one, and in production that hook fails open on every Bash call with only errors.log to show.
+	if deadline := time.Duration(slotsFileHookDefaults().TimeoutMS) * time.Millisecond; shortest >= deadline {
+		t.Errorf("shortest of 20 runs took %v; the production deadline is %v", shortest, deadline)
 	}
 }
+
+const hookTestCPUBound = 50 * time.Millisecond
 
 // The bound is CPU time because wall time on a loaded machine measures the wait for a core, not
 // the hook (ezhomesteading row 234). The children's share counts the resolver's git run, which
