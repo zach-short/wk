@@ -466,24 +466,42 @@ func TestSlottedStartErrorIsNotLoggedAsAFail(t *testing.T) {
 	}
 }
 
-// A slotted gate that waited for a place and then ran out of time lost its time to another
-// workspace's run, not to the tree: a start error, whether it was still waiting or had taken the
-// place (the review's B2). One that never waited and runs out of time is a fail like any timeout.
+// A slotted gate still waiting for its place when its time ran out lost the time to another
+// workspace's run, and its command never ran: a start error with its own wording (row 15's
+// review B2 and audit F1). One that never waited and runs out of time is a fail like any timeout.
 func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
 	for _, tc := range []struct{ exe, state string }{
 		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Submitted},
-		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; echo 'wk run: took a check place after 1s' >&2; echo 'checking' >&2; sleep 60", changeset.Submitted},
 		{"echo 'checking' >&2; sleep 60", changeset.Failed},
 	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
 		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
 		err := e.LandLoop(io.Discard)
-		if (tc.state == changeset.Submitted) != (err != nil && strings.Contains(err.Error(), "timed out after 1s through wk run --slot")) {
+		if (tc.state == changeset.Submitted) != (err != nil && strings.Contains(err.Error(), "gate types: timed out after 1s while still waiting for a place through wk run --slot, so its command never ran; the next worker gates the batch again")) {
 			t.Errorf("%s: loop = %v", tc.exe, err)
 		}
 		r := mustState(t, e, id, tc.state)
 		if tc.state == changeset.Failed && !strings.Contains(r.Reason, "timed out after 1s") {
 			t.Errorf("failed record = %+v; want the timeout reason", r)
+		}
+	}
+}
+
+// Row 15's audit F1: once wk run has taken the place, or has given up on the wait and run the
+// command unslotted, the command ran, so a timeout is the tree's: a fail, blamed like any red
+// gate, and the landing log keeps wk run's line about the wait.
+func TestSlottedGateTimeoutAfterTakingAPlaceIsAFail(t *testing.T) {
+	const wait = "echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; "
+	for _, ended := range []string{"wk run: took a check place after 1s", "wk run: running unslotted: lock /x/check-0.lock: input/output error"} {
+		e, id := slotFixture(t, "true", wait+"echo '"+ended+"' >&2; echo 'checking' >&2; sleep 60", "true")
+		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
+		var out bytes.Buffer
+		if err := e.LandLoop(&out); err != nil {
+			t.Fatalf("%s: loop = %v; want the changeset failed", ended, err)
+		}
+		r := mustState(t, e, id, changeset.Failed)
+		if r.Gate != "types" || !strings.Contains(r.Reason, "timed out after 1s") || !strings.Contains(out.String(), ended) {
+			t.Errorf("%s: failed record = %+v; want gate types timed out, with the line in the log:\n%s", ended, r, out.String())
 		}
 	}
 }
@@ -569,6 +587,50 @@ func TestTrialIntentNeverTakesABranch(t *testing.T) {
 	err := e.withTrial(gitOut(t, f.Repo, "rev-parse", "main^{tree}"), func(string) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "it is on a branch") || !exists(filepath.Join(e.TrialDir(), "web/use.ts")) {
 		t.Fatalf("withTrial = %v; want the refusal and the directory kept", err)
+	}
+}
+
+// Row 15's audit F2: a trial create that fails after worktree add (here a template.copy_files
+// entry that became a directory after the template was made, which copy cannot read) keeps
+// trial.making, and its error says the next worker removes the unfinished trial, not that it is
+// left for inspection. Once the copy can succeed, the next loop makes the trial again, marks it
+// and gates the batch.
+func TestTrialCreateFailureSaysTheNextWorkerMakesItAgain(t *testing.T) {
+	_, e, ws, _ := gateFixture(t, "1", "a")
+	secret := e.inPrimary("secret.env")
+	e.Cfg.Template.CopyFiles = []string{"secret.env"}
+	if err := os.WriteFile(secret, []byte("KEY=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RefreshTemplate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(secret); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(secret, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, ws["a"], "web/a.ts", "export const a = 1;\n")
+	id := submit(t, e, ws["a"], "a", "")
+	err := e.LandLoop(io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "the next worker removes it with git worktree remove --force and makes it again") {
+		t.Fatalf("loop = %v; want the error to say the next worker removes the trial", err)
+	}
+	mustState(t, e, id, changeset.Submitted)
+	if !exists(e.TrialDir()) || !e.interruptedTrial(e.TrialDir()) {
+		t.Fatal("trial.making does not name the unfinished trial")
+	}
+	if err := os.Remove(secret); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secret, []byte("KEY=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loop(t, e)
+	mustState(t, e, id, changeset.Landed)
+	if err := checkTrialMarker(e.TrialDir()); err != nil || exists(e.trialIntent()) {
+		t.Fatalf("marker check %v, trial.making there %v; want the trial marked and the record gone", err, exists(e.trialIntent()))
 	}
 }
 

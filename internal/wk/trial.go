@@ -52,14 +52,19 @@ func (e *Env) ensureTrial() (string, error) {
 	if !e.interruptedTrial(dir) {
 		return dir, marked
 	}
+	return dir, e.finishInterruptedTrial(dir, marked)
+}
+
+// finishInterruptedTrial finishes the trial at dir, which trial.making names: marked, only the
+// record's removal was missed; unmarked, it is removed and made again.
+func (e *Env) finishInterruptedTrial(dir string, marked error) error {
 	if marked == nil {
-		// The marker was written; only the removal of the intent record was missed.
-		return dir, os.Remove(e.trialIntent())
+		return os.Remove(e.trialIntent())
 	}
 	if err := e.removeInterruptedTrial(dir); err != nil {
-		return "", err
+		return err
 	}
-	return dir, e.makeTrial(dir)
+	return e.makeTrial(dir)
 }
 
 // makeTrial makes the trial by Env.create with a detached HEAD at the base branch and marks it
@@ -75,21 +80,34 @@ func (e *Env) makeTrial(dir string) error {
 		return err
 	}
 	if _, err := e.create(dir, "", commit, false); err != nil {
-		if _, lerr := os.Lstat(dir); lerr != nil {
-			// Nothing was made, so the record may not outlive this pass and later name a
-			// directory someone else puts there.
-			_ = os.Remove(e.trialIntent())
-		}
+		return e.failedTrialCreate(dir, err)
+	}
+	if err := markTrial(dir); err != nil {
 		return err
 	}
+	return os.Remove(e.trialIntent())
+}
+
+// markTrial writes the wk-trial marker into dir's private git directory.
+func markTrial(dir string) error {
 	gd, err := gitx.GitDir(dir)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(gd, GateTrialMarkerName), []byte("wk gate trial: the landing worker reuses it; gc skips it\n"), 0o644); err != nil {
+	return os.WriteFile(filepath.Join(gd, GateTrialMarkerName), []byte("wk gate trial: the landing worker reuses it; gc skips it\n"), 0o644)
+}
+
+// failedTrialCreate is makeTrial's error when Env.create fails. With nothing at dir, the record
+// is removed, so it cannot outlive this pass and later name a directory someone else puts there.
+// With dir there, the record stays, because dir is the unfinished trial it exists for and the
+// next worker removes it and makes it again without a person; create's "left for inspection",
+// true for wk new, is not true here, so the error says what happens instead (row 15's audit F2).
+func (e *Env) failedTrialCreate(dir string, err error) error {
+	if _, lerr := os.Lstat(dir); lerr != nil {
+		_ = os.Remove(e.trialIntent())
 		return err
 	}
-	return os.Remove(e.trialIntent())
+	return fmt.Errorf("%w; but %s names it as an unfinished trial, so the next worker removes it with git worktree remove --force and makes it again: copy anything you need out of it first", err, e.trialIntent())
 }
 
 // trialIntent is ~/.wk/<repo>/trial.making. Only a holder of trial.lock writes or reads it.
@@ -122,56 +140,76 @@ const trialDepsName = "wk-trial-deps"
 
 // refreshDeps runs template.post_clone in the trial when tree's template.refresh_on blob is not
 // the one its dependencies were made at, because read-tree changes tracked files only and a
-// batch that changes bun.lock would be gated over the old dependencies. When the batch changes
-// refresh_on (tree's blob is not tipTree's), a command that fails is a red verdict named
-// post_clone with refresh_on as its path, so blame finds the changeset that changed it.
-// Otherwise the batch's lockfile is the tip's, and the failure (a registry that is down, a
-// dependency directory a stop left half written) says nothing about the batch: a start error.
-// So is a command that cannot start.
+// batch that changes bun.lock would be gated over the old dependencies. A command that fails is
+// a red verdict or a start error, as postCloneFailed decides; one that cannot start is a start
+// error.
 func (e *Env) refreshDeps(dir, tree, tipTree string, out io.Writer) (verdict, error) {
-	on, cmds := e.Cfg.Template.RefreshOn, e.Cfg.Template.PostClone
-	if on == "" || len(cmds) == 0 {
+	on := e.Cfg.Template.RefreshOn
+	if on == "" || len(e.Cfg.Template.PostClone) == 0 {
 		return verdict{}, nil
 	}
-	record, made, err := depsMadeAt(dir, on)
-	if err != nil {
+	d, err := readDeps(dir, tree, on)
+	if err != nil || d.made == d.want {
 		return verdict{}, err
-	}
-	want := blobAt(dir, tree, on)
-	if made == want {
-		return verdict{}, nil
 	}
 	_, _ = fmt.Fprintf(out, "trial: the batch changes %s, so the post-clone commands run first\n", on)
-	// Until the commands pass, the dependencies match no blob, so a stop or a red run here makes
-	// the next batch run them again.
-	if err := os.WriteFile(record, []byte("unknown\n"), 0o644); err != nil {
+	r, err := e.remakeDeps(dir, d, out)
+	if err != nil || r.Status != gate.Fail {
 		return verdict{}, err
 	}
-	rs, err := gate.Run(dir, postCloneGates(cmds), nil, nil, out)
-	if err != nil {
-		return verdict{}, err
-	}
-	if r := rs[len(rs)-1]; r.Status == gate.Fail {
-		if blobAt(dir, tipTree, on) == want {
-			return verdict{}, fmt.Errorf("post_clone in the trial: %s, and the batch does not change %s, so the failure says nothing about it; the next batch runs post_clone again", r.Reason, on)
-		}
-		return verdict{results: []gate.Result{r}, red: &r, paths: []string{on}}, nil
-	}
-	return verdict{}, os.WriteFile(record, []byte(want+"\n"), 0o644)
+	return postCloneFailed(r, on, blobAt(dir, tipTree, on) != d.want)
 }
 
-// depsMadeAt is the path of the trial's deps record and the blob it holds.
-func depsMadeAt(dir, on string) (string, string, error) {
+// trialDeps is where the trial's dependencies stand: the record beside the marker, the
+// template.refresh_on blob they were made at, and the one the batch's tree holds.
+type trialDeps struct{ record, made, want string }
+
+// readDeps reads the trial's deps record (before it exists, the blob at the trial's HEAD), then
+// the blob tree holds at on.
+func readDeps(dir, tree, on string) (trialDeps, error) {
 	gd, err := gitx.GitDir(dir)
 	if err != nil {
-		return "", "", err
+		return trialDeps{}, err
 	}
-	record := filepath.Join(gd, trialDepsName)
-	data, err := os.ReadFile(record)
+	d := trialDeps{record: filepath.Join(gd, trialDepsName)}
+	data, err := os.ReadFile(d.record)
 	if errors.Is(err, fs.ErrNotExist) {
-		return record, blobAt(dir, "HEAD", on), nil
+		data, err = []byte(blobAt(dir, "HEAD", on)), nil
 	}
-	return record, strings.TrimSuffix(string(data), "\n"), err
+	if err != nil {
+		return trialDeps{}, err
+	}
+	d.made, d.want = strings.TrimSuffix(string(data), "\n"), blobAt(dir, tree, on)
+	return d, nil
+}
+
+// remakeDeps runs template.post_clone in the trial (through gate.Run, one gate named post_clone
+// per command, no [gates.env], as Env.create runs them) and records d.want once they pass. Until
+// then the record says unknown, so a stop or a red run here makes the next batch run them again.
+func (e *Env) remakeDeps(dir string, d trialDeps, out io.Writer) (gate.Result, error) {
+	if err := os.WriteFile(d.record, []byte("unknown\n"), 0o644); err != nil {
+		return gate.Result{}, err
+	}
+	rs, err := gate.Run(dir, postCloneGates(e.Cfg.Template.PostClone), nil, nil, out)
+	if err != nil {
+		return gate.Result{}, err
+	}
+	if r := rs[len(rs)-1]; r.Status == gate.Fail {
+		return r, nil
+	}
+	return gate.Result{}, os.WriteFile(d.record, []byte(d.want+"\n"), 0o644)
+}
+
+// postCloneFailed is the answer to a failed post-clone run. When the batch changes refresh_on,
+// it is a red verdict named post_clone with refresh_on as its path, so blame finds the changeset
+// that changed it. Otherwise the batch's lockfile is the tip's, and the failure (a registry that
+// is down, a dependency directory a stop left half written) says nothing about the batch: a
+// start error.
+func postCloneFailed(r gate.Result, on string, batchChangesIt bool) (verdict, error) {
+	if !batchChangesIt {
+		return verdict{}, fmt.Errorf("post_clone in the trial: %s, and the batch does not change %s, so the failure says nothing about it; the next batch runs post_clone again", r.Reason, on)
+	}
+	return verdict{results: []gate.Result{r}, red: &r, paths: []string{on}}, nil
 }
 
 // blobAt is the object path holds in rev, a commit or a tree, or "" when it holds none. It reads
