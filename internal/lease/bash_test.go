@@ -2,6 +2,7 @@ package lease
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -213,7 +214,7 @@ func TestWriteTargets(t *testing.T) {
 		{"rule 6: cd then git pull", `cd web && git pull`, []string{"/w", "/w/web"}},
 		{"rule 6: git --work-tree", `git --work-tree=/r/b checkout main`, []string{"."}},
 		{"rule 6: GIT_WORK_TREE", `GIT_WORK_TREE=/r/b git checkout main`, []string{"."}},
-		{"rule 6: git -c alias with a shell command", `git -c alias.x='!rm web/x.ts' x`, []string{"web/x.ts"}},
+		{"rule 6: git -c alias with a shell command", `git -c alias.x='!rm web/x.ts' x`, []string{alias("x")}},
 		{"rule 6: git -c that runs nothing", `git -c color.ui=false status`, nil},
 
 		// Rule 7: the audits' gaps inside the safe set.
@@ -263,7 +264,32 @@ func TestWriteTargets(t *testing.T) {
 		{"hunt 2: cd -P", `cd -P web && rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts"}},
 		{"hunt 2: cd +1 in zsh", `cd +1; rm x`, []string{"/w/x", "x"}},
 		{"hunt 2: cp to the working directory", `cp -r /tmp/web .`, []string{"/w"}},
-		{"hunt 2: git -c alias run from no directory", `git -c alias.x='!rm /r/b/web/x.ts' x`, []string{"/r/b/web/x.ts"}},
+		{"hunt 2: git -c alias run from no directory", `git -c alias.x='!rm /r/b/web/x.ts' x`, []string{alias("x")}},
+
+		// Audit 5: git spellings the walk did not read (B12, B13).
+		{"audit 5: git rm --pathspec-from-file= after a write of the list", `echo web/page.ts > l && git rm --pathspec-from-file=l`, []string{"/w/l", fromList("--pathspec-from-file=l")}},
+		{"audit 5: git rm --pathspec-from-file=- from a pipe", `echo web/page.ts | git rm --pathspec-from-file=-`, []string{fromList("--pathspec-from-file=-")}},
+		{"audit 5: git rm --pathspec-from-file=list.txt", `git rm --pathspec-from-file=list.txt`, []string{fromList("--pathspec-from-file=list.txt")}},
+		{"audit 5: git rm --pathspec-from-file list.txt", `git rm --pathspec-from-file list.txt`, []string{fromList("--pathspec-from-file")}},
+		{"audit 5: git add --pathspec-from-file", `git add --pathspec-from-file=l`, []string{fromList("--pathspec-from-file=l")}},
+		{"audit 5: git checkout --pathspec-from-file", `git checkout --pathspec-from-file=l`, []string{fromList("--pathspec-from-file=l")}},
+		{"audit 5: the other verbs that take --pathspec-from-file", `git restore --pathspec-from-file=l; git reset --pathspec-from-file=l; git stash push --pathspec-from-file=l; git commit --pathspec-from-file=l; git mv --pathspec-from-file=l`, []string{fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l")}},
+		{"audit 5: --pathspec-from-file abbreviated as git allows", `git rm --pathspec-fr=l; git rm --pathspec-from l`, []string{fromList("--pathspec-fr=l"), fromList("--pathspec-from")}},
+		{"audit 5: --pathspec-from-file after -- is a path", `git rm -- --pathspec-from-file=l`, []string{"/w/--pathspec-from-file=l"}},
+		{"audit 5: git -c alias.x=rm", `git -c alias.x=rm x web/page.ts`, []string{alias("x")}},
+		{"audit 5: git -c alias.x=mv", `git -c alias.x=mv x -f a b`, []string{alias("x")}},
+		{"audit 5: git -c alias.x=checkout", `git -c alias.x=checkout x -- web/page.ts`, []string{alias("x")}},
+		{"audit 5: git -c alias.x=!rm", `git -c 'alias.x=!rm' x`, []string{alias("x")}},
+		{"audit 5: git reads an alias key in any case", `git -c ALIAS.Y=rm Y web/page.ts`, []string{alias("Y")}},
+		{"audit 5: a stored alias is not a verb the walk reads", `git x web/page.ts`, []string{verb("x")}},
+		{"audit 5: an alias from --config-env is not a verb the walk reads", `git --config-env=alias.y=X y web/page.ts`, []string{verb("y")}},
+		{"audit 5: an unknown verb after -C", `git -C sub x web/page.ts`, []string{verb("x")}},
+		{"audit 5: read-only verbs stay allowed", `git status; git log --oneline -5; git diff; git fetch`, nil},
+		{"audit 5: add, commit and push stay allowed", `git add -A && git commit -m msg && git push`, nil},
+		{"audit 5: read forms of branch, tag, remote, reflog and config", `git branch feature; git branch -a; git tag v1; git remote -v; git remote show origin; git reflog; git config --get user.name; git config -l; git -c core.pager=less log`, nil},
+		{"audit 5: branch -D and branch --del", `git branch -D old; git branch --del old`, []string{verb("branch"), verb("branch")}},
+		{"audit 5: tag -d, remote add, reflog expire", `git tag -d v1; git remote add o u; git reflog expire --all`, []string{verb("tag"), verb("remote"), verb("reflog")}},
+		{"audit 5: a config that stores an alias", `git config alias.x rm`, []string{verb("config")}},
 
 		// Rule 8: reads stay allowed.
 		{"rule 8: ls -la", `ls -la docs`, nil},
@@ -283,9 +309,29 @@ func refused(c string) string { return unreadablePrefix + c + ">" }
 
 func pathspec(p string) string { return pathspecPrefix + p + ">" }
 
+func fromList(o string) string { return fromFilePrefix + o + ">" }
+
+func alias(n string) string { return aliasPrefix + n + ">" }
+
+func verb(s string) string { return gitVerbPrefix + s + ">" }
+
 func TestWriteTargetsWithoutCwd(t *testing.T) {
 	got := WriteTargets("", `touch a /abs/b`)
 	if want := []string{"a", "/abs/b"}; !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRefusalNamesWhatItCouldNotRead(t *testing.T) {
+	for target, want := range map[string]string{
+		fromList("--pathspec-from-file=l"): "with `--pathspec-from-file=l` git reads the paths from a file or standard input",
+		alias("x"):                         "`x` is a git alias, which the lease walk does not read; run the git verb directly",
+		verb("x"):                          "`git x` is not a git verb the lease walk reads",
+		pathspec("out/../a"):               "so `out/../a` cannot be placed",
+		refused("$"):                       "the command holds `$`",
+	} {
+		if got, ok := refusal(target); !ok || !strings.Contains(got, want) {
+			t.Errorf("refusal(%q) = %q, %v; want it to hold %q", target, got, ok, want)
+		}
 	}
 }

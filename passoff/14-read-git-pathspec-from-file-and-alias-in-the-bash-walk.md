@@ -22,3 +22,30 @@ Do these, in order:
 Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'`. If it fails only on `TestHookPreToolUseTiming` in `internal/slot` under a load average above about 35, run it again when the load is lower; report every run with its load.
 
 Hand back: the gate output, the diffstat, the new rows and their results, the line count of `bash.go` (967 before this row), and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. Commit on your own worktree branch only; the lead merges, pushes and removes the worktree after the audit. No `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Close-out, 2026-10-17
+
+Built on `ap/row-14` by Opus 5.5. Only `internal/lease/bash.go` and `internal/lease/bash_test.go` changed, plus this section. `bash.go` went from 967 to 1068 lines; most of the growth is the verb list of step 2.
+
+What changed, by step:
+
+1. `gitCommand` first asks `fromFile`: for `rm`, `add`, `mv`, `checkout`, `restore`, `reset`, `stash` and `commit`, any `--pathspec-from-file` before a `--` (with `=` or with its value in the next word, and abbreviated as git allows) returns one target, `<git paths from OPTION>`, and nothing else. The denial reads "with `--pathspec-from-file=l` git reads the paths from a file or standard input, which the lease walk does not read; give the paths on the command line". A dry run on git 2.49.0 in this worktree showed git takes `--pathspec-fr=` and `--pathspec-from=`, so the check matches abbreviations; every shorter prefix is an ambiguous-option error in git, so refusing it costs nothing.
+2. In `git()`, a `-c` key that starts with `alias.` in any case (git reads `ALIAS.x` the same, proven by dry run) adds `<git alias NAME>` and stops the walk; the value is not read. The denial names the alias and says to run the git verb directly. After `gitWritesTree`, a verb that `gitReads` does not accept adds `<git verb NAME>`, "not a git verb the lease walk reads". This catches a stored alias, and an alias from `--config-env=alias.y=X` too, which the dry run showed git runs. An alias cannot take the name of a builtin verb (git ignores it, proven by dry run), so no alias reaches a verb on the list.
+3. 23 walk rows under "Audit 5" in `TestWriteTargets`, each passing, and `TestRefusalNamesWhatItCouldNotRead`, which checks that each new denial names what it could not read. Two existing rows changed their expected result on purpose: `git -c alias.x='!rm web/x.ts' x` (rule 6) and `git -c alias.x='!rm /r/b/web/x.ts' x` (hunt 2) now give the alias refusal in place of the walked file. Step 2 refuses every `alias.` key, so those rows could not keep their old result; both are still denied.
+
+`refusal` now reads its prefixed denials from one table (`prefixed`), and `unread` builds those targets; `pathspecs` uses it. No exported name was added.
+
+The new edge of the allowlist. A git verb passes the walk only when it is one of these:
+
+- a verb the walk judges: `rm` and `mv` (by operand), the tree writers, `reset`, `checkout`, `stash` and `worktree` (by `gitWritesTree`, as before);
+- a verb in `gitReaders`: `status`, `log`, `diff`, `show`, `blame`, `grep`, `ls-files`, `ls-tree`, `rev-parse`, `rev-list`, `cat-file`, `describe`, `shortlog`, `fetch`, `merge-base`, `name-rev`, `for-each-ref`, `help`, `version`, and `add`, `commit` and `push`;
+- `branch` without `-d`, `-D`, `-m`, `-M`, `--delete` or `--move`; `tag` without `-d` or `--delete`; `remote` with no operand or with `show` or `get-url`; `reflog` with no operand or with `show`, `list` or `exists`; `config` with `--get` and its kin, `--get-colorbool`, `--list` or `-l`, or the `get` or `list` subcommand.
+
+`add`, `commit` and `push` are not in the brief's read-only list. They are on the list because they write the index, objects and refs only, and refusing them would deny the commands every workspace runs. The lead may remove them.
+
+What is left:
+
+- Every git verb outside that list is now refused, so `git merge-file` and `git submodule update --init`, which the README lists as open gaps, are now refused as "not a git verb the lease walk reads". The README's known-spellings paragraph can drop them with the two gap sentences for B12 and B13. `git init`, `git clone`, `git gc`, `git notes` and `git config user.name` (a one-key read) are refused the same way. `git branch -c` (a copy) still passes, since the brief's list names only `-d`, `-D`, `-m` and `-M`.
+- An option word that is the value of another option (`git commit -m --pathspec-from-file`, `git tag -m '-d x'`) is read as the option and refused. This over-refuses and never allows.
+- The value of a `-c alias.` key is no longer walked, because the command is refused at the key.
+- Not verified: git versions other than 2.49.0, and the live hook from a workspace (the walk rows and the judge path through `refusal` are the proof here).
