@@ -190,3 +190,12 @@ What changed: `gitCommand` in `internal/lease/bash.go` now passes `git rm` and `
 Build-level call, with its reversal: an operand of `git rm` or `git mv` with a `..` is refused even when it would land on a free file; the session writes the path from the worktree's top instead, at the cost of one message. Reversal: place the operand by text against the physical directory of git, which needs the walk to know the physical directory of a logical `cd`.
 
 Not verified in this pass: git's pathspec handling on a version other than 2.49.0. No `claude -p` was run, `go install` was not run, and `~/.wk` was not touched.
+
+### Sign-off, 2026-10-17
+
+- Builder: Opus 5.5 (agent a325a2caad08630e4; two fix rounds, then passes 2 and 3 scoped by the lead under the owner's decision rule). Auditors: Opus 5.5 (ac09ec4c05b3f6060 blocking B1 to B4; a7ac1c4d0a4856a0e blocking B5 to B7; a73f7256189e02850 blocking B8; ae40d88d8d0b1bbe3 blocking B9 to B11, of which B9 was a regression from the lead's pass 2 premise; afef196fe51493a9e clean on the change, with B12 and B13 found in row 7's walk).
+- Worktree `.claude/worktrees/ap-row-3`, branch `ap/row-3`, tip `146c6f7` before this commit. Relay passes: 0. Fix rounds: 2, plus passes 2 and 3.
+- Verdict: clean on the row's change (audit 5, 2026-10-17 10:08 EDT): full gate exit 0 on the second run (load 19 to 12), 477 PASS, every input from audits 1 to 4 the same, hook under 20 ms wall.
+- Open, non-blocking: B12 `git rm --pathspec-from-file` and B13 `git -c alias` or a stored alias pass the walk (row 7's `internal/lease/bash.go`; a new board row carries the fix, about five lines); N5 any binary named `wk` passes; N6/N10 seven walks per Bash call; N8 confusing messages under another Unicode normalization; N13 a `cd` with `..` over-refuses at more places; `TestHookPreToolUseTiming` in row 200's `internal/slot` fails under load above about 35.
+- Reports: `docs/incomplete/autopilot-2026-10-16/reports/row-3-*.md`.
+- Lifted: not a Deep row. The owner's rule (2026-10-16 22:23 EDT) decided passes 2 and 3 instead of a hold.
