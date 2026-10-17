@@ -1,5 +1,7 @@
 # 16. Fix the batch gate findings row 15 left open
 
+> **Claimed `IN FLIGHT` 2026-10-17.**
+
 *Opened 2026-10-17, from the open findings of row 15's audit (the batch gate fixes, landed on `main` at c77e630): F1, F2 and F4 of the "Sign-off, 2026-10-17" section, with F3 and the review's N3 and N4 from the "Close-out, 2026-10-17" section named below as out of scope. Source: `passoff/15-fix-the-batch-gate-findings-row-5-left-open.md`, its last two sections.*
 
 **Model: Opus 5.5. Lane A. Waits on nothing (row 15 landed). Work in your own worktree. Files it owns: `internal/wk/gatestart.go`, `internal/wk/trial.go`, `internal/wk/gatekeeper_test.go`, `README.md`, and `internal/wk/new.go` only if step 2's reversal is taken.**
