@@ -100,6 +100,8 @@ Not built, and why:
 
 ## 3. P3, the landing queue
 
+(Amended 2026-10-16 22:51 EDT under the owner's daemon-or-files rule, decided "files" by `docs/incomplete/integration/KILL-TEST.md`: the landing loop is a detached run-to-completion worker `wk land --loop` started by `wk submit` and by the launchd timer, not a goroutine of a daemon; a `landing` record journals the predicted tree before each CAS. The binding text is row 4's item file, "Decided by the rule".)
+
 Scope items:
 
 1. `wk submit -m "<message>"` in a workspace: builds the tree through a private index (`GIT_INDEX_FILE`: `read-tree HEAD`, `add -A`, `write-tree`), so untracked non-ignored files are in and the workspace's own index is untouched; base by PD-7; refuses the main checkout (D15); sends `{tree, base, message, row, workspace}` to the daemon and prints the changeset id (option O). The row comes from the P2 claim; `--row <n>` overrides; with none the message carries no prefix. The message is `row <n>: <message>` in lowercase, no trailer, the author from `git config` (option Q).
