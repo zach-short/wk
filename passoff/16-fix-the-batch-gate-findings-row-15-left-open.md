@@ -156,3 +156,13 @@ One Opus 5.5 reviewer in the detached worktree `.claude/worktrees/dl-row-16-revi
 
 - 2026-10-17 16:53:27 to 16:55:26 EDT at d8a7089 (the README's two wording edits after the start went into the same commit): exit 0, every package `ok` (`internal/wk` 108.8 s), `0 issues.`, 118 s, load 7.84 at the start and 5.80 at the end.
 - 2026-10-17 17:03:24 to 17:05:29 EDT on the final tree (review fixes): exit 0, every package `ok` (`internal/wk` 115.8 s, `internal/slot` 6.0 s, `internal/gate` 5.4 s), `0 issues.`, 125 s, load 4.42 at the start and 4.78 at the end.
+
+### Sign-off, 2026-10-17
+
+- Builder: Opus 5.5, worktree `.claude/worktrees/dl-row-16-build`, branch `dl/row-16-build`, one pass, no relay. The lead made the worktree with `git worktree add`, because the Agent tool's isolation makes a personal-config worktree, not a wk one.
+- Auditor: Opus 5.5, worktree `.claude/worktrees/dl-row-16-audit`, branch `dl/row-16-audit`. It reproduced the build by fast-forward to 7f2247b (5 files, 252 insertions, 60 deletions), ran the gate (exit 0, 137 s, load 5.86 to 7.38), and turned each fix off: F1's old `waited`, `running unslotted:` out of `waitEnded`, the old wording, F2's unwrapped error and F2's reversal each made its test fail; each passed after the restore. The six trial tests are unedited.
+- Verdict: non-blocking findings. Commit state: landed on `main` by fast-forward after this commit.
+- The builder's two questions, decided by the lead under the owner's delegation of judgment calls: step 2's default stands (the record is kept, so the queue recovers without a person; a create that fails every time remakes the trial every minute, which is older than this row and loud in the landing log), and review N5 stays owed.
+- A1, open. `trial.go` line 111 and `README.md` line 281 (review N5, older than this row, not made worse): a directory that appears at `trial_dir` between `ensureTrial`'s `Lstat` and `create`'s own check keeps the record; create's error then lacks "left for inspection", and the wrapped message promises a removal that `removeInterruptedTrial` refuses for any directory that is not a detached worktree of this repository. Fix: a sentinel error from `create`'s exists check in `new.go`.
+- A2, open. `gatestart.go` line 121 (older than this row): a command that never waited but prints a line starting `wk run: waiting for a ` by itself, then times out, still reads as a start error.
+- Left owed, unchanged: F3 (`post_clone` in the trial has no timeout), row 15's review N3 and N4 (owner's calls), and the wait's length in a failed reason when the output passes 20 lines.
