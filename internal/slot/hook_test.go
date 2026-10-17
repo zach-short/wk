@@ -72,7 +72,7 @@ func (e *hookTestEnv) logLines(t *testing.T, name string) []string {
 	}
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
-		stamp, rest, _ := strings.Cut(line, " ")
+		stamp, rest, _ := strings.Cut(line, "\t")
 		if _, err := time.Parse(time.RFC3339, stamp); err != nil {
 			t.Errorf("%s line %q does not start with an RFC 3339 time", name, line)
 		}
@@ -204,6 +204,22 @@ func TestHookPreToolUseLogsMisses(t *testing.T) {
 	}
 	if got := env.logLines(t, "missed.log"); !slices.Equal(got, want) {
 		t.Errorf("missed.log\n got %q\nwant %q", got, want)
+	}
+}
+
+// The hook writes through appendLog, so wk slots counts its lines beside wk run's own; a line in
+// another stamp format would be read as having no age and never counted.
+func TestHookPreToolUseLinesCountInStatus(t *testing.T) {
+	env := hookTestSetup(t, matchTestSlotsTOML)
+	env.run(t, hookTestInput("Bash", `{"command":"echo $(bun run build)"}`))
+	env.deps.Resolve = func(string) (string, error) { return "", errors.New("not a git repository") }
+	env.run(t, hookTestInput("Bash", `{"command":"bun run build"}`))
+	st, err := ReadStatus(env.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Missed.Last24h != 1 || st.Errors.Last24h != 1 {
+		t.Errorf("wk slots counts missed %+v and errors %+v; want one line each", st.Missed, st.Errors)
 	}
 }
 

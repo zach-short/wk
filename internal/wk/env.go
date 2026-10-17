@@ -23,6 +23,7 @@ type Env struct {
 	// Refill starts a pool fill that outlives this process. Open leaves it nil, so a library
 	// caller or a test never forks; the command line sets it to a detached `wk pool fill`.
 	Refill func()
+	home   string
 	log    *syncWriter
 	clock  func() time.Time
 }
@@ -42,7 +43,7 @@ func Open(home, dir string, log io.Writer) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Env{Repo: repo, Cfg: cfg, State: filepath.Join(home, repo.Name), log: &syncWriter{w: log}, clock: time.Now}
+	e := &Env{Repo: repo, Cfg: cfg, State: filepath.Join(home, repo.Name), home: home, log: &syncWriter{w: log}, clock: time.Now}
 	if !found {
 		e.say("no %s; using the defaults", path)
 	}

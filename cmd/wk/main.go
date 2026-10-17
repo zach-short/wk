@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/zach-short/wk/internal/gitx"
 	"github.com/zach-short/wk/internal/hive"
 	"github.com/zach-short/wk/internal/setup"
+	"github.com/zach-short/wk/internal/slot"
 	"github.com/zach-short/wk/internal/viz"
 	"github.com/zach-short/wk/internal/wk"
 )
@@ -34,7 +36,9 @@ const usage = `usage:
   wk [--repo <absolute dir>] hive
   wk [--repo <absolute dir>] pool fill|status
   wk [--repo <absolute dir>] hooks install|uninstall
-  wk hook worktree-create|worktree-remove|subagent-stop < <Claude Code hook input>
+  wk hook worktree-create|worktree-remove|subagent-stop|pre-tool-use < <Claude Code hook input>
+  wk run [--slot <class>] [--keep] [--trim <path>]... -- <command> [args...]
+  wk slots [--json]
 
 wk alone, in a terminal, opens setup: it reads the repository, writes its config and warms the
 template. Once the config exists it opens a home screen instead, and never overwrites the file.
@@ -57,13 +61,26 @@ Arrow keys select a cell, q quits. Like wk gc without --apply, it changes nothin
 wk new takes a ready pool slot when there is one and then tops the pool up in the background
 (pool.size full and pool.sparse_size sparse slots); wk pool fill does the topping up in the
 foreground and wk pool status lists the slots. Its log is $WK_HOME/<repo>/pool.log.
-wk hooks install adds the WorktreeCreate, WorktreeRemove and SubagentStop hooks to the main
-checkout's and the template's .claude/settings.local.json and keeps every other key;
-uninstall removes only those entries.
+wk hooks install adds the WorktreeCreate, WorktreeRemove, SubagentStop and PreToolUse hooks to
+the main checkout's and the template's .claude/settings.local.json, with a wrapped twin of each
+permission rule that covers a gate of $WK_HOME/<repo>.slots.toml, and keeps every other key;
+uninstall removes only those entries and twins.
 wk hook worktree-create reads Claude Code's JSON on stdin, makes a warm worktree, falls back to
 a plain git worktree when that fails, and prints the path. wk hook subagent-stop marks a
 stopped subagent's own worktree for gc, and never blocks the stop. wk hook worktree-remove
 removes a worktree the owner discarded. Their log is $WK_HOME/<repo>/hook.log.
+wk hook pre-tool-use routes each gate of a Bash command listed in $WK_HOME/<repo>.slots.toml
+through wk run --slot, and always exits 0; its misses and errors go to missed.log and
+errors.log in the slots directory.
+
+wk run runs the command after -- with its input, output, signals and exit status unchanged.
+With --slot it first takes a place of that class from $WK_HOME/machine.toml, waiting in
+arrival order while every place is held; without that file, or on any failure of its own, it
+runs the command unslotted with one line on stderr. Each --trim path, relative to the git top
+level, is removed after the command ends, except with --keep and in the main checkout, the
+template or a pool slot.
+wk slots lists each class's places, waiters and last runs, and the last day of missed.log and
+errors.log; --json prints the same as one JSON document.
 `
 
 const (
@@ -77,6 +94,9 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if rest := skipRepoFlag(args); len(rest) > 0 && (rest[0] == "run" || isPreToolUse(rest)) {
+		return runInFront(rest, stdout, stderr)
+	}
 	repoDir, rest, err := splitRepoFlag(args)
 	if err != nil || (len(rest) == 0 && !interactive()) {
 		return fail(stderr, err, exitUsage)
@@ -120,6 +140,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPool(home, repoDir, rest[1], stdout, stderr)
 	case len(rest) == 2 && rest[0] == "hooks":
 		return runHooks(home, repoDir, rest[1], stdout, stderr)
+	case rest[0] == "slots":
+		return runSlots(home, rest[1:], stdout, stderr)
 	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-create":
 		return runWorktreeCreate(home, stdout, stderr)
 	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-remove":
@@ -185,6 +207,147 @@ func runHooks(home, repoDir, what string, stdout, stderr io.Writer) int {
 		return fail(stderr, err, exitError)
 	}
 	return fail(stderr, env.HooksInstall(exe, stdout), exitError)
+}
+
+// skipRepoFlag drops a leading --repo and its value unchecked. wk run and wk hook pre-tool-use
+// take no repository, and a bad flag or a deleted working directory must not stop either one.
+func skipRepoFlag(args []string) []string {
+	if len(args) >= 2 && args[0] == "--repo" {
+		return args[2:]
+	}
+	return args
+}
+
+func isPreToolUse(rest []string) bool {
+	return len(rest) == 2 && rest[0] == "hook" && rest[1] == "pre-tool-use"
+}
+
+// runInFront serves the two verbs that stand in front of every gate and every Bash call, so wk's
+// own state may not stop them: a bad WK_HOME goes to internal/slot as it is, where wk run fails
+// open on it (SLOTS-PLAN.md SB-9) and the hook answers nothing.
+func runInFront(rest []string, stdout, stderr io.Writer) int {
+	home, err := wkHome()
+	if err != nil {
+		home = os.Getenv("WK_HOME")
+	}
+	if rest[0] == "run" {
+		return runSlot(home, rest[1:], stderr)
+	}
+	return runPreToolUse(home, stdout)
+}
+
+type runArgs struct {
+	class string
+	keep  bool
+	trim  []string
+	argv  []string
+}
+
+// runSlot is wk run. The command gets this process's own three files, never the writers run()
+// is handed: slot.Run passes *os.File through untouched and would copy anything else through a
+// pipe. A bad argument list exits 2, which is a red gate, never a green one (SB-8).
+func runSlot(home string, args []string, stderr io.Writer) int {
+	ra, err := parseRun(args)
+	if err != nil {
+		return fail(stderr, err, exitUsage)
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	opts := slot.RunOptions{
+		Class: ra.class, Trim: ra.trim, Keep: ra.keep, Dir: dir, Home: home,
+		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Env: os.Environ(),
+	}
+	opts.TrimAllowed = len(ra.trim) > 0 && !ra.keep && wk.TrimAllowed(home, dir)
+	return slot.Run(opts, ra.argv)
+}
+
+func parseRun(args []string) (runArgs, error) {
+	var ra runArgs
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--":
+			ra.argv = args[i+1:]
+			return ra, ra.checkCommand()
+		case a == "--keep":
+			ra.keep = true
+		case (a == "--slot" || a == "--trim") && i+1 < len(args):
+			i++
+			if err := ra.set(a, args[i]); err != nil {
+				return ra, err
+			}
+		default:
+			return ra, fmt.Errorf("unexpected argument to wk run: %q", a)
+		}
+	}
+	return ra, errors.New("wk run needs -- before the command")
+}
+
+// set refuses a value that starts with "-", because a missing value would otherwise swallow the
+// next flag or the --, and the run would go unslotted or untrimmed with one easily missed line.
+func (ra *runArgs) set(flag, value string) error {
+	switch {
+	case value == "" || strings.HasPrefix(value, "-"):
+		return fmt.Errorf("%s needs a value, not %q", flag, value)
+	case flag == "--trim":
+		ra.trim = append(ra.trim, value)
+	case ra.class != "":
+		return errors.New("--slot is given twice")
+	default:
+		ra.class = value
+	}
+	return nil
+}
+
+func (ra runArgs) checkCommand() error {
+	if len(ra.argv) == 0 {
+		return errors.New("wk run needs a command after --")
+	}
+	return nil
+}
+
+func runSlots(home string, args []string, stdout, stderr io.Writer) int {
+	asJSON := len(args) == 1 && args[0] == "--json"
+	if len(args) > 0 && !asJSON {
+		return fail(stderr, fmt.Errorf("unexpected arguments to wk slots: %q", strings.Join(args, " ")), exitUsage)
+	}
+	st, err := slot.ReadStatus(home)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	if !asJSON {
+		_, _ = fmt.Fprint(stdout, st.Text())
+		return exitOK
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	return fail(stderr, enc.Encode(st), exitError)
+}
+
+// runPreToolUse is wk hook pre-tool-use. It exits 0 on every path, a panic included: exit 2 from
+// a PreToolUse hook blocks the Bash call it stands in front of (SB-14).
+func runPreToolUse(home string, stdout io.Writer) (code int) {
+	defer func() {
+		if recover() != nil {
+			code = exitOK
+		}
+	}()
+	exe, _ := installedExe()
+	slot.HookPreToolUse(stdin, stdout, slot.HookDeps{Exe: exe, Home: home, LogDir: slotsLogDir(home)})
+	return exitOK
+}
+
+// slotsLogDir puts the hook's missed.log and errors.log beside wk run's logs, where wk slots
+// counts them. A relative home logs nowhere, never into the session's working directory.
+func slotsLogDir(home string) string {
+	if !filepath.IsAbs(home) {
+		return ""
+	}
+	if m, found, err := slot.LoadMachine(home); found && err == nil {
+		return m.Dir
+	}
+	return filepath.Join(home, "slots")
 }
 
 // spawnFill starts `wk pool fill` in a session of its own, from /, with its output in
