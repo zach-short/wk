@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -345,9 +346,110 @@ func TestSlottedRoutesOnlyAMatchedGate(t *testing.T) {
 		{[]string{"go", "vet", "./..."}, []string{"go", "vet", "./..."}},
 		{[]string{"sh", "-c", "go test ./..."}, []string{"sh", "-c", "go test ./..."}},
 	} {
-		got := slotted(gate.Gate{Name: "g", Run: tc.run}, "/opt/wk", sf)
-		if !slices.Equal(got.Run, tc.want) {
-			t.Errorf("slotted(%q) = %q; want %q", tc.run, got.Run, tc.want)
+		got, ok := slotted(gate.Gate{Name: "g", Run: tc.run}, "/opt/wk", sf)
+		if !slices.Equal(got.Run, tc.want) || ok != (got.Run[0] == "/bin/sh") {
+			t.Errorf("slotted(%q) = %q, %v; want %q", tc.run, got.Run, ok, tc.want)
+		}
+	}
+}
+
+// slotFixture is gateFixture with a slots file whose one spelling is word, the types gate
+// replaced by run, and WKExe a script that does what exe says, standing in for wk run.
+func slotFixture(t *testing.T, word, exe string, run ...string) (*Env, string) {
+	t.Helper()
+	_, e, ws, _ := gateFixture(t, "1", "a")
+	e.WKExe = filepath.Join(t.TempDir(), "wk")
+	if err := os.WriteFile(e.WKExe, []byte("#!/bin/sh\n"+exe+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	slots := "[[slots.match]]\nspelling = \"" + word + "\"\nclass = \"check\"\n"
+	if err := os.WriteFile(filepath.Join(e.home, e.Repo.Name+".slots.toml"), []byte(slots), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.Cfg.Gates.Run[1].Run = run
+	if !e.gateList()[1].slotted {
+		t.Fatalf("the gate %q is not slotted", run)
+	}
+	writeIn(t, ws["a"], "web/a.ts", "export const a = 1;\n")
+	return e, submit(t, e, ws["a"], "a", "")
+}
+
+// Fix round 1, B1: a slotted gate whose command is not on the gate's PATH is a start error, as
+// it is unslotted, and never a fail blamed on the changeset. wk run is never reached.
+func TestSlottedGateWithAMissingCommandBlamesNothing(t *testing.T) {
+	e, id := slotFixture(t, "wk-test-missing-tool", "echo reached > \"$0.reached\"; exit 1", "wk-test-missing-tool", "--noEmit")
+	err := e.LandLoop(io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "wk-test-missing-tool is not on the gate's PATH") {
+		t.Fatalf("loop = %v; want the start error", err)
+	}
+	mustState(t, e, id, changeset.Submitted)
+	if exists(e.WKExe + ".reached") {
+		t.Fatal("wk run was started for a command that is not there")
+	}
+}
+
+// Fix round 1, B1: wk run exits 127 or 126 for a command it cannot find or run; through the
+// slot that is a start error too, and the changeset stays submitted. Exit 1 is still a fail.
+func TestSlottedGateExit127IsAStartError(t *testing.T) {
+	for _, tc := range []struct {
+		exe, state string
+	}{{"exit 127", changeset.Submitted}, {"exit 126", changeset.Submitted}, {"exit 1", changeset.Failed}} {
+		e, id := slotFixture(t, "true", tc.exe, "true")
+		err := e.LandLoop(io.Discard)
+		if (tc.state == changeset.Submitted) != (err != nil && strings.Contains(err.Error(), "could not run")) {
+			t.Errorf("%s: loop = %v", tc.exe, err)
+		}
+		mustState(t, e, id, tc.state)
+	}
+}
+
+// Fix round 1, B2 (the auditor's probe): gated lines are written before any swap, so a gated
+// record whose prediction happens to equal the tip's tree never landed. It is gated again, and
+// its change is on the landing tip afterwards.
+func TestGatedRecordEqualToTheTipIsNotTakenAsLanded(t *testing.T) {
+	f, e, ws, runs := gateFixture(t, "2", "a", "b")
+	writeIn(t, ws["a"], "web/a.ts", "export const a = 1;\n")
+	writeIn(t, ws["b"], "packages/core/b.ts", "export const b = 1;\n")
+	a, b := submit(t, e, ws["a"], "a", ""), submit(t, e, ws["b"], "b", "")
+	ra, rb := record(t, e, a), record(t, e, b)
+	ra.State, ra.Predicted = changeset.Gated, "1111111111111111111111111111111111111111"
+	rb.State, rb.Predicted = changeset.Gated, gitOut(t, f.Repo, "rev-parse", "main^{tree}")
+	for _, r := range []changeset.Record{ra, rb} {
+		if err := e.queue().Append(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loop(t, e)
+	tip := mustState(t, e, b, changeset.Landed).Commit
+	mustState(t, e, a, changeset.Landed)
+	if files := gitOut(t, f.Repo, "ls-tree", "-r", "--name-only", tip); !strings.Contains(files, "packages/core/b.ts") || !strings.Contains(files, "web/a.ts") {
+		t.Fatalf("the landing tip lacks a change marked landed:\n%s", files)
+	}
+	if n := runs(); n != 1 {
+		t.Fatalf("%d gate runs; want the two gated again as one batch", n)
+	}
+}
+
+// Fix round 1, N1: a gating record left by a stopped worker reads as stale, not in flight.
+func TestStatusSaysAStoppedWorkersBatchIsStale(t *testing.T) {
+	_, e, _, _ := gateFixture(t, "1")
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		pid  int
+		want string
+	}{{dead.Process.Pid, "stale gate run: abc, gating"}, {os.Getpid(), "batch in flight: abc, gating"}} {
+		e.noteGates(func(l *gateLog) {
+			l.PID, l.Batch, l.State, l.Tree = tc.pid, []string{"abc"}, "gating", "0123456789abcdef"
+		})
+		var out bytes.Buffer
+		if err := e.QueueStatus(&out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("pid %d: status lacks %q:\n%s", tc.pid, tc.want, out.String())
 		}
 	}
 }

@@ -174,6 +174,7 @@ func (e *Env) gatePlan(p plan, out io.Writer) (verdict, error) {
 	_, _ = fmt.Fprintf(out, "gating %s on %s: tree %s\n", strings.Join(p.ids(), " "), shortHash(p.tip), tree)
 	e.noteGates(func(l *gateLog) {
 		l.Batch, l.Tree, l.State, l.Gates, l.Error, l.At = p.ids(), tree, "gating", nil, "", e.clock()
+		l.PID = os.Getpid()
 	})
 	var v verdict
 	err := e.withTrial(tree, func(dir string) (err error) {
@@ -193,19 +194,27 @@ func (e *Env) runGates(root string, out io.Writer) (verdict, error) {
 		return verdict{}, err
 	}
 	var v verdict
-	for _, g := range e.gateList() {
+	for _, s := range e.gateList() {
 		if err := e.waitForMemory(out); err != nil {
 			return v, err
 		}
 		// A gate that cannot start is an error, not a fail: it says nothing about the tree, so it
-		// is never blamed on a changeset (row 11).
-		rs, err := gate.Run(root, []gate.Gate{g}, env, nil, out)
+		// is never blamed on a changeset (row 11). gate.Run says so for a gate run as it is; a
+		// slotted gate runs under /bin/sh and wk run, which turn a missing command into an exit
+		// status, so canStart and wrapperFailed say it for those (fix round 1, B1).
+		if err := s.canStart(root, env); err != nil {
+			return v, err
+		}
+		rs, err := gate.Run(root, []gate.Gate{s.g}, env, nil, out)
+		if err == nil {
+			err = s.wrapperFailed(rs[0])
+		}
 		if err != nil {
 			return v, err
 		}
 		v.results = append(v.results, rs...)
 		if r := rs[0]; r.Status == gate.Fail {
-			v.red, v.paths = &r, failedPaths(root, g, r)
+			v.red, v.paths = &r, failedPaths(root, s.g, r)
 			return v, nil
 		}
 	}
@@ -256,13 +265,14 @@ func (e *Env) gateEnv() (map[string]string, func(), error) {
 
 // gateList is [[gates.run]] as gate.Gate values, each routed through `wk run --slot` where the
 // repository's slots file recognises its command (PD-10).
-func (e *Env) gateList() []gate.Gate {
+func (e *Env) gateList() []gateSpec {
 	sf, found := e.slotsFile()
-	list := make([]gate.Gate, len(e.Cfg.Gates.Run))
+	list := make([]gateSpec, len(e.Cfg.Gates.Run))
 	for i, r := range e.Cfg.Gates.Run {
-		list[i] = gate.Gate{Name: r.Name, Dir: r.Dir, Run: r.Run, NeedsEnv: r.NeedsEnv}
+		g := gate.Gate{Name: r.Name, Dir: r.Dir, Run: r.Run, NeedsEnv: r.NeedsEnv}
+		list[i] = gateSpec{g: g, argv0: r.Run[0]}
 		if found && e.WKExe != "" {
-			list[i] = slotted(list[i], e.WKExe, sf)
+			list[i].g, list[i].slotted = slotted(g, e.WKExe, sf)
 		}
 	}
 	return list
@@ -280,28 +290,29 @@ func (e *Env) slotsFile() (slot.SlotsFile, bool) {
 }
 
 // slotted gives g the command line slot.Rewrite makes of its argument vector, run by /bin/sh,
-// when a spelling of sf matches it; otherwise g comes back as it is. The words are quoted for
-// the shell, so the command it runs is the vector byte for byte.
-func slotted(g gate.Gate, exe string, sf slot.SlotsFile) gate.Gate {
+// when a spelling of sf matches it, and says so; otherwise g comes back as it is. The words are
+// quoted for the shell, so the command it runs is the vector byte for byte.
+func slotted(g gate.Gate, exe string, sf slot.SlotsFile) (gate.Gate, bool) {
 	words := make([]string, len(g.Run))
 	for i, w := range g.Run {
 		q, err := syntax.Quote(w, syntax.LangBash)
 		if err != nil {
-			return g
+			return g, false
 		}
 		words[i] = q
 	}
 	line, changed, _, err := slot.Rewrite(strings.Join(words, " "), exe, sf)
 	if err != nil || !changed {
-		return g
+		return g, false
 	}
 	g.Run = []string{"/bin/sh", "-c", line}
-	return g
+	return g, true
 }
 
 // gateLog is ~/.wk/<repo>/gates.json, the worker's last gate run and its last move of the base
 // branch, which wk status prints. Only the worker writes it, under landing.lock.
 type gateLog struct {
+	PID    int       `json:"pid,omitempty"`
 	Batch  []string  `json:"batch,omitempty"`
 	Tree   string    `json:"tree,omitempty"`
 	State  string    `json:"state,omitempty"`

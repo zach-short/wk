@@ -38,9 +38,11 @@ func (e *Env) gatePass(records []changeset.Record, tip string, out io.Writer) er
 }
 
 // requeue is the queue as batch.Pick reads it. A gated or landing record that a stopped worker
-// left is pending again as submitted, so it is gated again before it lands (row 12's finding);
-// one whose prediction is already the tip's tree had its swap go through, and is landed at the
-// tip without a commit, as P3 does.
+// left is pending again as submitted, so it is gated again before it lands (row 12's finding).
+// Only a landing record whose prediction is already the tip's tree had its swap go through, and
+// is landed at the tip without a commit, as P3 does. A gated record never began its swap: its
+// prediction was made on a tip it may never have seen, so equality with the tip proves nothing
+// (fix round 1, B2); a gated member that changes nothing re-predicts to the tip and lands anyway.
 func (e *Env) requeue(records []changeset.Record, tip string, out io.Writer) ([]changeset.Record, error) {
 	tipTree, err := e.treeOf(tip)
 	if err != nil {
@@ -51,7 +53,7 @@ func (e *Env) requeue(records []changeset.Record, tip string, out io.Writer) ([]
 		if !pending(r) {
 			continue
 		}
-		if r.State != changeset.Submitted && r.Predicted == tipTree {
+		if r.State == changeset.Landing && r.Predicted == tipTree {
 			if err := e.markLanded(r, tip, out); err != nil {
 				return nil, err
 			}

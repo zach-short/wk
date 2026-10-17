@@ -1,9 +1,11 @@
 package wk
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zach-short/wk/internal/changeset"
@@ -86,7 +88,11 @@ func printGateRun(out io.Writer, l gateLog) {
 	case "":
 		return
 	case "gating":
-		_, _ = fmt.Fprintf(out, "batch in flight: %s, gating tree %s since %s\n", strings.Join(l.Batch, " "), shortHash(l.Tree), l.At.Format(time.RFC3339))
+		if !processAlive(l.PID) {
+			_, _ = fmt.Fprintf(out, "stale gate run: %s, gating tree %s since %s, by worker %d, which has stopped; the next worker gates the batch again\n", strings.Join(l.Batch, " "), shortHash(l.Tree), l.At.Format(time.RFC3339), l.PID)
+			return
+		}
+		_, _ = fmt.Fprintf(out, "batch in flight: %s, gating tree %s since %s, worker %d\n", strings.Join(l.Batch, " "), shortHash(l.Tree), l.At.Format(time.RFC3339), l.PID)
 		return
 	}
 	_, _ = fmt.Fprintf(out, "last gate run: %s, %s on tree %s at %s\n", l.State, strings.Join(l.Batch, " "), shortHash(l.Tree), l.At.Format(time.RFC3339))
@@ -110,6 +116,17 @@ func (e *Env) whyMainBehind(l gateLog) string {
 		return fmt.Sprintf("%s is behind the landing ref; the last move, at %s: %s", base, l.MainAt.Format(time.RFC3339), l.Main)
 	}
 	return fmt.Sprintf("%s is behind the landing ref; the worker fast-forwards it after its next green batch, or wk land --apply moves it", base)
+}
+
+// processAlive is whether pid names a running process. Signal 0 checks without sending; EPERM
+// means it runs under another user. Reading the process and not landing.lock keeps wk status
+// from ever holding the lock a starting worker needs (fix round 1, N1).
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func countPending(records []changeset.Record) int {
