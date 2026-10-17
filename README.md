@@ -226,7 +226,7 @@ The worker is `wk land --loop`, a process that runs to completion: it takes `~/.
 
 `wk sync` moves the workspace's branch to the landing tip and carries its uncommitted work across; on a conflict git's markers stay in the working tree, the paths are printed, and nothing is committed. A branch that carries commits of its own is folded first: the branch is moved back to its merge base with the tip, so the commits become uncommitted work in the tree, and they stay in the branch's reflog.
 
-Nothing moves `main` by itself in this phase. `wk land` prints the landing tip, `main`, and the dirty paths in the main checkout that a fast-forward would overwrite. `wk land --apply --expect <hash>` runs the fast-forward in the main checkout while the landing ref still holds `<hash>`, refuses a stale hash and any blocker, and then pushes `main` to `landing.remote` when `landing.push` is true.
+Without gates, nothing moves `main` by itself: the worker lands onto the landing ref only, and `wk status` says so. `wk land` prints the landing tip, `main`, and the dirty paths in the main checkout that a fast-forward would overwrite. `wk land --apply --expect <hash>` runs the fast-forward in the main checkout while the landing ref still holds `<hash>`, refuses a stale hash and any blocker, and then pushes `main` to `landing.remote` when `landing.push` is true.
 
 The worker also runs on a timer, so a changeset submitted while no worker could start is landed later. Save this as `~/Library/LaunchAgents/com.github.zach-short.wk.landing.<repo>.plist`, with the paths filled in, and load it with `launchctl bootstrap gui/$(id -u) <plist>`:
 
@@ -265,6 +265,27 @@ The worker also runs on a timer, so a changeset submitted while no worker could 
 </dict>
 </plist>
 ```
+
+## Gate each batch before it lands
+
+With a `[[gates.run]]` list in the config, the worker gates before it lands. It takes up to `gates.batch_max` submitted changesets in queue order, once there are that many or the newest has been quiet for `gates.batch_idle_seconds`, predicts each one on top of the one before it, and runs the gates once over the final tree. On green it lands the batch in order, one compare-and-swap per changeset, then fast-forwards `main` to the landing ref when `landing.ff_main` is true and pushes it when `landing.push` is true. Each landed commit carries the tree the prediction made, and the final one is the tree the gates saw. A changeset that conflicts with the landing tip is refused as before; one that conflicts only with an earlier changeset of its batch waits for the next batch, because that earlier one may still fail.
+
+The gates run in the trial, one workspace at `gates.trial_dir` with a detached HEAD, made by wk on first use and reused for every batch. It carries a `wk-trial` marker in its private git directory, so `wk gc` leaves it alone. For each batch the worker writes the final tree into it with `git read-tree -u --reset` and holds `~/.wk/<repo>/trial.lock` from that read to the last gate, because a build that type-checks the working tree must never see a tree half written. Each gate runs in its `dir` under the trial with `[gates.env]` added and every `gates.fresh_caches` variable pointed at a new empty directory for that run, so a cache keyed to another checkout cannot report on this tree. Before each gate the worker waits while free memory (`vm_stat`: free, inactive and speculative pages) is under `gates.min_free_mb`, and logs when it starts and stops waiting. Where `~/.wk/<repo>.slots.toml` has a spelling that matches a gate's command, the gate runs through `wk run --slot`, so the machine-wide caps of "Cap heavy gates" hold for the trial too.
+
+A gate is `pass`, `fail` or `skip`. A gate whose `needs_env` names a variable unset in the worker's environment is `skip` with the reason, and a skip never counts as a pass: a run needs at least one `pass` and no `fail` to be green. A run in which every gate skipped lands nothing, and the worker stops and says why. A gate that cannot start at all, a missing binary or directory, is not blamed on any changeset; the worker stops with the error and the changesets stay submitted.
+
+On red, the worker works out which changeset broke the batch. First it reads the paths the failing gate printed (`go build`, `go vet` diagnostics, `gofmt -l`, `golangci-lint`, `tsc`, eslint and madge), joins the gate's `dir` onto them, and matches them against each changeset's own changes (`git diff-tree -r --name-only <base> <tree>`). That match is a first guess only, because a type check can name an innocent file that calls a symbol another changeset removed. When exactly one changeset matches, the worker gates the batch again without it, and marks it `failed` only when that run is green; the rest then land. Otherwise it bisects: the batch is split in two in queue order, the first half is gated on the landing tip as a batch of its own and lands if green, and the second half is predicted afresh on whatever landed and gated in turn; a red half is split again. A red batch of one is `failed` with the gate's name, its reason and the paths it named, which may be none. The worker never lands a tree that no green gate run saw as the final tree of its batch.
+
+`gates.batch_max` is 1 by default: a serial gate, then land. Batching only pays when the gate is busy, that is when landings per hour times the hours one gate run takes passes 0.5. `wk status` warns when more than two batches are waiting.
+
+```bash
+wk status    # every changeset (gated, failed with the gate and the paths, landed), the last
+             # gate run or the batch in flight, and why main is behind the landing ref
+```
+
+The last gate run is kept in `~/.wk/<repo>/gates.json`. A `gated` line in the queue means the batch went green and the land is in progress; a worker that stops before it lands gates that changeset again, from its submitted tree, before anything lands.
+
+This is only cheaper if sessions stop running the gates themselves. The worker cannot see or stop a gate that a session runs in its own workspace, so with the batch gate in place a session's pass-off prompt should say: submit, and let the worker gate. Every gate a session still runs is paid twice.
 
 ## Remove finished workspaces
 
@@ -309,8 +330,21 @@ run = ["bun", "install", "--frozen-lockfile"]
 dir = "."
 run = ["bun", "run", "build"]
 
-[gates.env]                        # extra environment for the build commands
+[gates]
+trial_dir = ".claude/worktrees/wk-trial"  # the trial workspace; see "Gate each batch before it lands"
+batch_max = 1                      # changesets per gate run
+batch_idle_seconds = 120           # quiet before a batch under batch_max forms
+min_free_mb = 2048                 # gating pauses while free memory is under this; 0 turns it off
+fresh_caches = ["GOCACHE", "GOLANGCI_LINT_CACHE"]  # a new empty directory each per gate run
+
+[gates.env]                        # extra environment for the build commands and the gates
 CI = "1"
+
+[[gates.run]]                      # none means no gate and no fast-forward of main
+name = "vet"
+dir = "backend"
+run = ["go", "vet", "./..."]
+needs_env = []                     # a variable named here and unset makes the gate skip
 
 [workspace]
 dir = ".claude/worktrees/wk-{row}"
@@ -349,9 +383,10 @@ ref = "refs/heads/wk/landing"      # the ref the worker moves by compare-and-swa
 remote = "origin"                  # where wk land --apply pushes main
 push = true                        # push main after the fast-forward
 require_review = false             # refuse to land a changeset submitted without --review
+ff_main = true                     # fast-forward main after a green batch; needs [[gates.run]]
 ```
 
-Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands and `[gates.env]`, are the defaults. `wk config show` prints the effective config as TOML, with the file it read and whether that file was found. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
+Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands, `[gates.env]` and the `[[gates.run]]` entry, are the defaults. `gates.trial_dir` must be a relative path, `gates.batch_max` at least 1, and each `[[gates.run]]` needs a `name` and a non-empty `run`. `wk config show` prints the effective config as TOML, with the file it read and whether that file was found. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
 
 ## Disk use
 
