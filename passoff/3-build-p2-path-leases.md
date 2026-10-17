@@ -41,3 +41,12 @@ From the owner's research review of 2026-10-16, applied by the autopilot run bef
 - Record the common git directory under `~/.wk/<name>/` and refuse on a mismatch, so two repositories with one basename cannot share a lease store.
 - Say how the lead's own writes to `HANDOFF.md` and `PASSOFF.md` get a lease before leases are turned on in ezhomesteading, where both are in the planned `single_writer` list.
 - Row 7 (the lease store, the judgment and the `Bash` word walk) is `HELD` after three blocking audits of the word walk (`docs/incomplete/autopilot-2026-10-16/RUNDOWN.md`); this row waits on it.
+
+### Decided by the rule, 2026-10-16 22:51 EDT: files
+
+`docs/incomplete/integration/KILL-TEST.md` (commit 29ed9a6) reports 900 kills: lost leases 0 for both stores, stale leases 0 for both, manual recovery steps 0 for the file store and one restart per crash for the daemon (100 of 100 in each daemon-kill scenario, with every hook call during the gap refused), plus probe D (a failed save leaves the daemon's memory ahead of its disk). The owner's rule picks files. This row therefore builds the file store, as the kill test's amendments say:
+
+- `internal/wk/lease.go` keeps `lease.Store` in `~/.wk/<repo>/leases.json` under `~/.wk/<repo>/leases.lock`: an exclusive `flock` from read to rename, readers lock-free, temp-file reaping (remove `.leases.json.*.tmp` older than one minute before a write), and an idempotent re-claim (a claim by the same root for the same row with the same or fewer leases is success and prints the claim it found).
+- `wk up` and `wk down` are not built; no `internal/wk/daemon.go`, no socket, no resident process. The bullet above that begins "If the daemon stays" does not apply. `internal/daemon`'s `SaveJSON`, `LoadJSON` and `Spawn` stay in use; `Server` and `Client` stay on `main` unused, with a doc comment saying so, for a later row to delete.
+- The hook (`wk hook lease --repo <primary>`) reads `leases.json` itself and judges with `lease.Judge`; its worktree list comes from a file that `wk claim` and `wk release` maintain beside the store, never from git (PD-2 holds). D12's "deny when the socket does not answer" has no equivalent and is dropped.
+- Everything else in this row stands, including the `Bash` targets computed in the hook's own process, the wk-binary allow, the exit-2 and panic rules, the `onFailure` entries, the reaping of leases whose root is gone, the header lookup, the common-git-directory check, and the lead's own writes to the ledger files.
