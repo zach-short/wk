@@ -11,8 +11,10 @@ var (
 	ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	// A position at the start of a line: path:line:col (go, golangci-lint,
 	// tsc --pretty) or path(line,col) (tsc without --pretty). The column is
-	// optional in the colon form; the existence check drops a false match.
-	position = regexp.MustCompile(`^(\S+?)(?::\d+(?::\d+)?|\(\d+,\d+\))`)
+	// optional in the colon form, and the path may hold spaces; the existence
+	// check drops a false match. tsc --pretty puts " - error" after the column,
+	// so the position may end in a colon, a space or the line's end.
+	position = regexp.MustCompile(`^(.+?)(?::\d+(?::\d+)?(?::|\s|$)|\(\d+,\d+\))`)
 	// madge numbers each cycle: "1) a.ts > b.ts".
 	madgeNumber = regexp.MustCompile(`^\d+\)\s+`)
 )

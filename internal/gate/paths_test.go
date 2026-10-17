@@ -121,10 +121,20 @@ var pathSamples = []struct {
 			"ROOT/src/a.ts\n",
 		want: []string{"src/a.ts"},
 	},
+	{
+		// tsc 5.8.3 over "src/my dir/a b.ts", without and with --pretty, then
+		// the first line again with an absolute prefix. Go cannot make this
+		// sample: it refuses a package directory with a space in its name.
+		name: "path with spaces",
+		output: "src/my dir/a b.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n" +
+			"\x1b[96msrc/my dir/a b.ts\x1b[0m:\x1b[93m1\x1b[0m:\x1b[93m7\x1b[0m - \x1b[91merror\x1b[0m\x1b[90m TS2322: \x1b[0mType 'string' is not assignable to type 'number'.\n" +
+			"ROOT/src/my dir/a b.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+		want: []string{"src/my dir/a b.ts"},
+	},
 }
 
 // probeFiles are the files the samples name, made under each test root.
-var probeFiles = []string{"main.go", "g.go", "sub/sub.go", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.js"}
+var probeFiles = []string{"main.go", "g.go", "sub/sub.go", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.js", "src/my dir/a b.ts"}
 
 func TestPaths(t *testing.T) {
 	for _, s := range pathSamples {

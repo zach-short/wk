@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // script writes a shell script under dir and returns the gate that runs it.
@@ -126,5 +127,22 @@ func TestRunRefusesUnstartableGate(t *testing.T) {
 	gates := []Gate{{Name: "missing", Run: []string{filepath.Join(t.TempDir(), "no-such-binary")}}}
 	if _, err := Run(t.TempDir(), gates, nil, nil, &strings.Builder{}); err == nil {
 		t.Error("Run gave no error for a command it could not start")
+	}
+}
+
+// A child the gate leaves in the background keeps the output pipe open; Run
+// returns once the gate itself exits, after pipeGrace at most.
+func TestRunDoesNotWaitForBackgroundChild(t *testing.T) {
+	g := script(t, t.TempDir(), "bg", "sleep 5 &\necho started\nexit 0\n")
+	start := time.Now()
+	res, err := Run(t.TempDir(), []Gate{g}, nil, nil, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > pipeGrace+time.Second {
+		t.Errorf("Run took %s, want under %s", took, pipeGrace+time.Second)
+	}
+	if len(res) != 1 || res[0].Status != Pass || !strings.Contains(string(res[0].Output), "started") {
+		t.Errorf("results = %+v, want one pass with its output", res)
 	}
 }

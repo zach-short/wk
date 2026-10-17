@@ -50,10 +50,13 @@ func Run(root string, gates []Gate, env map[string]string, caches []string, log 
 	if err != nil {
 		return nil, err
 	}
-	base := environ(env, cacheEnv)
+	return runAll(root, gates, environ(env, cacheEnv), log)
+}
+
+func runAll(root string, gates []Gate, env []string, log io.Writer) ([]Result, error) {
 	var results []Result
 	for _, g := range gates {
-		r, err := runOne(root, g, base)
+		r, err := runOne(root, g, env)
 		if err != nil {
 			return results, err
 		}
@@ -75,12 +78,19 @@ func runOne(root string, g Gate, env []string) (Result, error) {
 	if len(g.Run) == 0 {
 		return Result{}, fmt.Errorf("gate %s has no command", g.Name)
 	}
+	return execute(root, g, env)
+}
+
+// pipeGrace is how long Wait keeps reading after the gate process exits. A
+// child the gate left in the background (`sleep 3 &`) holds the output pipe
+// open, and without a limit Run would wait for that child too.
+const pipeGrace = 2 * time.Second
+
+func execute(root string, g Gate, env []string) (Result, error) {
 	var out bytes.Buffer
 	cmd := exec.Command(g.Run[0], g.Run[1:]...)
 	cmd.Dir = filepath.Join(root, filepath.FromSlash(g.Dir))
-	cmd.Env = env
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	cmd.Env, cmd.Stdout, cmd.Stderr, cmd.WaitDelay = env, &out, &out, pipeGrace
 	start := time.Now()
 	err := cmd.Run()
 	r := Result{Name: g.Name, Status: Pass, Output: out.Bytes(), Seconds: time.Since(start).Seconds()}
@@ -88,7 +98,7 @@ func runOne(root string, g Gate, env []string) (Result, error) {
 	switch {
 	case errors.As(err, &exit):
 		r.Status, r.Reason = Fail, exit.Error()
-	case err != nil:
+	case err != nil && !errors.Is(err, exec.ErrWaitDelay):
 		return Result{}, fmt.Errorf("gate %s: %w", g.Name, err)
 	}
 	return r, nil

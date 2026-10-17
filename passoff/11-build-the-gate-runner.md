@@ -53,3 +53,5 @@ Built `internal/gate/` (`run.go`, `paths.go`, `memory.go` and a test file for ea
 - `Result` does not carry `Dir`, so row 5 keeps its own `[]Gate` to map a result back to its directory.
 
 **Questions answered:** none were open. **Left owed:** the wiring, the config keys and the live proof, which are all row 5's.
+
+**Fix round 1, 2026-10-16** (from the audit of `6fdca3a`). `Paths` now reads a path with spaces in the position form (`position` takes `.+?` and ends the position at a colon, a space or the line's end); a table case over tsc's real output for `src/my dir/a b.ts` covers it, relative and absolute. `Run` set no `WaitDelay`, so a gate that left a child in the background (`sleep 5 &`) held `Run` until the child exited; it now sets `WaitDelay` to 2 s (`pipeGrace`), treats `exec.ErrWaitDelay` as the gate's own exit status, and a test shows such a gate returns `pass` in about 2 s. For L1, `Run` now hands the loop to `runAll`, and `runOne` hands the command to `execute`. The per-gate timeout stays with row 5.
