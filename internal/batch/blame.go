@@ -6,10 +6,12 @@ import (
 )
 
 // Blame names the one changeset whose diff touches a path a red gate printed (T3). diffs maps
-// each changeset id of the batch to its `diff-tree --name-only base tree` paths. A failed path
-// matches a diff path equal to it or under it, so a gate that names a directory blames the
-// changesets that changed a file inside it. unique is true only when exactly one changeset
-// matches; with none or several, id is "" and the caller falls back to Shrink (T1).
+// each changeset id of the batch to the paths of `git diff-tree -r --name-only <base> <tree>`;
+// without -r git prints only top-level entries, and nothing matches. A failed path matches a
+// diff path equal to it or under it, so a gate that names a directory blames the changesets
+// that changed a file inside it. Both sides are repository-relative: an absolute or ../ path
+// never matches. unique is true only when exactly one changeset matches; with none or several,
+// id is "" and the caller falls back to Shrink (T1).
 func Blame(failedPaths []string, diffs map[string][]string) (id string, unique bool) {
 	failed := clean(failedPaths)
 	var hits []string
