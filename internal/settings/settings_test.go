@@ -227,13 +227,13 @@ func mustJSON(t *testing.T, v any) string {
 	return string(data)
 }
 
-func TestInstallWritesAllThreeHooks(t *testing.T) {
+func TestInstallWritesEveryHook(t *testing.T) {
 	p := file(t, shared)
 	if _, err := Install(p, exe); err != nil {
 		t.Fatal(err)
 	}
 	hooks := load(t, p)["hooks"].(map[string]any)
-	for event, verb := range map[string]string{"WorktreeCreate": "worktree-create", "WorktreeRemove": "worktree-remove", "SubagentStop": "subagent-stop"} {
+	for event, verb := range map[string]string{"WorktreeCreate": "worktree-create", "WorktreeRemove": "worktree-remove", "SubagentStop": "subagent-stop", "PreToolUse": "pre-tool-use || true"} {
 		groups, _ := hooks[event].([]any)
 		if len(groups) != 1 || !strings.Contains(mustJSON(t, groups), exe+" hook "+verb) {
 			t.Errorf("%s = %s", event, mustJSON(t, groups))
