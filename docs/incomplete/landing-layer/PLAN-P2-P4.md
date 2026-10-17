@@ -143,6 +143,11 @@ Audit 3 (Opus 5.5, of `53be9d5`, report `docs/incomplete/autopilot-2026-10-16/re
 - N11, the cleaned spelling over-refused `Bash` with a wrong message: done. `cleanedPath` applies to the edit tools only, which also cuts one `Bash` command from ten walks to seven. A row checks that `echo x > out/../web/page.ts` is allowed while the `Edit` of the same path is denied.
 - N12, a cwd with a link loop kept its raw text: done; it is placed as an unplaceable marker again, as in `1c4a1fd`. N13: open.
 
+Audit 4 (Opus 5.5, of `a028e54`, report `docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-4.md`) confirmed B8 closed and N11 and N12 done, and found that git removes a `..` in its pathspecs by text, which the premise of N11 missed. Outcomes, pass 3 of 2026-10-17:
+
+- B9, `git rm` and `git mv` with a link and then `..` (a regression from N11), B10, the same from a logical directory through a link, and B11, `git rm` pathspec magic (`:/docs/a.md`, `:docs/a.md`): fixed. `pathspecs` in `internal/lease/bash.go` makes a `git rm` or `git mv` operand with a `..`, and a `git rm` operand starting with `:`, unplaceable, and the judgment refuses it naming the operand. Nine walk rows and a hook row.
+- N14, the logical `cd` collapses `out/..` by text, so the deny of `cd out/.. && rm web/page.ts` is right: no change. N15, stale lines in the close-out: marked superseded with a dated note.
+
 ## 3. P3, the landing queue
 
 (Amended 2026-10-16 22:51 EDT under the owner's daemon-or-files rule, decided "files" by `docs/incomplete/integration/KILL-TEST.md`: the landing loop is a detached run-to-completion worker `wk land --loop` started by `wk submit` and by the launchd timer, not a goroutine of a daemon; a `landing` record journals the predicted tree before each CAS. The binding text is row 4's item file, "Decided by the rule".)

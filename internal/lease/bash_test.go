@@ -62,6 +62,15 @@ func TestWriteTargets(t *testing.T) {
 		{"single-quoted $ is refused", `touch 'a$b'`, []string{refused("$")}},
 		{"find -delete writes its starting point", `find . -name x -delete`, []string{"/w"}},
 		{"a target with .. keeps it for the caller to read through links", `rm sub/e/../web/x.ts /r/a/../b`, []string{"/w/sub/e/../web/x.ts", "/r/a/../b"}},
+		{"audit 4: git rm out/../web/page.ts is unplaceable", `git rm out/../web/page.ts`, []string{pathspec("out/../web/page.ts")}},
+		{"audit 4: git rm -r out/../web is unplaceable", `git rm -r out/../web`, []string{pathspec("out/../web")}},
+		{"audit 4: git mv out/../web/page.ts web/moved.ts is unplaceable", `git mv out/../web/page.ts web/moved.ts`, []string{pathspec("out/../web/page.ts"), "/w/web/moved.ts"}},
+		{"audit 4: git mv -f notes.txt out/../web/page.ts is unplaceable", `git mv -f notes.txt out/../web/page.ts`, []string{"/w/notes.txt", pathspec("out/../web/page.ts")}},
+		{"audit 4: git rm --cached out/../web/page.ts is unplaceable", `git rm --cached out/../web/page.ts`, []string{pathspec("out/../web/page.ts")}},
+		{"audit 4: git -C p rm o/../../a.md is unplaceable", `git -C p rm o/../../a.md`, []string{pathspec("o/../../a.md")}},
+		{"audit 4: git rm :/docs/a.md is unplaceable", `git rm :/docs/a.md`, []string{pathspec(":/docs/a.md")}},
+		{"audit 4: git rm :docs/a.md is unplaceable", `git rm :docs/a.md`, []string{pathspec(":docs/a.md")}},
+		{"audit 4: git rm p/../lnk is unplaceable", `git rm p/../lnk`, []string{pathspec("p/../lnk")}},
 		{"a cd with .. lands cleaned and raw", `cd sub/e/../web && touch x.ts`, []string{"/w/x.ts", "/w/sub/web/x.ts", "/w/sub/e/../web/x.ts"}},
 		{"shift in $(( )) is refused", "echo $((1<<2))\nrm web/x.ts", []string{refused("$")}},
 		{"shift in (( )) is refused", "(( x = 1 << 2 ))\nrm y", []string{refused("(")}},
@@ -271,6 +280,8 @@ func TestWriteTargets(t *testing.T) {
 }
 
 func refused(c string) string { return unreadablePrefix + c + ">" }
+
+func pathspec(p string) string { return pathspecPrefix + p + ">" }
 
 func TestWriteTargetsWithoutCwd(t *testing.T) {
 	got := WriteTargets("", `touch a /abs/b`)

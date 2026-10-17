@@ -88,6 +88,7 @@ const (
 	openQuote        = "<open quote>"
 	openHeredoc      = "<open heredoc>"
 	unreadablePrefix = "<character "
+	pathspecPrefix   = "<git pathspec "
 )
 
 // refusal returns the denial for a target that names no file.
@@ -97,6 +98,9 @@ func refusal(path string) (string, bool) {
 		return "wk: cannot tell which file this writes: the command has an open quote, and bash runs the lines before it; close the quote", true
 	case openHeredoc:
 		return "wk: cannot tell which file this writes: a heredoc in the command has no end line; end it with its delimiter alone on a line", true
+	}
+	if p, ok := strings.CutPrefix(path, pathspecPrefix); ok {
+		return fmt.Sprintf("wk: cannot tell which file this writes: git removes a `..` in a pathspec by text and reads a leading `:` as magic, so `%s` cannot be placed; give the path from the worktree's top without either", strings.TrimSuffix(p, ">")), true
 	}
 	if c, ok := strings.CutPrefix(path, unreadablePrefix); ok {
 		return fmt.Sprintf("wk: cannot tell which file this writes: the command holds `%s`, which the lease walk does not read; write it without that character or ask for the path in full", strings.TrimSuffix(c, ">")), true
@@ -639,12 +643,25 @@ func (w *walker) git(args []word) {
 func (w *walker) gitCommand(dirs []string, sub string, args []word) {
 	switch {
 	case sub == "mv" || sub == "rm":
-		w.add(dirs, operands(args)...)
+		w.add(dirs, pathspecs(sub, operands(args))...)
 	case gitWritesTree(sub, args):
 		for _, d := range dirs {
 			w.targets = append(w.targets, target{path: place(d, word{text: "."}), repo: true})
 		}
 	}
+}
+
+// pathspecs marks as unplaceable each `git rm` or `git mv` operand git reads by text, not where
+// the kernel resolves: one with a `..`, which git removes against its physical directory (audit 4,
+// B9 and B10), and a `git rm` operand starting with `:`, pathspec magic (B11).
+func pathspecs(sub string, ops []word) []word {
+	out := slices.Clone(ops)
+	for i, op := range out {
+		if dotDot(op.text) || sub == "rm" && strings.HasPrefix(op.text, ":") {
+			out[i] = word{text: pathspecPrefix + op.text + ">", expands: true}
+		}
+	}
+	return out
 }
 
 // treeWriters are the git subcommands that rewrite files across the worktree whatever their

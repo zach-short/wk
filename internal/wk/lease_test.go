@@ -377,6 +377,7 @@ func TestHookJudgesEverySpellingOfAPath(t *testing.T) {
 		{"Bash", "ln -sf ../web/page.ts docs/lnk", docs},
 		{"Edit", b + "/out/../web/page.ts", "web/page.ts is leased by row 1 in " + a},
 		{"Bash", "rm p/../lnk", docs},
+		{"Bash", "git rm out/../web/page.ts", "`out/../web/page.ts` cannot be placed"},
 		{"Bash", "cd -P p/.. && rm lnk", docs},
 	} {
 		if got := hook(t, f, c.tool, b, c.arg); !containsFold(got, c.want) {
