@@ -26,6 +26,10 @@ const maxSocketPath = 103
 type Handler func(req json.RawMessage) (any, error)
 
 // Server listens on Socket while it holds LockPath exclusively, so one daemon runs per lock.
+//
+// Unused: under the files decision of 2026-10-16 (docs/incomplete/integration/KILL-TEST.md) no
+// phase runs a resident daemon, and the lease store is a file. Server and Client are kept for a
+// later row to delete; SaveJSON, LoadJSON and Spawn are in use.
 type Server struct {
 	Socket, LockPath string
 

@@ -208,3 +208,18 @@ func checkParse(t *testing.T, cell string, wantPaths, wantUnread []string) {
 		t.Errorf("unread = %q\nwant     %q", unread, wantUnread)
 	}
 }
+
+func TestColumnFindsTheCellByHeader(t *testing.T) {
+	text := "intro\n\n| # | Task | Files it owns | Model |\n|---|---|---|---|\n| 3 | build | `a.go`; `b/` | Opus |\n| 4 | next | `c.go` | Fable |\n\n| # | Other |\n|---|---|\n| 9 | x |\n"
+	for _, tc := range []struct{ row, want, err string }{
+		{"3", "`a.go`; `b/`", ""},
+		{"4", "`c.go`", ""},
+		{"9", "", `board row "9" has no "Files it owns" column`},
+		{"5", "", `board has no table row "5"`},
+	} {
+		got, err := Column(text, tc.row, "Files it owns")
+		if got != tc.want || (err == nil) != (tc.err == "") || err != nil && err.Error() != tc.err {
+			t.Errorf("Column(%s) = %q, %v; want %q, %q", tc.row, got, err, tc.want, tc.err)
+		}
+	}
+}

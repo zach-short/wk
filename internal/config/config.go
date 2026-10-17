@@ -7,7 +7,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -84,6 +86,17 @@ type Pool struct {
 	Dir        string `toml:"dir"`
 }
 
+// Leases is the path-lease guard (PLAN-P2-P4.md section 2). With Enabled, every edit needs a
+// claim (G3) and the lease hook fails closed (D12); Board is the board `wk claim` reads,
+// relative to the main checkout; SingleWriter holds the repository-relative paths an edit may
+// touch only under its workspace's lease (D13 L1); BashGuard turns the Bash word walk on (D11).
+type Leases struct {
+	Enabled      bool     `toml:"enabled"`
+	Board        string   `toml:"board"`
+	SingleWriter []string `toml:"single_writer"`
+	BashGuard    bool     `toml:"bash_guard"`
+}
+
 type Config struct {
 	Template  Template  `toml:"template"`
 	Gates     Gates     `toml:"gates"`
@@ -92,6 +105,7 @@ type Config struct {
 	GC        GC        `toml:"gc"`
 	New       New       `toml:"new"`
 	Pool      Pool      `toml:"pool"`
+	Leases    Leases    `toml:"leases"`
 }
 
 const (
@@ -117,9 +131,10 @@ func Defaults() Config {
 			Dir:    ".claude/worktrees/" + NamePlaceholder,
 			Branch: "worktree-" + NamePlaceholder,
 		},
-		GC:   GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60},
-		New:  New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
-		Pool: Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
+		GC:     GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60},
+		New:    New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
+		Pool:   Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
+		Leases: Leases{Board: "PASSOFF.md", SingleWriter: []string{}, BashGuard: true},
 	}
 }
 
@@ -155,6 +170,7 @@ func (c Config) validate() error {
 		"hook.dir":            c.Hook.Dir,
 		"pool.dir":            c.Pool.Dir,
 		"template.refresh_on": c.Template.RefreshOn,
+		"leases.board":        c.Leases.Board,
 	}
 	for _, list := range []struct {
 		key   string
@@ -198,6 +214,9 @@ func (c Config) validate() error {
 	if !strings.Contains(c.Pool.Dir, SlotPlaceholder) {
 		return fmt.Errorf("pool.dir must hold %s", SlotPlaceholder)
 	}
+	if err := c.Leases.validate(); err != nil {
+		return err
+	}
 	if c.Pool.Size < 0 || c.Pool.SparseSize < 0 {
 		return fmt.Errorf("pool.size and pool.sparse_size must not be negative")
 	}
@@ -212,6 +231,35 @@ func (c Config) validate() error {
 	} {
 		if v < 1 {
 			return fmt.Errorf("%s is %d; it must be at least 1", key, v)
+		}
+	}
+	return nil
+}
+
+// Show writes cfg as TOML, under a comment that names the file it came from and whether that
+// file was found, so the effective value of every dial can be read in one place (D26).
+func Show(w io.Writer, cfg Config, path string, found bool) error {
+	state := "found"
+	if !found {
+		state = "not found; these are the defaults"
+	}
+	if _, err := fmt.Fprintf(w, "# %s (%s)\n", path, state); err != nil {
+		return err
+	}
+	return toml.NewEncoder(w).Encode(cfg)
+}
+
+// validate refuses an empty board and a single-writer entry that is not a clean
+// repository-relative path, because the judgment compares paths as written and an unclean entry
+// would never match the path it means.
+func (l Leases) validate() error {
+	if l.Board == "" {
+		return fmt.Errorf("leases.board is empty")
+	}
+	for i, p := range l.SingleWriter {
+		base := strings.TrimSuffix(p, "/")
+		if err := checkRelative(p); err != nil || base == "" || base == "." || path.Clean(base) != base {
+			return fmt.Errorf("leases.single_writer[%d]: %q is not a clean path relative to the main checkout", i, p)
 		}
 	}
 	return nil

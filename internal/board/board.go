@@ -30,6 +30,38 @@ func Cell(text, row string) (cell string, err error) {
 	return "", fmt.Errorf("board has no table row %q", row)
 }
 
+// Column returns the cell, trimmed, under the column headed header in the first markdown table
+// line whose first cell, trimmed, equals row. The header is the first line of the row's table, so
+// a column added or moved on the board does not shift which cell is read.
+func Column(text, row, header string) (string, error) {
+	col := -1
+	inTable := false
+	for _, line := range strings.Split(text, "\n") {
+		cells, ok := tableCells(line)
+		switch {
+		case !ok:
+			inTable = false
+		case !inTable:
+			inTable, col = true, index(cells, header)
+		case strings.TrimSpace(cells[0]) != row:
+		case col < 0 || col >= len(cells):
+			return "", fmt.Errorf("board row %q has no %q column", row, header)
+		default:
+			return strings.TrimSpace(cells[col]), nil
+		}
+	}
+	return "", fmt.Errorf("board has no table row %q", row)
+}
+
+func index(cells []string, header string) int {
+	for i, c := range cells {
+		if strings.TrimSpace(c) == header {
+			return i
+		}
+	}
+	return -1
+}
+
 // tableCells splits a markdown table line on every pipe. Neither live board
 // escapes a pipe inside a cell (checked 2026-10-16), so `\|` is not handled.
 func tableCells(line string) ([]string, bool) {

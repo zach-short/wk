@@ -16,7 +16,8 @@ var ErrDown = errors.New("the wk daemon is not running")
 // deadline bounds the dial and the whole exchange (PD-13).
 const deadline = 2 * time.Second
 
-// Client calls the daemon listening on Socket, one connection per call.
+// Client calls the daemon listening on Socket, one connection per call. Unused, like Server:
+// see Server's comment.
 type Client struct{ Socket string }
 
 // Call sends op with in's fields beside it and decodes the reply's data into out; out may be
