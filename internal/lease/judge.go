@@ -14,12 +14,16 @@ type Rules struct {
 }
 
 // Request is one tool call as the hook sees it. Path is the edit tools' file path, raw as the
-// hook input gives it; Command is the `Bash` command.
+// hook input gives it; Command is the `Bash` command. Canon, when set, rewrites each absolute
+// write target of a `Bash` command before it is placed, so a target spelled through a symlink
+// (macOS `/tmp` for `/private/tmp`) is judged in the root it reaches; the caller canonicalises
+// Path and Cwd itself, because Resolve reads no disk.
 type Request struct {
 	Tool    string
 	Cwd     string
 	Path    string
 	Command string
+	Canon   func(string) string
 }
 
 // Decision is the judgment. Reason is empty on an allow and, on a deny, says what to do next.
@@ -82,6 +86,9 @@ func judgeBash(store *Store, cfg Rules, roots []string, req Request) Decision {
 		return allow
 	}
 	for _, t := range writes(req.Cwd, req.Command) {
+		if req.Canon != nil && filepath.IsAbs(t.path) {
+			t.path = req.Canon(t.path)
+		}
 		if d := judgeWrite(store, cfg, roots, t); !d.Allow {
 			return d
 		}

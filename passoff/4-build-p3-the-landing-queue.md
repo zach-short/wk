@@ -1,5 +1,7 @@
 # 4. Build P3, the landing queue: integrate `wk submit`, the landing loop, `wk sync` and `wk land`
 
+> **Claimed `IN FLIGHT` 2026-10-17.**
+
 *Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED). Prompt filled 2026-10-16 by row 2 from `docs/incomplete/landing-layer/PLAN-P2-P4.md` section 3.*
 
 **Model: Fable 5.1. Lane A. Waits on 3; 9 and 10 (the P3 siblings).**

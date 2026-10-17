@@ -61,6 +61,17 @@ func TestWriteTargets(t *testing.T) {
 		{"cd to a variable is refused", `cd $X && rm y`, []string{refused("$")}},
 		{"single-quoted $ is refused", `touch 'a$b'`, []string{refused("$")}},
 		{"find -delete writes its starting point", `find . -name x -delete`, []string{"/w"}},
+		{"a target with .. keeps it for the caller to read through links", `rm sub/e/../web/x.ts /r/a/../b`, []string{"/w/sub/e/../web/x.ts", "/r/a/../b"}},
+		{"audit 4: git rm out/../web/page.ts is unplaceable", `git rm out/../web/page.ts`, []string{pathspec("out/../web/page.ts")}},
+		{"audit 4: git rm -r out/../web is unplaceable", `git rm -r out/../web`, []string{pathspec("out/../web")}},
+		{"audit 4: git mv out/../web/page.ts web/moved.ts is unplaceable", `git mv out/../web/page.ts web/moved.ts`, []string{pathspec("out/../web/page.ts"), "/w/web/moved.ts"}},
+		{"audit 4: git mv -f notes.txt out/../web/page.ts is unplaceable", `git mv -f notes.txt out/../web/page.ts`, []string{"/w/notes.txt", pathspec("out/../web/page.ts")}},
+		{"audit 4: git rm --cached out/../web/page.ts is unplaceable", `git rm --cached out/../web/page.ts`, []string{pathspec("out/../web/page.ts")}},
+		{"audit 4: git -C p rm o/../../a.md is unplaceable", `git -C p rm o/../../a.md`, []string{pathspec("o/../../a.md")}},
+		{"audit 4: git rm :/docs/a.md is unplaceable", `git rm :/docs/a.md`, []string{pathspec(":/docs/a.md")}},
+		{"audit 4: git rm :docs/a.md is unplaceable", `git rm :docs/a.md`, []string{pathspec(":docs/a.md")}},
+		{"audit 4: git rm p/../lnk is unplaceable", `git rm p/../lnk`, []string{pathspec("p/../lnk")}},
+		{"a cd with .. lands cleaned and raw", `cd sub/e/../web && touch x.ts`, []string{"/w/x.ts", "/w/sub/web/x.ts", "/w/sub/e/../web/x.ts"}},
 		{"shift in $(( )) is refused", "echo $((1<<2))\nrm web/x.ts", []string{refused("$")}},
 		{"shift in (( )) is refused", "(( x = 1 << 2 ))\nrm y", []string{refused("(")}},
 		{"nested parentheses in arithmetic are refused", "echo $(( (1+2) << 3 ))\nrm y", []string{refused("$")}},
@@ -77,9 +88,9 @@ func TestWriteTargets(t *testing.T) {
 		{"trailing backslash is refused", "rm web/x.ts \\", []string{refused(`\`)}},
 		{"brace expansion is refused", `rm {web,docs}/x.ts`, []string{refused("{")}},
 		{"brace expansion in a directory is refused", `rm web/{a,b}.ts`, []string{refused("{")}},
-		{"cd in a pipeline", `cd web; cd .. | true; rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts", "/x.ts"}},
+		{"cd in a pipeline", `cd web; cd .. | true; rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts", "/x.ts", "/w/../x.ts", "/w/web/../x.ts"}},
 		{"cd at the end of a pipeline", `true | cd web; rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts"}},
-		{"cd in the background", `cd web; cd .. & rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts", "/x.ts"}},
+		{"cd in the background", `cd web; cd .. & rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts", "/x.ts", "/w/../x.ts", "/w/web/../x.ts"}},
 		{"case is refused for its )", "(cd web; case $x in a) true;; esac; rm x.ts)", []string{refused("(")}},
 		{"eval cd is not followed", `eval cd web; rm x.ts`, []string{"x.ts"}},
 		{"hunt: arithmetic then a redirect", "echo $(( 1 << 2 )) > out\nrm a", []string{refused("$")}},
@@ -94,7 +105,7 @@ func TestWriteTargets(t *testing.T) {
 		{"hunt: ANSI-C quoting", `rm $'web/x.ts'`, []string{refused("$")}},
 		{"hunt: command substitution in quotes", `rm -rf -- "$(pwd)/web"`, []string{refused("$")}},
 		{"hunt: backticks", "rm `pwd`/web", []string{refused("`")}},
-		{"hunt: cd through ..", `cd ./web/../api && rm a`, []string{"/w/a", "/w/api/a"}},
+		{"hunt: cd through ..", `cd ./web/../api && rm a`, []string{"/w/a", "/w/api/a", "/w/./web/../api/a"}},
 		{"hunt: bare cd", `cd web; cd; rm a`, []string{"/w/a", "/w/web/a", "a"}},
 		{"hunt: group is refused", `{ cd web; rm a; }; rm b`, []string{refused("{")}},
 		{"hunt: command substitution is refused", `x=$(cd web; pwd); rm a`, []string{refused("$")}},
@@ -269,6 +280,8 @@ func TestWriteTargets(t *testing.T) {
 }
 
 func refused(c string) string { return unreadablePrefix + c + ">" }
+
+func pathspec(p string) string { return pathspecPrefix + p + ">" }
 
 func TestWriteTargetsWithoutCwd(t *testing.T) {
 	got := WriteTargets("", `touch a /abs/b`)

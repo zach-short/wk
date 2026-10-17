@@ -1,6 +1,9 @@
 package lease
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const (
 	mainRoot = "/r/main"
@@ -151,3 +154,20 @@ func TestJudgeBashGuardOff(t *testing.T) {
 func edit(cwd, path string) Request { return Request{Tool: "Edit", Cwd: cwd, Path: path} }
 
 func bash(cwd, command string) Request { return Request{Tool: "Bash", Cwd: cwd, Command: command} }
+
+// A target spelled through a symlinked directory is judged where Canon places it; without Canon
+// it reads as outside every root and passes, which is why the hook always sets it.
+func TestJudgeCanonPlacesBashTargets(t *testing.T) {
+	var s Store
+	mustClaim(t, &s, rootA, "7", "web/x.ts")
+	mustClaim(t, &s, rootB, "8")
+	req := bash("/r/b", `rm /alias/b/web/x.ts`)
+	if got := Judge(&s, Rules{BashGuard: true}, roots, req); got != allow {
+		t.Fatalf("without Canon, Judge = %+v; the alias is outside every root", got)
+	}
+	req.Canon = func(p string) string { return strings.Replace(p, "/alias/", "/r/", 1) }
+	got := Judge(&s, Rules{BashGuard: true}, roots, req)
+	if got.Allow || !strings.Contains(got.Reason, "leased by row 7") || !strings.Contains(got.Reason, "writes /r/b/web/x.ts") {
+		t.Fatalf("with Canon, Judge = %+v", got)
+	}
+}

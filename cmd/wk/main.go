@@ -36,7 +36,13 @@ const usage = `usage:
   wk [--repo <absolute dir>] hive
   wk [--repo <absolute dir>] pool fill|status
   wk [--repo <absolute dir>] hooks install|uninstall
+  wk [--repo <absolute dir>] claim <row>|--none
+  wk [--repo <absolute dir>] lease add <path>...
+  wk [--repo <absolute dir>] release
+  wk [--repo <absolute dir>] status
+  wk [--repo <absolute dir>] config show
   wk hook worktree-create|worktree-remove|subagent-stop|pre-tool-use < <Claude Code hook input>
+  wk hook lease --repo <absolute main checkout> < <Claude Code hook input>
   wk run [--slot <class>] [--keep] [--trim <path>]... -- <command> [args...]
   wk slots [--json]
 
@@ -73,6 +79,18 @@ wk hook pre-tool-use routes each gate of a Bash command listed in $WK_HOME/<repo
 through wk run --slot, and always exits 0; its misses and errors go to missed.log and
 errors.log in the slots directory.
 
+wk claim reads row <row>'s "Files it owns" cell from leases.board, prints every token it cannot
+read, and leases the paths it read to the workspace holding the directory; it refuses a path
+another workspace leases and names that workspace's row. --none claims no path, for a session
+that does not edit. wk lease add widens the claim, wk release drops it, and wk status lists
+every claim. The store is $WK_HOME/<repo>/leases.json.
+wk config show prints the effective config of $WK_HOME/<repo>.toml as TOML, and whether the
+file was found.
+wk hook lease judges one Edit, Write, MultiEdit, NotebookEdit or Bash call against the leases
+when leases.enabled is true. It prints Claude Code's deny on stdout, logs each deny to
+$WK_HOME/<repo>/hook.log, and always exits 0. wk hooks install adds its two PreToolUse entries
+only while leases.enabled is true.
+
 wk run runs the command after -- with its input, output, signals and exit status unchanged.
 With --slot it first takes a place of that class from $WK_HOME/machine.toml, waiting in
 arrival order while every place is held; without that file, or on any failure of its own, it
@@ -96,6 +114,9 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	if rest := skipRepoFlag(args); len(rest) > 0 && (rest[0] == "run" || isPreToolUse(rest)) {
 		return runInFront(rest, stdout, stderr)
+	}
+	if len(args) >= 2 && args[0] == "hook" && args[1] == "lease" {
+		return runLeaseHook(args[2:], stdout)
 	}
 	repoDir, rest, err := splitRepoFlag(args)
 	if err != nil || (len(rest) == 0 && !interactive()) {
@@ -142,6 +163,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runHooks(home, repoDir, rest[1], stdout, stderr)
 	case rest[0] == "slots":
 		return runSlots(home, rest[1:], stdout, stderr)
+	case rest[0] == "claim" || rest[0] == "lease" || rest[0] == "release" || rest[0] == "status":
+		return runLeases(home, repoDir, rest, stdout, stderr)
+	case len(rest) == 2 && rest[0] == "config" && rest[1] == "show":
+		return runConfigShow(home, repoDir, stdout, stderr)
 	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-create":
 		return runWorktreeCreate(home, stdout, stderr)
 	case len(rest) == 2 && rest[0] == "hook" && rest[1] == "worktree-remove":
@@ -207,6 +232,61 @@ func runHooks(home, repoDir, what string, stdout, stderr io.Writer) int {
 		return fail(stderr, err, exitError)
 	}
 	return fail(stderr, env.HooksInstall(exe, stdout), exitError)
+}
+
+// runLeaseHook is wk hook lease. It exits 0 on every path, a panic included: the hook denies by
+// printing JSON, and exit 2 would block a call by accident (owner amendments, 2026-10-16). A
+// panic outside wk.LeaseHook prints the deny, because the guard fails closed (audit 1, N1).
+func runLeaseHook(args []string, stdout io.Writer) (code int) {
+	defer func() {
+		if r := recover(); r != nil {
+			wk.LeaseDeny(stdout, fmt.Sprintf("wk: the lease hook failed (%v); report it", r))
+			code = exitOK
+		}
+	}()
+	home, err := wkHome()
+	if err != nil {
+		home = os.Getenv("WK_HOME")
+	}
+	wk.LeaseHook(home, args, stdin, stdout)
+	return exitOK
+}
+
+// runLeases serves claim, lease add, release and status for the workspace holding repoDir.
+func runLeases(home, repoDir string, rest []string, stdout, stderr io.Writer) int {
+	env, err := wk.Open(home, repoDir, stderr)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	switch {
+	case len(rest) == 2 && rest[0] == "claim" && rest[1] == "--none":
+		err = env.ClaimNone(repoDir, stdout)
+	case len(rest) == 2 && rest[0] == "claim" && !strings.HasPrefix(rest[1], "-"):
+		err = env.Claim(repoDir, rest[1], stdout)
+	case len(rest) > 2 && rest[0] == "lease" && rest[1] == "add":
+		err = env.LeaseAdd(repoDir, rest[2:], stdout)
+	case len(rest) == 1 && rest[0] == "release":
+		err = env.Release(repoDir, stdout)
+	case len(rest) == 1 && rest[0] == "status":
+		err = env.LeaseStatus(stdout)
+	default:
+		return fail(stderr, fmt.Errorf("unexpected arguments: %q", strings.Join(rest, " ")), exitUsage)
+	}
+	return fail(stderr, err, exitError)
+}
+
+// runConfigShow prints the effective config, or why the file cannot be read (D26).
+func runConfigShow(home, repoDir string, stdout, stderr io.Writer) int {
+	repo, err := gitx.Resolve(repoDir)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	path := filepath.Join(home, repo.Name+".toml")
+	cfg, found, err := config.Load(path)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	return fail(stderr, config.Show(stdout, cfg, path, found), exitError)
 }
 
 // skipRepoFlag drops a leading --repo and its value unchecked. wk run and wk hook pre-tool-use

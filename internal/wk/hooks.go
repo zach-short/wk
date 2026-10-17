@@ -35,8 +35,9 @@ func checkInstalled(exe string) error {
 	return nil
 }
 
-// HooksInstall writes wk's WorktreeCreate, WorktreeRemove, SubagentStop and PreToolUse entries
-// into the main checkout's settings file and the template's (BD-8), with the permission twin of
+// HooksInstall writes wk's WorktreeCreate, WorktreeRemove, SubagentStop and PreToolUse entries,
+// and the lease hook's two when leases are on, into the main checkout's settings file and the
+// template's (BD-8), with the permission twin of
 // each rule that covers a gate the PreToolUse hook wraps (SLOTS-PLAN.md SB-17). Never the user's
 // ~/.claude/settings.json and never the tracked .claude/settings.json (D6): the hooks are this
 // machine's, not the repository's. Both are read, because their rules need twins too.
@@ -52,14 +53,34 @@ func (e *Env) HooksInstall(exe string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return e.eachSettingsFile(out, func(path string) (bool, error) { return installWithTwins(path, exe, shared, twins) })
+	leases, err := e.leaseEntries()
+	if err != nil {
+		return err
+	}
+	return e.eachSettingsFile(out, func(path string) (bool, error) {
+		return installWithTwins(path, exe, shared, twins, leases...)
+	})
+}
+
+// leaseEntries are the lease hook's two entries when leases.enabled is true, and none otherwise,
+// so an install with leases off also removes them (owner amendments, 2026-10-16). The hook reads
+// its state under the main checkout's base name, which must be the name wk files the
+// repository under, or the hook would read another file and allow.
+func (e *Env) leaseEntries() ([]settings.Entry, error) {
+	if !e.Cfg.Leases.Enabled {
+		return nil, nil
+	}
+	if base := filepath.Base(e.Repo.Primary); base != e.Repo.Name {
+		return nil, fmt.Errorf("the main checkout's name %q is not the repository's name %q; the lease hook cannot find its state", base, e.Repo.Name)
+	}
+	return settings.LeaseEntries(e.Repo.Primary), nil
 }
 
 // installWithTwins hands InstallTwins the whole twin set and the file's own rules among the
 // sources, because it removes every twin it does not compute (row 213 audit, N2). The twins go
 // in before the hook, so a refused source stops the install before anything wraps a gate: a
 // wrapped gate without its deny twin would run with no sign.
-func installWithTwins(path, exe string, shared [][]byte, twins []settings.Twin) (bool, error) {
+func installWithTwins(path, exe string, shared [][]byte, twins []settings.Twin, leases ...settings.Entry) (bool, error) {
 	local, err := readSource(path)
 	if err != nil {
 		return false, err
@@ -68,7 +89,7 @@ func installWithTwins(path, exe string, shared [][]byte, twins []settings.Twin) 
 	if err != nil {
 		return false, err
 	}
-	hooksChanged, err := settings.Install(path, exe)
+	hooksChanged, err := settings.Install(path, exe, leases...)
 	return twinsChanged || hooksChanged, err
 }
 

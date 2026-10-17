@@ -13,13 +13,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 // Entry is one hook wk registers. Verb is what follows the wk binary in its command. Sole
 // marks an event whose hook gives Claude Code a single answer (a path, a removal), where a
 // second tool's hook beside wk's would race it, so wk refuses to share the event. Guarded ends
-// the command with guard. Matcher is the tool name Claude Code filters the event on.
+// the command with guard. Matcher is the tool name Claude Code filters the event on. OnFailure
+// "block" makes Claude Code refuse the tool call when the hook itself fails: a missing binary, a
+// crash, a timeout (verified on 2.1.301, PLAN-P2-P4.md section 0).
 type Entry struct {
 	Event          string
 	Verb           string
@@ -27,6 +30,7 @@ type Entry struct {
 	Sole           bool
 	Guarded        bool
 	Matcher        string `json:"matcher,omitempty"`
+	OnFailure      string
 }
 
 // Entries are the hooks `wk hooks install` writes. WorktreeCreate's timeout is Claude Code's
@@ -48,12 +52,33 @@ var Entries = []Entry{
 // of SLOTS-PLAN.md checks.
 const guard = " || true"
 
+// leaseVerb starts the lease hook's verb; the main checkout's path follows it.
+const leaseVerb = "hook lease --repo "
+
+// LeaseEntries are the two PreToolUse entries of the lease hook for the repository whose main
+// checkout is primary (D11, PLAN-P2-P4.md section 2). The edit tools' entry blocks on any
+// failure of the hook, so a missing or broken binary refuses edits (D12). The Bash entry does
+// not, and is guarded, because a missing or older binary would otherwise block every Bash call,
+// the reinstall included; the hook never exits non-zero on purpose, it denies with JSON.
+func LeaseEntries(primary string) []Entry {
+	verb := leaseVerb + quote(primary)
+	return []Entry{
+		{Event: "PreToolUse", Verb: verb, TimeoutSeconds: 5, Matcher: "Edit|Write|MultiEdit|NotebookEdit", OnFailure: "block"},
+		{Event: "PreToolUse", Verb: verb, TimeoutSeconds: 5, Matcher: "Bash", Guarded: true},
+	}
+}
+
 // Command is the hook command that runs verb on the wk binary at exe.
 func Command(exe, verb string) string {
-	if strings.ContainsAny(exe, " '\"\\$`") {
-		exe = "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
+	return quote(exe) + " " + verb
+}
+
+// quote single-quotes s for the shell when it holds a character the shell would read.
+func quote(s string) string {
+	if strings.ContainsAny(s, " '\"\\$`") {
+		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 	}
-	return exe + " " + verb
+	return s
 }
 
 func (en Entry) command(exe string) string {
@@ -71,14 +96,16 @@ type hookGroup struct {
 	Hooks   []map[string]any `json:"hooks"`
 }
 
-// Install makes path hold exactly one wk entry for each of Entries, running the wk binary at
-// exe. It refuses a file that is not a JSON object, and another tool's hook on a Sole event.
-// changed is false when the file already held those entries.
-func Install(path, exe string) (changed bool, err error) {
+// Install makes path hold exactly one wk entry for each of Entries and extra, running the wk
+// binary at exe; a wk entry of an event that is in neither is removed. It refuses a file that is
+// not a JSON object, and another tool's hook on a Sole event. changed is false when the file
+// already held those entries.
+func Install(path, exe string, extra ...Entry) (changed bool, err error) {
+	all := append(slices.Clone(Entries), extra...)
 	return edit(path, func(root *object) error {
 		return root.within("hooks", func(hooks *object) error {
-			for _, en := range Entries {
-				if err := put(hooks, en, exe); err != nil {
+			for _, ev := range events(all) {
+				if err := put(hooks, ev, all, exe); err != nil {
 					return err
 				}
 			}
@@ -87,21 +114,46 @@ func Install(path, exe string) (changed bool, err error) {
 	})
 }
 
-// put replaces wk's hooks on en's event with one group that runs en, after every other tool's.
-func put(hooks *object, en Entry, exe string) error {
-	kept, err := withoutWK(hooks.get(en.Event), en.Event)
+// events lists the events of entries once each, in first-seen order.
+func events(entries []Entry) []string {
+	var out []string
+	for _, en := range entries {
+		if !slices.Contains(out, en.Event) {
+			out = append(out, en.Event)
+		}
+	}
+	return out
+}
+
+// put replaces wk's hooks on event with one group for each of entries on that event, after
+// every other tool's.
+func put(hooks *object, event string, entries []Entry, exe string) error {
+	kept, err := withoutWK(hooks.get(event), event)
 	if err != nil {
 		return err
 	}
-	if en.Sole && len(kept) > 0 {
-		return fmt.Errorf("already has a %s hook that is not wk's; wk will not add a second", en.Event)
+	for _, en := range entries {
+		if en.Event != event {
+			continue
+		}
+		if en.Sole && len(kept) > 0 {
+			return fmt.Errorf("already has a %s hook that is not wk's; wk will not add a second", en.Event)
+		}
+		group, err := en.group(exe)
+		if err != nil {
+			return err
+		}
+		kept = append(kept, group)
 	}
+	return hooks.setOrRemove(event, kept)
+}
+
+func (en Entry) group(exe string) (json.RawMessage, error) {
 	hook := map[string]any{"type": "command", "command": en.command(exe), "timeout": en.TimeoutSeconds}
-	entry, err := marshal(hookGroup{Matcher: en.Matcher, Hooks: []map[string]any{hook}})
-	if err != nil {
-		return err
+	if en.OnFailure != "" {
+		hook["onFailure"] = en.OnFailure
 	}
-	return hooks.setOrRemove(en.Event, append(kept, entry))
+	return marshal(hookGroup{Matcher: en.Matcher, Hooks: []map[string]any{hook}})
 }
 
 // Uninstall removes wk's entries from every event and every permission twin from allow, ask and
@@ -213,18 +265,24 @@ func withoutWK(raw json.RawMessage, event string) ([]json.RawMessage, error) {
 // removed.
 func IsWK(command string) bool {
 	command = strings.TrimSuffix(strings.TrimSpace(command), guard)
+	if rest, _, ok := strings.Cut(command, " "+leaseVerb); ok {
+		return runsWK(rest)
+	}
 	for _, en := range Entries {
-		rest, ok := strings.CutSuffix(command, " "+en.Verb)
-		if !ok {
-			continue
+		if rest, ok := strings.CutSuffix(command, " "+en.Verb); ok {
+			return runsWK(rest)
 		}
-		words := strings.Fields(rest)
-		for len(words) > 1 && strings.Contains(words[0], "=") {
-			words = words[1:]
-		}
-		return len(words) > 0 && filepath.Base(strings.Trim(strings.Join(words, " "), "'")) == "wk"
 	}
 	return false
+}
+
+// runsWK says whether rest, the part of a hook command before its verb, is the wk binary.
+func runsWK(rest string) bool {
+	words := strings.Fields(rest)
+	for len(words) > 1 && strings.Contains(words[0], "=") {
+		words = words[1:]
+	}
+	return len(words) > 0 && filepath.Base(strings.Trim(strings.Join(words, " "), "'")) == "wk"
 }
 
 func sameJSON(a, b []byte) bool {
