@@ -145,7 +145,7 @@ Not built, and why:
 - Predictions run concurrently (section 9): the queue lands in order on one ref, so one goroutine is the whole concurrency. Reversal: none needed.
 - `wk submit` from the main checkout (D15 refuses it).
 - Re-prediction at apply time: the CAS refuses a moved ref, and the loop predicts again on the next pass. Reversal: none.
-- One tree builder: row 10's `Sync` copies row 9's private-index lines so the two siblings share no file. Reversal: row 4 passes `changeset.Tree` into `landing.Sync` and deletes the copy.
+- One tree builder: row 10's `Sync` reproduces the private-index sequence that prompt 9 step 1 spells out (`GIT_INDEX_FILE`, `read-tree HEAD`, `add -A`, `write-tree`), because the two rows build beside each other and share no file. Reversal: row 4 passes `changeset.Tree` into `landing.Sync` and deletes the second copy.
 
 ## 4. P4, one gate run per batch
 
@@ -207,7 +207,7 @@ Not built, and why:
 | 12 | P4 sibling | Opus 5.5 | I | 9 | Opus 5.5 |
 | 5 | P4 integration | Opus 5.5 | A | 4; 11, 12 | Opus 5.5 |
 
-A sibling waits only on the rows whose code it imports: rows 9, 10 and 11 import only `internal/gitx` and `internal/testrepo` (row 10 copies row 9's private-index lines; row 11's tests are shell scripts and a captured `vm_stat`), so they can start with the P2 siblings; row 12 imports `internal/changeset`, row 9's package, so it waits on 9. Each sibling has its own lane because the board runs one lane's items in order.
+A sibling waits only on the rows whose code it imports: rows 9 and 10 import only `internal/gitx` and `internal/testrepo` (row 10 reproduces the private-index sequence of prompt 9 step 1 rather than importing row 9), and row 11 imports no internal package (its tests are shell scripts and a captured `vm_stat`), so all three can start with the P2 siblings; row 12 imports `internal/changeset`, row 9's package, so it waits on 9. Each sibling has its own lane because the board runs one lane's items in order.
 
 Every dial of sections 2 to 4 lives in `~/.wk/<repo>.toml` and nothing is compiled in (D19, D26). The section 5 dials of the design that this plan drops are named under each phase's "Not built, and why". Each integration row installs the binary (`GOTOOLCHAIN=local go install ./cmd/wk`) before it writes any new key, because the hooks run `~/go/bin/wk` and an older binary refuses a file with keys it does not know (`PLAN.md`, "As built, phase 3", the 15:18 incident).
 
