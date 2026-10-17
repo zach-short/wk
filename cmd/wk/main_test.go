@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zach-short/wk/internal/config"
 	"github.com/zach-short/wk/internal/testrepo"
 	"github.com/zach-short/wk/internal/wk"
 )
@@ -246,5 +247,97 @@ func TestWorktreeRemoveRefusesBadInput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"hook", "worktree-remove"}, &stdout, &stderr); code != exitError || !strings.Contains(stderr.String(), "not absolute") {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}
+
+// bareRepo is the demo repository with its fixture config removed, as a repository wk has never
+// seen, and with a package.json committed beside the fixture's bun.lock and ignored .env.
+func bareRepo(t *testing.T) (testrepo.Fixture, string) {
+	t.Helper()
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	path := filepath.Join(f.Home, "demo.toml")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	f.Write(t, "package.json", "{}\n")
+	f.Commit(t, "add package.json")
+	return f, path
+}
+
+func TestSetupYesWritesAConfigThatLoads(t *testing.T) {
+	f, path := bareRepo(t)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "setup", "--yes"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if want := path + "\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want exactly %q", stdout.String(), want)
+	}
+	cfg, found, err := config.Load(path)
+	if err != nil || !found {
+		t.Fatalf("written config does not load: found %v, err %v", found, err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`refresh_on = "bun.lock"`, `"node_modules"`, `".env"`, `base = "main"`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("config lacks %s:\n%s", want, body)
+		}
+	}
+	if cfg.Landing.Enabled {
+		t.Error("setup --yes turned landing on")
+	}
+	for _, want := range []string{"wk setup: base main", "wk setup: clone dir node_modules", "wk setup: copy file .env", "wk setup: install bun install"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestSetupYesRefusesAnExistingConfig(t *testing.T) {
+	f, path := bareRepo(t)
+	const mine = "# hand-written note\n[workspace]\nbase = \"trunk\"\n"
+	if err := os.WriteFile(path, []byte(mine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "setup", "--yes"}, &stdout, &stderr); code != exitError {
+		t.Fatalf("exit %d, want %d\n%s", code, exitError, stderr.String())
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), path) {
+		t.Fatalf("stdout %q, stderr %q, want nothing and the file's name", stdout.String(), stderr.String())
+	}
+	if got, _ := os.ReadFile(path); string(got) != mine {
+		t.Fatalf("the config changed:\n%s", got)
+	}
+}
+
+func TestSetupPrintWritesNothing(t *testing.T) {
+	f, path := bareRepo(t)
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "setup", "--print"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `refresh_on = "bun.lock"`) {
+		t.Fatalf("stdout is not the config:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("--print wrote %s (stat err %v)", path, err)
+	}
+}
+
+func TestSetupNeedsYesOrPrint(t *testing.T) {
+	f, path := bareRepo(t)
+	for _, args := range [][]string{{"setup"}, {"setup", "--no"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(append([]string{"--repo", f.Repo}, args...), &stdout, &stderr); code != exitUsage {
+			t.Fatalf("%v: exit %d\n%s", args, code, stderr.String())
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%v wrote %s", args, path)
+		}
 	}
 }

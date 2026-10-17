@@ -29,6 +29,7 @@ import (
 
 const usage = `usage:
   wk [--repo <absolute dir>]
+  wk [--repo <absolute dir>] setup --yes [--print]
   wk [--repo <absolute dir>] template refresh
   wk [--repo <absolute dir>] new <row> [--sparse|--full]
   wk [--repo <absolute dir>] gc [--apply|--json]
@@ -52,6 +53,10 @@ const usage = `usage:
 
 wk alone, in a terminal, opens setup: it reads the repository, writes its config and warms the
 template. Once the config exists it opens a home screen instead, and never overwrites the file.
+wk setup --yes is that setup with no terminal and no questions: it writes the config with each
+option the guided setup starts on, and nothing else. It prints the config's path on stdout and
+each choice it made on stderr, and exits 1 without writing when the config exists. --print writes
+nothing and prints the config on stdout. It builds no template and installs no hook or schedule.
 
 The repository is the one holding --repo, or the current directory. Config is read from
 $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspace's absolute
@@ -149,6 +154,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case len(rest) == 0:
 		return runSetup(home, repoDir, stderr)
+	case rest[0] == "setup":
+		return runSetupYes(home, repoDir, rest[1:], stdout, stderr)
 	case len(rest) == 2 && rest[0] == "template" && rest[1] == "refresh":
 		env, err := wk.Open(home, repoDir, stderr)
 		if err != nil {
@@ -675,6 +682,55 @@ func runSetup(home, repoDir string, stderr io.Writer) int {
 		return runHive(home, plan.Primary, nil, stderr)
 	}
 	return exitOK
+}
+
+// runSetupYes is the guided setup with its defaults taken and no terminal: the config is the one
+// the wizard would write with every key left alone. It never overwrites a config. The written
+// path is the only line on stdout, as with wk new; the choices go to stderr.
+func runSetupYes(home, repoDir string, args []string, stdout, stderr io.Writer) int {
+	printOnly, err := parseSetup(args)
+	if err != nil {
+		return fail(stderr, err, exitUsage)
+	}
+	repo, err := gitx.Resolve(repoDir)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	path := filepath.Join(home, repo.Name+".toml")
+	choices := setup.Defaults(setup.Detect(repo.Primary))
+	text := setup.Render(repo.Name, choices)
+	if printOnly {
+		_, _ = fmt.Fprint(stdout, text)
+		return exitOK
+	}
+	if err := setup.Write(path, text); err != nil {
+		return fail(stderr, err, exitError)
+	}
+	for _, l := range setup.Describe(choices) {
+		_, _ = fmt.Fprintln(stderr, "wk setup: "+l)
+	}
+	_, _ = fmt.Fprintln(stdout, path)
+	return exitOK
+}
+
+// parseSetup reports whether --print was given. wk setup needs --yes or --print: the guided
+// setup is a bare wk.
+func parseSetup(args []string) (printOnly bool, err error) {
+	var yes bool
+	for _, a := range args {
+		switch a {
+		case "--yes":
+			yes = true
+		case "--print":
+			printOnly = true
+		default:
+			return false, fmt.Errorf("unexpected argument to wk setup: %q", a)
+		}
+	}
+	if !yes && !printOnly {
+		return false, fmt.Errorf("wk setup needs --yes or --print; the guided setup is a bare wk")
+	}
+	return printOnly, nil
 }
 
 // setupPlan reads what setup starts from. The repository is only read for the wizard; the home

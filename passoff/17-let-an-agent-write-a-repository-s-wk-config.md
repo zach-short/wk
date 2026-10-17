@@ -62,3 +62,31 @@ GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -rac
 If it fails only on `TestHookPreToolUseTiming` in `internal/slot` under a load average above about 35, run it again when the load is lower, and report every run with its load.
 
 Done when the five tests pass, each fails with its fix off, and the gate exits 0 in your worktree. Hand back the gate output, the diffstat and the close-out. Commit on your worktree branch only, with no `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Close-out, 2026-10-17
+
+**What changed.** `wk [--repo <dir>] setup --yes [--print]` now writes `$WK_HOME/<repo>.toml` from what the guided setup offers by default, with no terminal.
+
+- `internal/setup/auto.go` (new): `Defaults(Found) Choices` takes every option whose `On` is true, every install whose option is on (in `Found` order), leaves `Schedule` and `Warm` false, and sets `Base` to `main`, else `master`, else the current branch, else `main`. `Describe(Choices)` returns one line per choice.
+- `cmd/wk/main.go`: `runSetupYes` and `parseSetup`, a `setup` case in `run()`, a usage line and a usage paragraph. The written path is the only line on stdout; each choice goes to stderr as `wk setup: <choice>`. An existing config is refused by `setup.Write` (hard link, so a config made in the meantime is also safe): exit 1, stderr names the file, stdout empty. `setup` with neither `--yes` nor `--print`, or with any other argument, prints the usage error (exit 2).
+- `README.md`: one paragraph under "Set up a repository".
+
+**Decisions to know.**
+- The base rule held. No fact contradicted it: `Found.Branches` puts the current branch first, which is the feature branch in the test, so `main` is chosen by name.
+- `--print` does not check for an existing config. It writes nothing, so it works as a preview of what `--yes` would write even where a config exists. `--yes --print` together also prints.
+- `Describe` lists the install's lockfile in its line (`install bun install --frozen-lockfile (rebuilds on bun.lock)`).
+
+**Tests, each with its fix off.** Mutations were made on copies kept in the scratchpad and restored; `diff` showed both files identical afterwards.
+
+| Test | Fix turned off | Result |
+|---|---|---|
+| `TestDefaultsTakeEachOptionsOn` (`internal/setup/auto_test.go`) | `if o.On` became `if o.On \|\| true` in `Defaults` and `taken` | fails: tracked `.env.production` and the off `go mod download` install were taken |
+| `TestDefaultsPickMainOverTheCurrentBranch` | `defaultBase` stopped looking for `main` and `master` | fails (also `TestDefaultBaseFallsBack`, an extra table test) |
+| `TestSetupYesWritesAConfigThatLoads` (`cmd/wk/main_test.go`) | the `setup` case renamed so it never matches | fails: usage error, no file |
+| `TestSetupYesRefusesAnExistingConfig` | `setup.Write` replaced by `os.WriteFile` | fails: the config changed |
+| `TestSetupPrintWritesNothing` | `if printOnly` became `if printOnly && false` | fails: stdout is not the config (it wrote the file instead) |
+| `TestSetupNeedsYesOrPrint` (extra) | the `--yes`/`--print` check disabled | fails: exit 0 and a file written |
+
+**Gate** (worktree `dl-row-17-build`, `GOTOOLCHAIN=local`): every package `ok`, `0 issues.`, exit 0. Wall time 1:07 (67 s; the `internal/wk` package took 60 s). Load average at start `3.28 2.69 3.43`, at end `3.35 2.87 3.44`, so `TestHookPreToolUseTiming` was not at risk.
+
+**Not done, by the prompt's scope.** The command was not run against any real repository. No hook, schedule or template warm is run by `setup --yes`.

@@ -24,6 +24,8 @@ Run `wk` with no arguments inside a repository, in a terminal. The first time, i
 
 Setup never overwrites a config, because a config can hold hand-written notes. Once the file exists, a bare `wk` opens a home screen that shows the settings in use and offers to open the hive. Piped or run without a terminal, a bare `wk` prints the usage text.
 
+An agent without a terminal runs `wk setup --yes` instead. It writes `~/.wk/<repo>.toml` with every choice the guided setup starts on: each clone directory, each untracked `.env` file, `.claude/settings.local.json` when present, the first install found, and a base of `main` (else `master`, else the checked-out branch). It prints the path of the file on stdout and each choice on stderr, refuses with exit 1 when the file exists, and builds no template and installs no hook or schedule. `wk setup --print` writes nothing and prints the config on stdout. Read the result back with `wk config show`.
+
 ## Make a workspace
 
 ```bash
