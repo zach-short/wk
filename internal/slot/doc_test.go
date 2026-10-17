@@ -35,6 +35,9 @@ func TestMain(m *testing.M) {
 		os.Exit(runAsWK(encoded, os.Args[1:]))
 	}
 	testrepo.Isolate()
+	// The runner may itself run under wk run. A held place in its environment would make every
+	// run started here a nested run, which takes no place and turns the queue tests red.
+	_ = os.Unsetenv(heldEnv)
 	os.Exit(m.Run())
 }
 
