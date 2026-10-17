@@ -61,6 +61,7 @@ func TestWriteTargets(t *testing.T) {
 		{"cd to a variable is refused", `cd $X && rm y`, []string{refused("$")}},
 		{"single-quoted $ is refused", `touch 'a$b'`, []string{refused("$")}},
 		{"find -delete writes its starting point", `find . -name x -delete`, []string{"/w"}},
+		{"a target with .. keeps it for the caller to read through links", `rm sub/e/../web/x.ts /r/a/../b`, []string{"/w/sub/e/../web/x.ts", "/r/a/../b"}},
 		{"shift in $(( )) is refused", "echo $((1<<2))\nrm web/x.ts", []string{refused("$")}},
 		{"shift in (( )) is refused", "(( x = 1 << 2 ))\nrm y", []string{refused("(")}},
 		{"nested parentheses in arithmetic are refused", "echo $(( (1+2) << 3 ))\nrm y", []string{refused("$")}},

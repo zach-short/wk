@@ -124,3 +124,26 @@ To turn leases on, the owner:
 1. In `~/.wk/ezhomesteading.toml`, sets `enabled = true` under `[leases]`, then runs `wk hooks install` in `~/Projects/ezhomesteading`.
 2. In `~/.wk/wk.toml`, sets `enabled = true` under `[leases]`, then runs `wk --repo /Users/zachshort/Projects/wk hooks install`.
 3. From then on, every session runs `wk claim <row>` or `wk claim --none` in its workspace before its first edit, and the lead runs `wk claim --none` and `wk lease add HANDOFF.md PASSOFF.md` in the main checkout before it writes the ledger files.
+
+### Fix round 1, 2026-10-17
+
+Audit 1 of `f0b1eb8` (`docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-1.md`) found four silent allows of a leased write. Each now denies, and each has a test that fails against `f0b1eb8` and passes now (run with the new test file over `git archive f0b1eb8`).
+
+- B1, wrong letter case on macOS. `judgeFolded` in `internal/wk/leasehook.go` folds the request, the roots, the store and the single-writer list to lower case when the volume ignores case (`caseInsensitive`: `.git` and `.GIT` are one entry, or it cannot tell), and `checkTargets` refuses a non-ASCII path below a worktree on such a volume, because Unicode normalisation gives it other spellings that lower case does not fold.
+- B2, a cwd in no worktree. `checkTargets` (was `callerRoot`) denies every target inside a worktree when the session's cwd is in none.
+- B3, a dangling link. `kernelPath` in `internal/wk/lease.go` replaces `canonical`'s `EvalSymlinks` walk: it reads each component with `Lstat`, follows each link with `Readlink` (a dangling one included), applies `..` after the link before it, and stops at 32 links; a loop or an unreadable link becomes a target the judgment refuses. `canonical` stays for paths from git and the command line.
+- B4, a link followed by `..`. `place` in `internal/lease/bash.go` returns a target with a `..` component uncleaned (the only change to the walk; every other target is cleaned as before), and the hook joins a relative `file_path` to the cwd without cleaning, so `kernelPath` sees the link before the `..`.
+- N1 and N2: `LeaseHook` prints the deny before it logs, the log cannot panic out, and `runLeaseHook` prints the deny through the new `wk.LeaseDeny` for a panic outside it. Test `TestHookPanicIsADeny` (it passes on `f0b1eb8` too, because that panic was inside `decide`).
+- N3 and N4: README corrections, and the hand-back line below.
+- N5 and N6 are left as they are.
+
+Build-level calls, each with its reversal:
+
+- B2's rule: a session whose cwd is in no worktree of the repository may not write into any worktree; a path outside every worktree stays allowed. Reversal: allow such a session and judge the path under the root that holds it, which is the silent allow of B2.
+- Folding to lower case makes the hook's messages name paths in lower case on macOS. Reversal: correct the request's case against the known roots and leases instead, keeping the messages in their written case, at about 30 more lines.
+- `rm` of a symbolic link is judged at the link's target, because the hook follows the last component too. Over-refusal only. Reversal: do not follow the last component for `rm` and `unlink`.
+- `ln -s <leased file> dang2.ts` stays allowed: it writes only the new link in the session's own worktree, and a later write through the link is refused by B3's fix.
+
+Hand-back, added: a workspace keeps the settings it was made with. After setting `enabled = true` (or back to false), run `wk hooks install`, which writes the main checkout's and the template's `.claude/settings.local.json` only, then copy the main checkout's file into each existing workspace, or remove and make each workspace again. Running `wk --repo <workspace> hooks install` does not reach a workspace's own file.
+
+Not verified this round: whether Claude Code 2.1.301's `Write` follows a dangling link (B3) or keeps a `..` in `file_path` (B4), and whether a session's hook `cwd` can lie outside its project (B2); no `claude -p` was run. `go install` was not run and `~/.wk` was not touched, so `~/go/bin/wk` is still the code of `5a93108`.

@@ -41,19 +41,27 @@ type hookDenial struct {
 // LeaseHook answers `wk hook lease --repo <primary>` for one PreToolUse call read from in. A
 // deny is printed on out as JSON; an allow prints nothing. It never runs git (PD-2) and its
 // caller always exits 0, so Claude Code blocks only on the printed deny; a panic is a deny too,
-// because the guard fails closed (D12).
+// because the guard fails closed (D12). The deny is printed before the log line is written, so a
+// failure of the log cannot lose it.
 func LeaseHook(home string, args []string, in io.Reader, out io.Writer) {
 	start := time.Now()
 	h := leaseHook{home: home}
 	d := h.decide(args, in)
 	if !d.Allow {
-		var o hookDenial
-		o.HookSpecificOutput.HookEventName = "PreToolUse"
-		o.HookSpecificOutput.PermissionDecision = "deny"
-		o.HookSpecificOutput.PermissionDecisionReason = d.Reason
-		_ = json.NewEncoder(out).Encode(o)
+		LeaseDeny(out, d.Reason)
 	}
+	defer func() { _ = recover() }()
 	h.logLine(d, time.Since(start))
+}
+
+// LeaseDeny prints Claude Code's PreToolUse deny with reason on out. The command line calls it for
+// a panic outside LeaseHook, so every failure of the hook verb refuses the call.
+func LeaseDeny(out io.Writer, reason string) {
+	var o hookDenial
+	o.HookSpecificOutput.HookEventName = "PreToolUse"
+	o.HookSpecificOutput.PermissionDecision = "deny"
+	o.HookSpecificOutput.PermissionDecisionReason = reason
+	_ = json.NewEncoder(out).Encode(o)
 }
 
 // leaseHook carries one call's state, so the log line can name what was judged.
@@ -100,7 +108,7 @@ func hookPrimary(args []string, home string) (string, error) {
 // amendments, 2026-10-16).
 func (h *leaseHook) skipsBash() bool {
 	cmd := h.input.ToolInput.Command
-	return runsOnlyWK(cmd) || len(lease.WriteTargets(canonical(h.input.Cwd), cmd)) == 0
+	return runsOnlyWK(cmd) || len(lease.WriteTargets(h.input.Cwd, cmd)) == 0
 }
 
 // runsOnlyWK is true for a single wk command: the first word is the wk binary and no operator,
@@ -129,28 +137,84 @@ func (h *leaseHook) judge(primary string) lease.Decision {
 	if f.Primary != "" && f.Primary != primary {
 		return lease.Decision{Reason: fmt.Sprintf("wk: %s belongs to %s, not %s; two repositories share the name %s", leasesPath(filepath.Join(h.home, h.name)), f.Primary, primary, h.name)}
 	}
-	req := h.request()
-	roots := h.roots(f, primary, req)
-	if d := callerRoot(roots, req); !d.Allow {
+	return h.judgeFolded(f, cfg.Leases, primary)
+}
+
+// judgeFolded judges with every path folded to lower case on a volume that ignores case (audit 1,
+// B1): there `WEB/Page.ts` is the file `web/page.ts` leases, and the judgment compares bytes.
+func (h *leaseHook) judgeFolded(f leaseFile, l config.Leases, primary string) lease.Decision {
+	fold := func(p string) string { return p }
+	if caseInsensitive(primary) {
+		fold = strings.ToLower
+	}
+	req, err := h.request()
+	if err != nil {
+		return lease.Decision{Reason: "wk: " + err.Error()}
+	}
+	roots := foldAll(h.roots(f, primary, req), fold)
+	canon := req.Canon
+	req.Path, req.Cwd = fold(req.Path), fold(req.Cwd)
+	req.Canon = func(p string) string { return fold(canon(p)) }
+	if d := checkTargets(roots, req, fold); !d.Allow {
 		return d
 	}
-	return lease.Judge(&f.Store, lease.Rules{SingleWriter: cfg.Leases.SingleWriter, BashGuard: cfg.Leases.BashGuard}, roots, req)
+	store := foldStore(f.Store, fold)
+	return lease.Judge(&store, lease.Rules{SingleWriter: foldAll(l.SingleWriter, fold), BashGuard: l.BashGuard}, roots, req)
 }
 
-func (h *leaseHook) request() lease.Request {
+// caseInsensitive reports whether the volume holding primary ignores letter case, as APFS and HFS+
+// do by default: `.git` and `.GIT` name one entry. When it cannot tell it says yes, because
+// folding on a case-sensitive volume only refuses more.
+func caseInsensitive(primary string) bool {
+	a, errA := os.Lstat(filepath.Join(primary, ".git"))
+	b, errB := os.Lstat(filepath.Join(primary, ".GIT"))
+	return errA != nil || errB == nil && os.SameFile(a, b)
+}
+
+func foldAll(paths []string, fold func(string) string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = fold(p)
+	}
+	return out
+}
+
+func foldStore(s lease.Store, fold func(string) string) lease.Store {
+	out := lease.Store{Workspaces: map[string]lease.Workspace{}}
+	for root, ws := range s.Workspaces {
+		ws.Leases = foldAll(ws.Leases, fold)
+		out.Workspaces[fold(root)] = ws
+	}
+	return out
+}
+
+// request builds the judgment's request with the edit's path and the cwd read as the kernel reads
+// them, and Canon doing the same for each Bash target; a link loop or an unreadable link is an
+// error for an edit and an unplaceable target for Bash, so both deny.
+func (h *leaseHook) request() (lease.Request, error) {
 	ti := h.input.ToolInput
-	req := lease.Request{Tool: h.input.ToolName, Cwd: canonical(h.input.Cwd), Command: ti.Command, Canon: canonical}
+	canon := func(p string) string {
+		k, ok := kernelPath(p)
+		if !ok {
+			return "<a symlink loop or an unreadable link in " + p + ">"
+		}
+		return k
+	}
+	req := lease.Request{Tool: h.input.ToolName, Cwd: canon(h.input.Cwd), Command: ti.Command, Canon: canon}
 	if p := cmp.Or(ti.FilePath, ti.NotebookPath); p != "" {
 		if !filepath.IsAbs(p) && filepath.IsAbs(h.input.Cwd) {
-			p = filepath.Join(h.input.Cwd, p)
+			p = h.input.Cwd + "/" + p
 		}
-		req.Path = canonical(p)
+		req.Path = canon(p)
+		if strings.HasPrefix(req.Path, "<") {
+			return req, fmt.Errorf("cannot tell which file this writes: %s", req.Path)
+		}
 	}
-	return req
+	return req, nil
 }
 
-// targets are the absolute paths the call writes, canonical: the edit's file, or every placed
-// target of the Bash walk.
+// targets are the absolute paths the call writes, as the kernel reads them: the edit's file, or
+// every placed target of the Bash walk.
 func targets(req lease.Request) []string {
 	var out []string
 	if req.Tool != "Bash" {
@@ -160,8 +224,8 @@ func targets(req lease.Request) []string {
 		return out
 	}
 	for _, t := range lease.WriteTargets(req.Cwd, req.Command) {
-		if filepath.IsAbs(t) {
-			out = append(out, canonical(t))
+		if t = req.Canon(t); filepath.IsAbs(t) {
+			out = append(out, t)
 		}
 	}
 	return out
@@ -217,17 +281,23 @@ func linksInto(gitFile, dir, common string) bool {
 	return strings.HasPrefix(canonical(target), common+string(filepath.Separator)+"worktrees"+string(filepath.Separator))
 }
 
-// callerRoot denies a write into another worktree than the session's own: the judgment keys a
-// path to the root that holds it, so without this a session in one worktree could edit another's
-// files under that worktree's claim (row 7 close-out, "Judge has no idea of the caller's root").
-func callerRoot(roots []string, req lease.Request) lease.Decision {
-	own, _, ok := lease.Resolve(roots, "", req.Cwd)
-	if !ok {
-		return lease.Decision{Allow: true}
-	}
+// checkTargets denies a write into another worktree than the session's own: the judgment keys a
+// path to the root that holds it, so without this a session could edit another worktree's files
+// under that worktree's claim (row 7 close-out). A session whose cwd is in no worktree of the
+// repository may write no worktree at all (audit 1, B2). On a case-folding volume it also denies a
+// non-ASCII path, whose other spellings (Unicode normalisation) it cannot compare.
+func checkTargets(roots []string, req lease.Request, fold func(string) string) lease.Decision {
+	own, _, _ := lease.Resolve(roots, "", req.Cwd)
 	for _, t := range targets(req) {
-		if root, _, in := lease.Resolve(roots, "", t); in && root != own {
+		root, rel, in := lease.Resolve(roots, "", t)
+		switch {
+		case !in:
+		case own == "":
+			return lease.Decision{Reason: fmt.Sprintf("wk: %s is in the workspace %s, and this session works outside every workspace of the repository (%s); work from inside %s", t, root, req.Cwd, root)}
+		case root != own:
 			return lease.Decision{Reason: fmt.Sprintf("wk: %s is in the workspace %s, and this session works in %s; edit the copy in %s", t, root, own, own)}
+		case fold("A") == "a" && strings.IndexFunc(rel, func(r rune) bool { return r > 127 }) >= 0:
+			return lease.Decision{Reason: fmt.Sprintf("wk: cannot compare the non-ASCII path %s on a volume that ignores case; rename it in ASCII", rel)}
 		}
 	}
 	return lease.Decision{Allow: true}

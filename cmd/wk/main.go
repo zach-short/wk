@@ -235,10 +235,12 @@ func runHooks(home, repoDir, what string, stdout, stderr io.Writer) int {
 }
 
 // runLeaseHook is wk hook lease. It exits 0 on every path, a panic included: the hook denies by
-// printing JSON, and exit 2 would block a call by accident (owner amendments, 2026-10-16).
+// printing JSON, and exit 2 would block a call by accident (owner amendments, 2026-10-16). A
+// panic outside wk.LeaseHook prints the deny, because the guard fails closed (audit 1, N1).
 func runLeaseHook(args []string, stdout io.Writer) (code int) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			wk.LeaseDeny(stdout, fmt.Sprintf("wk: the lease hook failed (%v); report it", r))
 			code = exitOK
 		}
 	}()

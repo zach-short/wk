@@ -167,12 +167,12 @@ func TestHookJudgesEditsAndBash(t *testing.T) {
 		{"unclaimed main checkout", "Edit", f.Repo, f.Repo + "/README.md", "has not claimed a row; run `wk claim <row>` or `wk claim --none` in " + f.Repo},
 		{"outside every worktree", "Edit", b, f.Root + "/elsewhere.txt", ""},
 	} {
-		if got := hook(t, f, c.tool, c.cwd, c.arg); c.want == "" && got != "" || !strings.Contains(got, c.want) {
+		if got := hook(t, f, c.tool, c.cwd, c.arg); c.want == "" && got != "" || !containsFold(got, c.want) {
 			t.Errorf("%s: hook = %q; want %q", c.name, got, c.want)
 		}
 	}
 	log := read(t, filepath.Join(f.Home, "demo", "hook.log"))
-	if !strings.Contains(log, "lease Edit "+b+"/web/page.ts cwd="+b) || !strings.Contains(log, "deny: wk: "+heldByA) {
+	if !containsFold(log, "lease Edit "+b+"/web/page.ts cwd="+b) || !containsFold(log, "deny: wk: "+heldByA) {
 		t.Errorf("hook.log lacks the deny line:\n%s", log)
 	}
 }
@@ -187,7 +187,7 @@ func TestHookFindsAWorktreeTheStoreDoesNotList(t *testing.T) {
 	mustClaim(t, e, a, "1")
 	c := filepath.Join(f.Repo, ".claude", "worktrees", "c")
 	f.Git(t, "worktree", "add", "--quiet", "-b", "c", c)
-	if got := hook(t, f, "Edit", c, c+"/README.md"); !strings.Contains(got, "has not claimed a row") || !strings.Contains(got, "in "+c) {
+	if got := hook(t, f, "Edit", c, c+"/README.md"); !containsFold(got, "has not claimed a row") || !containsFold(got, "in "+c) {
 		t.Errorf("hook = %q; want the new worktree unclaimed", got)
 	}
 }
@@ -202,10 +202,10 @@ func TestHookPlacesPathsThroughSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "web/page.ts is leased by row 1 in " + a
-	if got := hook(t, f, "Edit", link, link+"/web/page.ts"); !strings.Contains(got, want) {
+	if got := hook(t, f, "Edit", link, link+"/web/page.ts"); !containsFold(got, want) {
 		t.Errorf("edit through a link: %q", got)
 	}
-	if got := hook(t, f, "Bash", b, "rm "+link+"/web/page.ts"); !strings.Contains(got, want) {
+	if got := hook(t, f, "Bash", b, "rm "+link+"/web/page.ts"); !containsFold(got, want) {
 		t.Errorf("rm through a link: %q", got)
 	}
 }
@@ -262,5 +262,87 @@ func TestHooksInstallWritesTheLeaseEntriesOnlyWhenEnabled(t *testing.T) {
 	got := read(t, local)
 	if strings.Count(got, hooksTestExe+" hook lease --repo "+f.Repo) != 2 || !strings.Contains(got, `"onFailure": "block"`) || !strings.Contains(got, "hook pre-tool-use") {
 		t.Fatalf("leases on: settings =\n%s", got)
+	}
+}
+
+// containsFold is strings.Contains without letter case: on a volume that ignores case the hook
+// folds every path, so its messages name them in lower case.
+func containsFold(s, sub string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+}
+
+// Audit 1, B1: on a volume that ignores case, another spelling of a leased file is that file.
+func TestHookFoldsCaseOnACaseInsensitiveVolume(t *testing.T) {
+	f, e, a, b := leaseFixture(t)
+	if _, err := os.Stat(filepath.Join(f.Repo, ".GIT")); err != nil {
+		t.Skip("this volume is case-sensitive: WEB/Page.ts is another file")
+	}
+	mustClaim(t, e, a, "1")
+	mustClaim(t, e, b, "3")
+	want := "web/page.ts is leased by row 1 in " + a
+	for _, c := range []struct{ tool, arg string }{{"Edit", b + "/WEB/Page.ts"}, {"Bash", "rm Web/page.ts"}} {
+		if got := hook(t, f, c.tool, b, c.arg); !containsFold(got, want) {
+			t.Errorf("%s %s: hook = %q", c.tool, c.arg, got)
+		}
+	}
+}
+
+// Audit 1, B2: a session whose cwd is in no worktree may write no worktree.
+func TestHookDeniesAWriteFromOutsideEveryWorkspace(t *testing.T) {
+	f, e, a, _ := leaseFixture(t)
+	mustClaim(t, e, a, "1")
+	want := "this session works outside every workspace of the repository"
+	for _, c := range []struct{ tool, arg string }{{"Edit", a + "/web/page.ts"}, {"Bash", "rm " + a + "/web/page.ts"}} {
+		if got := hook(t, f, c.tool, f.Root, c.arg); !containsFold(got, want) {
+			t.Errorf("%s from %s: hook = %q", c.tool, f.Root, got)
+		}
+	}
+	if got := hook(t, f, "Edit", f.Root, f.Root+"/elsewhere.txt"); got != "" {
+		t.Errorf("a path outside every workspace: hook = %q; want an allow", got)
+	}
+}
+
+// Audit 1, B3 and B4: a dangling link and a link followed by `..` are judged where the kernel
+// writes; a link loop denies.
+func TestHookFollowsLinksAsTheKernelDoes(t *testing.T) {
+	f, e, a, b := leaseFixture(t)
+	mustClaim(t, e, a, "1")
+	mustClaim(t, e, b, "3")
+	if err := e.LeaseAdd(a, []string{"web/new.ts"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	link := func(target, name string) {
+		t.Helper()
+		_ = os.MkdirAll(filepath.Dir(name), 0o755)
+		if err := os.Symlink(target, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(a+"/web/new.ts", b+"/dang.ts")
+	link(a+"/docs", b+"/sub/e")
+	link(b+"/loop2", b+"/loop1")
+	link(b+"/loop1", b+"/loop2")
+	other := "is in the workspace " + a
+	for _, c := range []struct{ tool, arg, want string }{
+		{"Write", b + "/dang.ts", other},
+		{"Bash", "echo x > dang.ts", other},
+		{"Edit", b + "/sub/e/../web/page.ts", other},
+		{"Bash", "rm sub/e/../web/page.ts", other},
+		{"Write", b + "/loop1", "a symlink loop or an unreadable link"},
+		{"Bash", "touch loop1", "a symlink loop or an unreadable link"},
+	} {
+		if got := hook(t, f, c.tool, b, c.arg); !containsFold(got, c.want) {
+			t.Errorf("%s %s: hook = %q; want %q", c.tool, c.arg, got, c.want)
+		}
+	}
+}
+
+// Audit 1, N2: a panic inside the hook is a deny, never silence.
+func TestHookPanicIsADeny(t *testing.T) {
+	f, _, _, _ := leaseFixture(t)
+	var out bytes.Buffer
+	LeaseHook(f.Home, []string{"--repo", f.Repo}, nil, &out)
+	if !strings.Contains(out.String(), `"permissionDecision":"deny"`) || !strings.Contains(out.String(), "the lease hook failed") {
+		t.Fatalf("hook printed %q", out.String())
 	}
 }

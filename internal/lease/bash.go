@@ -215,11 +215,18 @@ func (w *walker) add(dirs []string, words ...word) {
 	}
 }
 
-// place makes a target absolute against dir, or returns it as written when it cannot.
+// place makes a target absolute against dir, or returns it as written when it cannot. A target
+// with a `..` is not cleaned: the kernel applies the `..` after following any symlink before it,
+// so only a caller that reads the disk (Request.Canon) may remove it.
 func place(dir string, t word) string {
 	switch {
 	case t.expands:
 		return t.text
+	case slices.Contains(strings.Split(t.text, "/"), ".."):
+		if filepath.IsAbs(t.text) || dir == "" {
+			return t.text
+		}
+		return strings.TrimSuffix(dir, "/") + "/" + t.text
 	case filepath.IsAbs(t.text):
 		return filepath.Clean(t.text)
 	case dir == "":

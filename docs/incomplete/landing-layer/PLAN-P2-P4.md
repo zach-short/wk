@@ -121,6 +121,15 @@ The proof, in the throwaway repository `scratchpad/row-3/proof/leaseproof` with 
 
 The binary was installed with `GOTOOLCHAIN=local go install ./cmd/wk` after the gate, then `[leases]` with `enabled = false` was added to `~/.wk/ezhomesteading.toml` (with the four D13 L1 paths) and `~/.wk/wk.toml` was made (the P1 defaults, `copy_files = [".claude/settings.local.json"]`, `[leases] enabled = false`). The review of step 10 is this run's independent audit, not a subagent of the row.
 
+Audit 1 (Opus 5.5, of `f0b1eb8`, report `docs/incomplete/autopilot-2026-10-16/reports/row-3-audit-1.md`, which reproduces the live checks; the scratchpad files cited above do not persist). Outcomes, fix round 1 of 2026-10-17:
+
+- B1, a path with the wrong letter case passed on macOS: fixed. On a volume that ignores case (`.git` and `.GIT` are one entry, or the check cannot tell), the hook folds every path, root, lease and single-writer entry to lower case before it judges, and refuses a non-ASCII path below a worktree. Test `TestHookFoldsCaseOnACaseInsensitiveVolume`.
+- B2, a cwd outside every worktree could write any worktree: fixed. Such a session may write no path inside a worktree. Test `TestHookDeniesAWriteFromOutsideEveryWorkspace`.
+- B3, a dangling symlink to a leased new file passed: fixed. The hook reads each path as the kernel does (`kernelPath` in `internal/wk/lease.go`), following a dangling link to the path it names; a loop or an unreadable link denies. Test `TestHookFollowsLinksAsTheKernelDoes`.
+- B4, a symlink followed by `..` hid the real target: fixed. `place` in `internal/lease/bash.go` no longer cleans a target with a `..`, the hook joins a relative `file_path` without cleaning, and `kernelPath` applies each `..` after the link before it. Same test, and a walk row.
+- N1, a panic outside the hook's judgment gave no output: fixed; every panic of the verb prints the deny. N2: test `TestHookPanicIsADeny`. N3: the README and the hand-back say that existing workspaces keep the settings they were made with. N4: the README lines on links, the edit entries and the heredoc apostrophe are corrected.
+- N5 (any binary named `wk` passes the wk allow) and N6 (one `Bash` command is walked three times): open.
+
 ## 3. P3, the landing queue
 
 (Amended 2026-10-16 22:51 EDT under the owner's daemon-or-files rule, decided "files" by `docs/incomplete/integration/KILL-TEST.md`: the landing loop is a detached run-to-completion worker `wk land --loop` started by `wk submit` and by the launchd timer, not a goroutine of a daemon; a `landing` record journals the predicted tree before each CAS. The binding text is row 4's item file, "Decided by the rule".)

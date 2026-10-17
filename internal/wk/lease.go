@@ -1,7 +1,6 @@
 package wk
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -277,26 +276,58 @@ func worktreeRoots(dir string) ([]string, error) {
 	return roots, nil
 }
 
-// canonical resolves the symlinks of the longest prefix of p that exists and keeps the rest as
-// written, so a file not yet made is placed where its directory really is (macOS /tmp is
-// /private/tmp). Resolve reads no disk, so every path it compares must come through here. A
-// relative path comes back as it is: it has no place until the judgment reads it against a cwd.
+// canonical is physical for paths wk reads from git or the command line, where a loop or an
+// unreadable link leaves the path as written.
 func canonical(p string) string {
+	c, _ := kernelPath(p)
+	return c
+}
+
+// maxLinks bounds the symlinks one path may pass through, as the kernel's ELOOP does.
+const maxLinks = 32
+
+// kernelPath returns the absolute path p as the kernel reads it: each symlink is replaced by its
+// target before a ".." after it is applied, and a dangling link by the path it names, so a file
+// not yet made is placed where a write through the link lands (audit 1, B3 and B4). A component
+// that does not exist is kept as written. ok is false for a link loop or a link that cannot be
+// read. A relative p comes back as it is: it has no place until it is read against a cwd.
+func kernelPath(p string) (string, bool) {
 	if !filepath.IsAbs(p) {
-		return p
+		return p, true
 	}
-	p = filepath.Clean(p)
-	rest := ""
-	for {
-		real, err := filepath.EvalSymlinks(p)
-		if err == nil {
-			return filepath.Join(real, rest)
+	cur, rest, links := "/", strings.Split(p, "/"), 0
+	for len(rest) > 0 {
+		c := rest[0]
+		rest = rest[1:]
+		next, target, isLink := step(cur, c)
+		if !isLink {
+			cur = next
+			continue
 		}
-		parent := filepath.Dir(p)
-		if parent == p || !errors.Is(err, os.ErrNotExist) {
-			return filepath.Join(p, rest)
+		if links++; target == "" || links > maxLinks {
+			return p, false
 		}
-		rest = filepath.Join(filepath.Base(p), rest)
-		p = parent
+		if !filepath.IsAbs(target) {
+			target = cur + "/" + target
+		}
+		cur, rest = "/", append(strings.Split(target, "/"), rest...)
 	}
+	return cur, true
+}
+
+// step applies one component to the physical directory cur. For a symlink it returns its target,
+// empty when the link cannot be read.
+func step(cur, c string) (next, target string, isLink bool) {
+	switch c {
+	case "", ".":
+		return cur, "", false
+	case "..":
+		return filepath.Dir(cur), "", false
+	}
+	next = filepath.Join(cur, c)
+	if info, err := os.Lstat(next); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return next, "", false
+	}
+	target, _ = os.Readlink(next)
+	return next, target, true
 }
