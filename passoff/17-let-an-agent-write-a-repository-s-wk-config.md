@@ -1,5 +1,7 @@
 # 17. Let an agent write a repository's wk config without a terminal
 
+> **Claimed `IN FLIGHT` 2026-10-17.**
+
 *Opened 2026-10-17, for the rollout of wk to the owner's other repositories. On that day 27 repositories under `~/Projects` carry a `.personal-config.json`, and only `ezhomesteading` and `wk` have a `~/.wk/<repo>.toml`. The only way to write one is the guided setup a bare `wk` opens, which needs a terminal at both ends (`cmd/wk/main.go`, `interactive`, about line 631), so an agent cannot do it.*
 
 **Model: Sonnet 5.5. Lane B. Waits on nothing. Work in your own worktree. Files it owns: `cmd/wk/main.go`, `cmd/wk/main_test.go`, `internal/setup/auto.go` (new), `internal/setup/auto_test.go` (new), `README.md`.**
