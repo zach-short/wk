@@ -1,8 +1,8 @@
-# Autopilot run, wk, 2026-10-16
+# Autopilot run, wk, 2026-10-16 to 2026-10-17
 
 ## 1. In one paragraph
 
-The run started 2026-10-16 at 20:33 EDT on Fable 5.1 with board rows 1 to 5 (the wk MVP) and ended at 22:17 EDT with nothing in flight. Eight rows landed on `main` and were pushed: row 1 (Part 0, `CLAUDE.md` and the ledger), row 2 (the P1 amendments ratified as D22 to D26 and the P2 to P4 plan, which split each phase into sibling rows 6 to 12 at the owner's request), and the siblings 6 (`internal/daemon`), 8 (`internal/board`), 9 (`internal/changeset`), 10 (`internal/landing`), 11 (`internal/gate`) and 12 (`internal/batch`). Every landed row had a builder and at least one independent auditor on its tier, with fix rounds on rows 1, 2, 8, 10 and 11 and a Deep audit on rows 2, 9 and 10. Row 7 (`internal/lease`, the lease store, the edit judgment and the `Bash` word walk) is `HELD` after three blocking audits of the word walk: each audit found new wrong allows in forms the walk claims to handle, so the walk's design is the owner's call. Rows 3 and 4 are `HELD` by the owner's amendment of 22:15 EDT on the "daemon" or "files" answer from a kill test running in another session, and row 3 also waits on row 7 and on ezhomesteading item 200, which was `IN FLIGHT` on every read. Row 5 waits on row 4. `/clean-up` folded the eight `DONE` item files and their rows to `/Users/zachshort/Projects/archive/wk` (archive commits ed0e2b1 and 6589686). The run ended because no row could launch: the open rows are held or wait on another board.
+The run started 2026-10-16 at 20:33 EDT on Fable 5.1 with board rows 1 to 5 (the wk MVP), paused twice (the owner's stop order from 23:17 to 01:32 EDT, and the 95 percent usage cap from 03:40 to 08:53 EDT) and ended 2026-10-17 at 11:55 EDT with nothing in flight. Twelve rows landed on `main` and were pushed: rows 1 and 2 (Part 0 and the plan, which split each phase into sibling rows 6 to 12), the siblings 6, 8, 9, 10, 11 and 12 (the daemon, board, changeset, landing, gate and batch packages), row 7 (the lease store, the judge and the allowlist Bash walk, rebuilt as pass 2 under the owner's decision rule after three blocking audits of the first walk, then two fix rounds for heredoc bodies), row 3 (path leases on the file store, two fix rounds and two scoped passes for symlink, case and git pathspec spellings, five audits), row 14 (opened from row 3's audit: the walk reads git's file-fed pathspecs, aliases, `--output`, abbreviated options, transports, `GIT_` variables, `worktree add` and program-naming config keys; two fix rounds, three audits) and row 4 (the landing queue on the file store, a Deep row: one Fable fix round for a crash re-prediction that could land content the submitter never wrote, two Fable audits). Row 13 (the gc fix) landed from the other Fable session. The daemon-or-files question was decided by the owner's rule from the kill test: files. Row 5 (P4, the batch gate) is `OPEN` and not launched: when row 4 landed the weekly all-models usage read 24 percent against the 25 percent cap the owner set through a peer session, and a P4 build with its audits cannot fit under it. `~/go/bin/wk` is built from `main` at 01120ce; `[leases]` is off in both repositories; `[landing]` is on in `~/.wk/wk.toml` and off in `~/.wk/ezhomesteading.toml`; the launchd timer is the owner's to install.
 
 ## 2. Audit
 
@@ -12,107 +12,127 @@ not run (wk has no `docs/audit-lanes.md`).
 
 | Row | Tier, model | Worktree, branch | Gates seen | Audits | Fix rounds | Status |
 |---|---|---|---|---|---|---|
-| 1 | Default, Opus 5.5 | `.claude/worktrees/ap-row-1`, `ap/row-1` | item gate green at a4d4ed2, 51f1282, 7275a2c; also in an archive copy and with a fresh lint cache | Opus (non-blocking, 6), Opus (non-blocking, 2) | 1 | DONE, landed 7275a2c |
-| 2 | Deep, Fable 5.1 | `ap-row-2`, `ap/row-2` | baseline gate green at d51f151, 9ea0524, d465437 | Fable (non-blocking, 13 plus the early-start finding), Fable (non-blocking, 3) | 1 | DONE, landed d465437 |
-| 6 | Default, Opus 5.5 | `ap-row-6`, `ap/row-6` | gate green at a543f46 and 9a2a1bd; package flake-checked 20 and 5 runs | Opus (non-blocking, 6) | 0 | DONE, landed 9a2a1bd |
-| 7 | Default, Opus 5.5 | `ap-row-7`, `ap/row-7` (kept) | gate green at 49d7b2c, b8d2921, 82e9dcf; 160 package tests | Opus (blocking B1, B2), Opus (blocking K1 to K3, K4 decided), Opus (blocking B1 to B6) | 2 | HELD at 82e9dcf |
-| 8 | Default, Opus 5.5 | `ap-row-8`, `ap/row-8` | gate green at 3c8c8ac, a564db6, 0e7d664 | Opus (non-blocking, 6), Opus (non-blocking, 1) | 1 | DONE, landed 0e7d664 |
-| 9 | Deep, Fable 5.1 | `ap-row-9`, `ap/row-9` | gate green at 1b05d88, ec19f31; tree equality proven byte for byte | Fable (non-blocking, 5) | 0 | DONE, landed ec19f31 |
-| 10 | Deep, Fable 5.1 | `ap-row-10`, `ap/row-10` | gate green at cf36d6d, 7e1f1bd, 475ebd1; CAS race and sparse bit proven | Fable (non-blocking, 6; finding 1 escalated), Fable (non-blocking, 3) | 1 | DONE, landed 475ebd1 |
-| 11 | Default, Opus 5.5 | `ap-row-11`, `ap/row-11` | gate green at 6fdca3a, e5132b6, 96ec79e | Opus (non-blocking, 7), Opus (non-blocking, 3) | 1 | DONE, landed 96ec79e |
-| 12 | Default, Opus 5.5 | `ap-row-12`, `ap/row-12` | gate green at 94b2c74, d948f0e | Opus (non-blocking, 6) | 0 | DONE, landed d948f0e |
-| 3 | Default, Opus 5.5 | none | none | none | 0 | HELD: owner's "daemon" or "files"; waits on 7, item 200 |
-| 4 | Deep, Fable 5.1 | none | none | none | 0 | HELD: owner's "daemon" or "files"; waits on 3 |
-| 5 | Default, Opus 5.5 | none | none | none | 0 | OPEN, waits on 4; prompt amended |
+| 1 | Default, Opus 5.5 | `ap-row-1`, `ap/row-1` | green at a4d4ed2, 51f1282, 7275a2c | Opus twice (non-blocking) | 1 | DONE, 7275a2c |
+| 2 | Deep, Fable 5.1 | `ap-row-2`, `ap/row-2` | green at d51f151, 9ea0524, d465437 | Fable twice (non-blocking) | 1 | DONE, d465437 |
+| 6 | Default, Opus 5.5 | `ap-row-6`, `ap/row-6` | green at a543f46, 9a2a1bd | Opus (non-blocking) | 0 | DONE, 9a2a1bd |
+| 7 | Default, Opus 5.5 | `ap-row-7`, `ap/row-7` | pass 1 green at 49d7b2c, b8d2921, 82e9dcf; pass 2 green at f9ee256, 713b8b4, cd9f720, 80e0102 | pass 1: Opus three times (blocking); pass 2: Opus (blocking B1 heredoc body quotes), Opus (blocking B2 whitespace after `<<`), Opus (clean) | 2 in pass 1, 2 in pass 2 | DONE, 80e0102 |
+| 8 | Default, Opus 5.5 | `ap-row-8`, `ap/row-8` | green at 3c8c8ac, a564db6, 0e7d664 | Opus twice (non-blocking) | 1 | DONE, 0e7d664 |
+| 9 | Deep, Fable 5.1 | `ap-row-9`, `ap/row-9` | green at 1b05d88, ec19f31 | Fable (non-blocking) | 0 | DONE, ec19f31 |
+| 10 | Deep, Fable 5.1 | `ap-row-10`, `ap/row-10` | green at cf36d6d, 7e1f1bd, 475ebd1 | Fable twice (non-blocking, one escalated) | 1 | DONE, 475ebd1 |
+| 11 | Default, Opus 5.5 | `ap-row-11`, `ap/row-11` | green at 6fdca3a, e5132b6, 96ec79e | Opus twice (non-blocking) | 1 | DONE, 96ec79e |
+| 12 | Default, Opus 5.5 | `ap-row-12`, `ap/row-12` | green at 94b2c74, d948f0e | Opus (non-blocking) | 0 | DONE, d948f0e |
+| 13 | Deep, Fable 5.1 | the other Fable session's `fx/gc` | green there | that session's | 0 | DONE, ddc541b (via a692538) |
+| 3 | Default, Opus 5.5 | `ap-row-3`, `ap/row-3` | green at f0b1eb8, 1c4a1fd, 53be9d5, a028e54, 146c6f7 (second run, after four red runs on row 200's slot timing test under load), 2eb9ba0 and 2a03612 (quiet-load loop) | Opus five times: blocking B1 to B4 (case, cwd outside every root, dangling link, link then `..`), blocking B5 to B7 (`cd` through a link, a link at a leased path, an Edit judged only physically), blocking B8 (a link entry through a link then `..`), blocking B9 to B11 (git cleans pathspecs by text; a regression from the lead's pass 2 premise), clean on the change with B12 and B13 in row 7's walk | 2, plus passes 2 and 3 under the owner's rule | DONE, 2a03612 |
+| 14 | Default, Opus 5.5 | `ap-row-14`, `ap/row-14` | green at 9c7cec3, ef61fe5, 619eb01, b7f5db1 | Opus three times: blocking F1 to F7 (one own, six older git write paths), blocking B1 to B3 (holes in the fix, scoped verdict), clean | 2 | DONE, b7f5db1 |
+| 4 | Deep, Fable 5.1 | `ap-row-4`, `ap/row-4` | green at 484f93d (twice), 0adb43f, 01120ce | Fable twice: blocking F1 (the crash re-prediction), clean with N7 to N9 | 1 | DONE, 01120ce |
+| 5 | Default, Opus 5.5 | none | none | none | 0 | OPEN, waits on nothing; not launched at the usage cap |
 
-Every report is in `reports/` beside this file, one per builder report, fix round and audit.
+Every report is in `reports/` beside this file, one per builder report, fix round, pass and audit (57 files).
 
 ## 4. Defects found and not fixed
 
-- Row 7: the `Bash` word walk allows writes in forms it claims to handle (`reports/row-7-audit-3.md`: `..` after a glob or brace, a `cd` after `&&` or `||` that did not run, a heredoc piped to `sh` on a later line, `\'` inside `$'...'`, `<<` inside `${...}`), plus new gaps (`FOO+=x`, `sed -I`, `python3 -Bc`, `eval 'rm'`, shell functions, `time`, `coproc`, `exec -a`, `source /dev/stdin`, `unlink`, whole-tree git writes, a `cd` into a missing directory). Carried by the hold.
-- Row 1: `README.md:5` says the design lives in ezhomesteading; it is in `docs/incomplete/landing-layer/` here. `README.md` is in ezhomesteading item 200's files, so no row here may touch it until 200 is DONE.
-- Row 1: Part 0 steps 0.4, 0.6, 0.7 and 0.8 on the ignored `docs/AGENT-PRACTICES.md` (cut CI and migrations; fix the Part 12 survivors; the GATE 0 question; stamp and delete Part 0; `· adapted`). `doctor` reports its stamp-drift.
-- Landed with findings open for the integration rows (each in the row's close-out): row 6 (no read deadline or request size limit; handler-mutex access for row 4), row 9 (sparse-cone cases for `wk submit`), row 10 (nine findings for row 4, among them `Sync` moving the branch on a conflict by design and a divergent-move refusal), row 11 (nine findings for row 5: paths relative to the gate's dir, no per-gate timeout, `Seconds` includes the grace, a backgrounded child is not killed), row 12 (attribution rules now in row 5's prompt), row 8 (four findings for row 3).
+- Row 3, open and loud: rule 4 over-refuses `cd web; cd ..; rm docs/a.md`; the safe-set gaps `go fmt ./web/...`, `npx prettier --write`, `bunx prettier --write`, `unzip -o -d`, `golangci-lint run --fix`, `mkdir -p`, `chown` (listed in the README); the expansion rule coded twice; `Judge` has no idea of the caller's root; `checkout -t<x>` over-refused; the `GIT_` text rule over-refuses `git var GIT_EDITOR` and comments; `EDITOR=` inert while `GIT_EDITOR` is set; a `-c` value that names a script passes as an unknown command; repository hooks outside the walk; the hook not run from a desktop session or an `isolation: "worktree"` subagent; a `cd` with `..` over-refuses at more places; the hook drops gone claims in memory only; `Server` and `Client` in `internal/daemon` unused.
+- Row 4, open and loud: `wk submit` appends to the queue with no lock of its own (a crash mid-write leaves a torn line that `Load` refuses until a hand repair); `wk sync` folds the branch before `landing.Sync` runs (recoverable from the reflog line); a transient binary makes `spawnLand` return silently; the behind line prints with `push = false`; a swapped `landing` record is refused on the rerun when `require_review` was turned on in between; the behind line's hint is stale once a later landing moved the ref; the gc absorption amendment unbuilt (reversal named).
+- Row 1: Part 0 steps 0.4, 0.6, 0.7 and 0.8 on the ignored `docs/AGENT-PRACTICES.md` (a session card was proposed for Sonnet).
+- The slot timing test (row 200's, ezhomesteading) read red at one-minute load above about 10 inside the full parallel gate; fixed by that session's row 234 at 941667c (CPU time, a 5 s test timeout).
 
 ## 5. Collisions and merge order
 
-None. No two rows claimed one number. Landing order on `main`: 1 (7275a2c), 2 (d465437), 6 (9a2a1bd), 8 (0e7d664), 9 (ec19f31), 11 (96ec79e), 12 (d948f0e), 10 (475ebd1). Rows 8 to 12 branched from 344f8c7 and each merged `main` in its own worktree before its gate, so each landed as a fast-forward of the builder's merge commit. Row 3's "Files it owns" overlaps ezhomesteading item 200 on `cmd/wk/main.go`, `internal/config/config.go` and `internal/settings/settings.go`; that overlap is sequential by row 3's wait.
+None between rows. Landing order on `main`: 1, 2, 6, 8, 9, 11, 12, 10 (2026-10-16), then 13 from the other session, 7 (80e0102), 3 (2a03612), 14 (b7f5db1), 4 (01120ce). Rows 4 and 14 ran in parallel on disjoint files; row 14 landed first and row 4 merged it. Ezhomesteading item 200 (the slots hook) landed on wk `main` at b0d1839 between row 7 and row 3 on the files row 3 also owns; row 3 built on it. Two of this session's own commits to `main` during row 3's land step refused the first fast-forward (section 6).
 
 ## 6. Judgment calls
 
-Each with its reversal, in `STATE.md` under Judgment calls. In short: the untracked board files were committed to `main` before launch (reversal: `git rm --cached`); worktrees were made by hand because the Agent tool's isolation makes a worktree of the session's own directory, which is personal-config (reversal: run from a wk session); the ledger sections of row 1 were written by this session from the builder's report because git ignores `HANDOFF.md`; the holding wake was 1800 s; the default builder cap of 4 was lifted to 6 on the owner's words; siblings got lanes C to I so they launch in parallel; rows 9, 10 and 11 waited on 2 instead of 3 and row 12 on 9, on the Fable auditor's import evidence; non-blocking findings in `CLAUDE.md`, the plan, the board parser, the gate runner and the landing package were escalated to fix rounds where a wrong text or a silent allow would otherwise land; two cite fixes and three wording fixes were folded into land-step commits on the auditors' own verified cites; row 7's K4 rule (an open quote fails closed) was decided inline on the Deep model; row 5's prompt step 3 was amended from row 12's audit; row 7 was held after the third blocking audit.
+Each with its reversal, in `STATE.md` under Judgment calls. Since the first rundown: the kill test's table applied the owner's rule (files); row 7 re-scoped from a denylist to an allowlist walk as pass 2 under the owner's rule instead of staying held; audit worktrees made detached so nothing unmergeable is left; a relayed usage cap (95 percent of the 5-hour window, 25 percent of the week) applied as a cap with hourly wake chains; a stop order relayed and obeyed with a chain to 01:30 EDT; row 3's third and fourth blocking audits answered with scoped passes 2 and 3 under the owner's rule instead of a hold, the fourth because the lead's own brief premise caused the regression; row 3 landed with B12 and B13 as a new row 14 because they were in row 7's landed walk; row 14's second and third audits given a scoped verdict (regressions and holes in the fix block, older gaps are findings); row 4's two owner questions decided (gc absorption unbuilt, `wk sync` folds without a flag) and its six non-blocking findings landed open because none is silent; row 4's config writes and reinstall moved from the build to the land step after row 3's `[leases]` key broke main-built binaries; row 3's land gate retried under a quiet-load loop with a probe; the lead's two land-step mistakes (a commit to `main` under the builder, an install from `main` before the fast-forward) recorded and reversed at once.
 
 ## 7. Decisions taken for the owner
 
-- K4 on row 7: a command the walk cannot split fails closed, because bash runs each complete line before it reports an open quote on a later line. Decider: this session (Fable 5.1). Reversal: return no targets, as the prompt wrote. Moot while row 7 is held.
-- Row 7 N3: a second claim by one root refuses until `Release` (the builder's own reversal). Decider: this session. Reversal: replace on reclaim.
-- Row 1's gate command, README line and prunable worktree: left to the owner (below).
-- Row 3's L3 question: answered by the owner at 22:15 EDT: defer.
+- Files, not the daemon, for rows 3 and 4 (the kill test's table under the owner's rule).
+- Row 7: the allowlist walk over the kill test's option (a) and over a hold; K4 fails closed.
+- Row 3: defer L3 (the owner's answer); the hook denies with JSON and exits 0; the wk-binary allow is a single wk command; the edit entry gets `onFailure: block`, the Bash entry `|| true`; a cwd outside every worktree cannot write into one; case folded on APFS; paths read as the kernel does, with the entry spelling and, for edit tools, the cleaned spelling; git operands with `..` or pathspec magic refused.
+- Row 14: `add`, `commit`, `push` on the read list; every verb outside the list refused; one shared option splitter.
+- Row 4: the gc absorption amendment unbuilt; `wk sync` folds without a flag; the base branch is `workspace.base`; a record whose tree is already on the tip lands without a commit; the timer interval 60 s; N3, N4, N6 to N9 open.
+- Usage: nothing launched at or above 95 percent of the 5-hour window; row 5 not launched at 24 percent of the week against the 25 percent cap.
 
 ### Decisions waiting for the owner
 
-- **Row 7's word walk.** (a) Land at 82e9dcf with `leases.bash_guard` default `false` and the gap list in the README, the walk as defense in depth and a later row for its design (recommended: the edit-tool judgment held across three audits, and the walk's failures are wrong allows that never block work); (b) an allowlist like `commit-guard.sh`'s `raw_words` (refuse any character outside a safe set, loud but safe); (c) a real parser (`mvdan.cc/sh`), which touches `go.mod` while item 200 adds the same module. One word: `land`, `allowlist` or `parser`.
-- **"daemon" or "files"** for rows 3 and 4, from the kill test in the "Integrate wk and personal-config" session (the owner's amendment 1).
-- **`gateCommand`** in `/Users/zachshort/Projects/wk/.personal-config.json`: the row 1 builder proposed `export GOTOOLCHAIN=local && ! gofmt -l cmd internal | grep -q . && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...` (about 45 s on every stop, no double quotes because the hook reads the value with sed and runs it with eval). Set it, or choose a lighter line without `-race`.
-- **`git worktree prune`** of `/Users/zachshort/Projects/landing-layer-phase3` (`p1-phase-3`, 30989b5, already in `main`, directory gone) and the deletion of its branch. Not this run's worktree, so untouched.
-- **Kept auditor worktrees** (section 10) to remove with `git worktree remove` and `git branch -D`.
-- **The relative words** at `PLAN-P2-P4.md` lines 44 and 93 (left open at row 2's sign-off) and the pre-existing `doctor` findings in the landing-layer documents (relative dates, absence evidence), none of them this run's.
+- **Row 5** (P4, the batch gate): launch past the 25 percent weekly cap, or wait for the reset on 2026-10-24.
+- **Turn leases on**: set `leases.enabled = true` in `~/.wk/ezhomesteading.toml` and `~/.wk/wk.toml`, run `wk hooks install` in each repository, copy the main checkout's `.claude/settings.local.json` into each existing workspace (or remake it), then every session runs `wk claim <row>` or `wk claim --none` before its first edit; the lead's own writes to `HANDOFF.md` and `PASSOFF.md` need a lease too (row 3's hand-back).
+- **The launchd timer** for `wk land --loop` in wk (plist text in the README; `landing.enabled = true` is already set in `~/.wk/wk.toml`, so `wk submit` from a wk workspace starts a worker now).
+- **A follow-up row** for row 4's open findings N3, N4, N6 to N9 and row 3's open list.
+- **`gateCommand`** in `.personal-config.json` (still empty); the `git worktree prune` of a stale entry; the pre-existing `doctor` findings in the landing-layer documents.
+- **Part 0** on `docs/AGENT-PRACTICES.md` (the proposed Sonnet session).
 
 ## 8. Budget
 
-- Usage: start 20:35 EDT weekly all models 50%, Fable 24%, five-hour 0%. 21:58 EDT weekly 63% (13 of the 25-point cap), Fable 42%, five-hour 48%. The weekly window resets 2026-10-17 02:59 EDT; the run ended before it.
-- Agents: 27 in all. Fable 5.1: 3 builders (rows 2, 9, 10), 5 audits (rows 2 twice, 9, 10 twice). Opus 5.5: 6 builders (rows 1, 6, 7, 8, 11, 12), 13 audits (rows 1 twice, 6, 7 three times, 8 twice, 11 twice, 12). Every fix round and land step resumed the row's builder. No Sonnet or Haiku agent ran.
-- Hours: 1 h 46 min, 20:33 to 22:17 EDT.
-- This session's context: peak 471,280 tokens at 21:58 EDT on a 1M window (readings in `STATE.md`), no compaction.
+- Usage: 2026-10-16 20:35 EDT weekly all models 50 percent, Fable 24, 5-hour 0; 2026-10-16 23:17 EDT 5-hour 98 (the stop order); 2026-10-17 01:32 EDT 5-hour 0 after its reset, weekly 76; 03:00 EDT the weekly reset; 03:40 EDT 5-hour 95 (the cap, the run slept); 08:53 EDT 5-hour 5, weekly 11; 11:51 EDT 5-hour 52, weekly all models 24, Fable 32.
+- Agents: 44 in all. Fable 5.1: 4 builders (rows 2, 9, 10, 4), 7 audits (rows 2 twice, 9, 10 twice, 4 twice). Opus 5.5: 9 builders (rows 1, 6, 7 twice, 8, 11, 12, 3, 14), 24 audits (rows 1 twice, 6, 7 six times, 8 twice, 11 twice, 12, 3 five times, 14 three times). Every fix round, pass and land step resumed the row's builder. No Sonnet or Haiku agent ran.
+- Hours: 15 h 22 min of wall time, 20:33 EDT to 11:55 EDT, of which about 7 h 25 min paused (the stop order 2 h 15 min, the cap 5 h 13 min).
+- This session's context: one compaction at about 23:00 EDT; afterwards 606 k tokens at 11:51 EDT on a 1M window.
 
 ## 9. Not verified
 
-- The daemon, the lease hook, `wk claim`, `wk submit`, `wk sync`, `wk land` and a batch gate have not run live; every proof so far is a package test or an auditor's throwaway repository. The live "Done when" proofs belong to rows 3, 4 and 5.
-- The `PreToolUse` deny JSON field names on Claude Code 2.1.301 (row 3 step 1 checks first); `vm_stat` field names beyond the captured sample; the 103-byte socket limit.
-- Sparse-worktree behaviour of `Sync` was probed and tested in throwaway repositories, not on ezhomesteading.
-- Row 7's branch at 82e9dcf passed its gate but is not on `main`.
-- A real launchd load, a real hook call, a `df` measurement, the TTY screens and `wk viz` (row 1's close-out).
+- The lease hook and the landing worker in a real Claude Code desktop session; every live proof ran in a throwaway repository with a scratch binary and `WK_HOME` (rows 3 and 4) or through `Judge` on the sources (row 14).
+- The launchd timer; the installed binary against the real ezhomesteading board (leases are off there).
+- Git versions other than 2.49.0 and bash 3.2.57, zsh 5.9; whether Claude Code 2.1.301 normalizes `..` in `file_path` or follows a dangling link on `Write` (both closed for either behaviour).
+- `wk sync` with a `landing.Sync` failure after the fold (reasoned only).
+- CI's Linux job on the landed rows.
 
 ## 10. Warnings
 
-- Auditor worktrees kept because each holds a merge commit of the builder's branch with a moved `main`, which `main` does not hold, so `git branch -d` refuses: `ap-row-2-audit-2` (c1a9afd), `ap-row-10-audit` (a5d2d31), `ap-row-10-audit-2` (6473ffb), `ap-row-11-audit-2` (e369c27), `ap-row-12-audit` (e46bf28), `ap-row-7-audit` (49d7b2c, an ancestor of ap/row-7), `ap-row-7-audit-2` (012f063), `ap-row-7-audit-3` (8a691cf). Content-wise each equals a state `main` passed. This run never forces.
-- `gofmt -l .` in the primary checkout reads every worktree under `.claude/worktrees/`; the gate as the item writes it is fine inside a worktree, and the proposed `gateCommand` uses `cmd internal` for that reason.
-- The golangci-lint cache is shared across checkouts; a fresh-cache run agreed on 2026-10-16.
-- `~/go/bin/wk` was built from 30989b5 with a dirty tree and is what ezhomesteading's hooks and launchd agent run; nothing this run landed is installed.
-- The row 7 third auditor's probe script carried a stray `rm -f /dev/null`, which failed on permissions; `/dev/null` is intact.
+- `~/.wk/ezhomesteading.toml` now holds `[leases]` and `[landing]`; a `wk` binary built from any commit before 01120ce refuses the file. Reinstall from `main` only.
+- `landing.enabled = true` in `~/.wk/wk.toml`: a `wk submit` from a wk workspace now appends to `~/.wk/wk/changesets.jsonl` and spawns a worker that lands onto `refs/heads/wk/landing`; `main` moves only by `wk land --apply --expect`.
+- The primary checkout holds an uncommitted `docs/conventions-go.md` change that belongs to another session; this run left it alone.
+- Worktrees of other runs under `.claude/worktrees/`: `ap-row-200`, `ap-row-200-audit`, `ap-row-211-audit`, `ap-row-212-audit`, `ap-row-213-audit` (ezhomesteading's run) and `ap-row-234-audit`, `ap-row-234-audit-2` (its row 234); this run removed every worktree it made.
+- The completion-gate hook ran the full gate in the primary on every stop and read red three times on "parallel golangci-lint is running" while an auditor's gate ran; each was a false alarm.
+- `gofmt -l .` in the primary reads every worktree; the gate as written is fine inside a worktree.
 
 ## 11. Landed
 
 | Row | Branch | On `main` | Pushed |
 |---|---|---|---|
-| 1 | `ap/row-1` | fast-forward to 7275a2c | yes |
-| 2 | `ap/row-2` | fast-forward to the builder's merge commit d465437 | yes |
-| 6 | `ap/row-6` | fast-forward to 9a2a1bd | yes |
-| 8 | `ap/row-8` | fast-forward to the merge commit 0e7d664 | yes |
-| 9 | `ap/row-9` | fast-forward to the merge commit ec19f31 | yes |
-| 11 | `ap/row-11` | fast-forward to the merge commit 96ec79e | yes |
-| 12 | `ap/row-12` | fast-forward to the merge commit d948f0e | yes |
-| 10 | `ap/row-10` | fast-forward to the merge commit 475ebd1 | yes |
+| 1 | `ap/row-1` | 7275a2c | yes |
+| 2 | `ap/row-2` | d465437 | yes |
+| 6 | `ap/row-6` | 9a2a1bd | yes |
+| 8 | `ap/row-8` | 0e7d664 | yes |
+| 9 | `ap/row-9` | ec19f31 | yes |
+| 11 | `ap/row-11` | 96ec79e | yes |
+| 12 | `ap/row-12` | d948f0e | yes |
+| 10 | `ap/row-10` | 475ebd1 | yes |
+| 13 | `fx/gc` (the other session) | ddc541b, merged at a692538 | yes |
+| 7 | `ap/row-7` | fast-forward to the merge commit 80e0102 | yes |
+| 3 | `ap/row-3` | fast-forward to the merge commit 2a03612 | yes |
+| 14 | `ap/row-14` | fast-forward to the merge commit b7f5db1 | yes |
+| 4 | `ap/row-4` | fast-forward to the merge commit 01120ce | yes |
 
-Rows landed and not pushed: none. Every push went; `main` is level with `origin/main` at each landing. Other commits on `main` by this session: f8cea0a (the untracked board files tracked), a4d4ed2 (claims 1 and 2), 344f8c7 (claims 6 to 11), b1d97ea (claim 12), bd29fba (row 5 step 3 amended), 789b345 (item 7 held), c2b8bc9 (owner amendments), and the run commit below.
-
-The run commit (step 4 of the end) adds `docs/incomplete/autopilot-2026-10-16/STATE.md`, `RUNDOWN.md` and `reports/*.md`, and the fold's removal of `passoff/1-*.md`, `2-*.md`, `6-*.md`, `8-*.md`, `9-*.md`, `10-*.md`, `11-*.md` and `12-*.md`. The archive repository (`/Users/zachshort/Projects/archive`, its own git) holds `wk/INDEX.md` and `wk/passoff/*` at ed0e2b1 and 6589686; `HANDOFF.md` and `PASSOFF.md` are ignored by git and carry the log line and the board as untracked records.
+Rows landed and not pushed: none. Every branch this run made is merged and deleted; every worktree it made is removed. The run commits add `docs/incomplete/autopilot-2026-10-16/STATE.md`, `RUNDOWN.md` and `reports/*.md`, and the fold's removal of the `DONE` item files (rows 3, 4, 7, 13, 14 in this fold; rows 1, 2, 6, 8 to 12 in the first). The archive repository (`/Users/zachshort/Projects/archive`, its own git) holds `wk/INDEX.md` and `wk/passoff/*`; `HANDOFF.md` and `PASSOFF.md` are ignored by git and carry the log and the board as untracked records.
 
 ## For personal-config row 117
 
-What the land step, the deciders or the cross-board wait did that the skill text did not say:
+What the land step, the deciders or the cross-board wait did that the skill text did not say. Items 1 to 14 are from the first rundown (2026-10-16 22:18 EDT) and stand; 15 on are from the continuation.
 
-1. The session's working directory was personal-config, not wk; `isolation: "worktree"` would make a worktree of the wrong repo, so every worktree was made by hand with `git -C wk worktree add` and each builder was told to `cd` into it per command. `/delegate` step 2 assumes the session sits in the repo it delegates.
-2. `/delegate` step 3's reproduce line (`git merge --ff-only <builder branch>`) assumes the base has not moved since the builder branched. With six siblings landing, it refuses from the second row on; auditors were told to `git merge --no-edit` instead, which leaves a merge commit `git branch -d` refuses at step 7. A detached auditor worktree at the builder's tip would leave nothing to delete.
-3. `/delegate` step 6 lands rows one at a time: each builder merges `main` in its worktree, and a second fast-forward refuses once the first moved `main`. Signed-off rows queued behind each other (8, then 9, then 11, then 12, then 10).
-4. The sibling briefs pointed each builder at its tracked item file in its worktree instead of carrying the prompt text in the brief (`/delegate` step 2 says "the item's own prompt in full").
-5. Non-blocking verdicts were escalated to fix rounds where a wrong sentence in `CLAUDE.md`, a plan line that contradicted a prompt, or a silent wrong allow would otherwise land; and small cite or wording fixes the auditor had itself verified were folded into the land step's step 1 commit. The skill's step 4 signs off any non-blocking verdict with the findings open.
-6. The wake procedure's step 4 says a Deep subagent decides the silent class; the leader, on the Deep model, decided row 7's K4 inline.
-7. `HANDOFF.md`, `PASSOFF.md` and `docs/AGENT-PRACTICES.md` are ignored by the owner's global git ignore, so no worktree holds them; row 1's ledger sections came back as text in the report and this session wrote them. The `{{WORKTREE_SETUP}}` and `{{BUILD_CMD}}` placeholders were filled the same way.
-8. The untracked `.gitignore`, `CLAUDE.md`, `docs/conventions-go.md` and `passoff/*.md` had to be committed before launch, or the builders' worktrees would not hold the item files and the fast-forward would refuse over the untracked `CLAUDE.md`.
-9. The board runs one lane's items in order, so sibling rows written on lane A would have serialized; each got its own lane (C to I).
-10. Builders' reports were saved under `reports/` beside `STATE.md` rather than inline under its Reports section, with a summary line in `STATE.md`; the full ledger paste for row 1 would have made `STATE.md` unreadable.
-11. Each returned agent raised a wake on its own, so the 1800 s fallback never fired; the loop's own prompt was re-armed on every return.
-12. The owner sent amendments mid-run (22:15 EDT) for rows not launched; they were applied to the item files, the board and `DESIGN.md` from the primary checkout and committed, and rows 3 and 4 were set `HELD` on the owner's word. The skill has no step for an owner message after the opening round.
-13. The cross-board wait on ezhomesteading item 200 was read at every wake and stayed `IN FLIGHT`; it never decided the end, because rows 7 and the owner's holds held the chain first.
-14. Three auditor worktrees per held row and two per fixed row accumulated; step 7 removes only merged ones.
+1. The session's working directory was personal-config, not wk; every worktree was made by hand with `git -C wk worktree add` and each builder told to `cd` into it per command.
+2. `/delegate` step 3's reproduce line (`git merge --ff-only <builder branch>`) assumes the base has not moved; auditors merged instead and left unmergeable branches. A detached auditor worktree (`git worktree add --detach`) leaves nothing to delete; used from row 7's audit 5 on.
+3. `/delegate` step 6 lands rows one at a time; signed-off rows queue.
+4. Sibling briefs pointed builders at their tracked item file instead of carrying the prompt.
+5. Non-blocking verdicts were escalated to fix rounds where a wrong text or a silent allow would otherwise land.
+6. The leader on the Deep model decided a silent-class call inline.
+7. Ignored ledger files were written by the lead from the builders' reports.
+8. Untracked board files had to be committed before launch.
+9. Sibling rows got their own lanes.
+10. Reports saved under `reports/` with a summary line in `STATE.md`.
+11. Each returned agent raised its own wake; the fallback never fired for them.
+12. Owner amendments mid-run were applied to the item files, the board and the design.
+13. The cross-board wait was read at every wake.
+14. Audit worktrees accumulated per held row.
+15. The owner's standing decision rule (silent failure first, then landing, then least code) replaced the skill's hold after two fix rounds three times (row 7 pass 2; row 3 passes 2 and 3) and decided five owner questions; each call carries a reversal. The skill needs a clause for a decision rule the owner sets.
+16. The audit brief's "any silent allow is blocking" hunts a landed dependency's whole surface through an integration row (row 3: five audits, four of them on row 7's walk). A scope clause was added from row 14's audit 2 on: a regression or a hole in the fix blocks; an older gap is a finding for a new row.
+17. The lead's own brief premise (pass 2 of row 3: "no program a shell runs cleans `..` by text") caused a regression that audit 4 caught. Auditors should test the lead's premises; the lead records its own errors as judgment calls.
+18. Two land-step mistakes of the lead: a commit to `main` while the builder gated (the fast-forward refused) and a `go install` from `main` before the fast-forward (a pre-row binary for one minute). The land step should say: nothing to the base between the land message and the fast-forward, install only after it.
+19. A build that writes machine config keys its branch adds (row 3's `[leases]` in `~/.wk/ezhomesteading.toml`) breaks every binary built from `main` until it lands; the config writes and the reinstall belong in the land step (done for row 4).
+20. A load-sensitive test in another row's package (the slot timing test) made the full gate read red at one-minute load above about 10; the land step ran a quiet-load loop with a probe, and the test's owner session fixed it as its own row. The land step needs a rule for a red gate on a file outside the row.
+21. Findings against another row's landed code (B12, B13 in row 7's walk) became a new board row (14) opened mid-run, on a lane parallel to row 4.
+22. A peer session relayed usage rules and a stop order as the owner's words; they were applied as caps with hourly wake chains and recorded as relayed. One scheduled wake (05:32 EDT) did not fire until 08:53 EDT; the chain must tolerate a missed wake.
+23. The owner asked this session to message the other board's lead to prioritize item 200; cross-session messages unblocked the wait and later carried the slot test fix.
+24. The lead wrote estimated timestamps ahead of the clock several times and corrected them in later commits; `date` before every stamp.
+25. The fold at the end took rows 3, 4, 7, 13 and 14; the archive is its own repository with its own commit and push.
+26. Rows in flight ran to completion past the weekly cap (the owner's "do not stop rows in flight"); the cap stopped only new launches.
