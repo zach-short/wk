@@ -35,8 +35,9 @@ var zshRange = regexp.MustCompile(`<[0-9]*-[0-9]*>`)
 // -delete` (its starting points); `tar` (its operands, and where it extracts); `gofmt -w`,
 // `goimports -w`, `prettier --write`, `perl -i` and `awk -i` (every operand); `git mv` and `git
 // rm`; the git subcommands that rewrite the worktree (a write of its root, see gitWritesTree). A
-// git verb outside the walk's list (see gitReads), a `git -c alias.` key and a
-// `--pathspec-from-file` option refuse the command.
+// git verb outside the walk's list (see gitReads), a `git -c alias.` key and the git options and
+// variables that read paths or run a command (see gitRuns, gitConfig, gitVariable) refuse the
+// command; `--output` and `git worktree add` are writes of the path they name.
 // `patch`, `find -exec`, `xargs`, and a shell or `source` reading standard input write what the
 // walk cannot see. The programs of `sh -c` and its kin, `eval`, `trap`, `alias` and `git -c`, every
 // heredoc body and every here-string are walked as commands. Keywords, `NAME=value` and
@@ -87,13 +88,17 @@ func printable(r rune) string {
 
 // The targets that name no file but a reason the walk cannot read the command.
 const (
-	openQuote        = "<open quote>"
-	openHeredoc      = "<open heredoc>"
-	unreadablePrefix = "<character "
-	pathspecPrefix   = "<git pathspec "
-	fromFilePrefix   = "<git paths from "
-	aliasPrefix      = "<git alias "
-	gitVerbPrefix    = "<git verb "
+	openQuote         = "<open quote>"
+	openHeredoc       = "<open heredoc>"
+	unreadablePrefix  = "<character "
+	pathspecPrefix    = "<git pathspec "
+	fromFilePrefix    = "<git paths from "
+	aliasPrefix       = "<git alias "
+	gitVerbPrefix     = "<git verb "
+	gitConfigPrefix   = "<git config "
+	gitVariablePrefix = "<git variable "
+	grepPrefix        = "<git grep pager "
+	transportPrefix   = "<git transport "
 )
 
 // prefixed are the denials for the targets that carry what the walk could not read.
@@ -102,6 +107,10 @@ var prefixed = []struct{ prefix, format string }{
 	{fromFilePrefix, "wk: cannot tell which file this writes: with `%s` git reads the paths from a file or standard input, which the lease walk does not read; give the paths on the command line"},
 	{aliasPrefix, "wk: cannot tell which file this writes: `%s` is a git alias, which the lease walk does not read; run the git verb directly"},
 	{gitVerbPrefix, "wk: cannot tell which file this writes: `git %s` is not a git verb the lease walk reads (an alias, an unlisted command, or a form that changes refs or config); run a git verb it reads"},
+	{gitConfigPrefix, "wk: cannot tell which file this writes: `%s` is config that names a program or a file, or takes its value from the environment, which the lease walk does not read; run git without it"},
+	{gitVariablePrefix, "wk: cannot tell which file this writes: `%s` is set beside git, and a GIT_ variable can carry a command or config, which the lease walk does not read; run git without it"},
+	{grepPrefix, "wk: cannot tell which file this writes: with `%s` git grep runs a command on the matched files, which the lease walk does not read; run git grep without it"},
+	{transportPrefix, "wk: cannot tell which file this writes: with `%s` git runs a command to reach the other repository, which the lease walk does not read; run git without it"},
 	{unreadablePrefix, "wk: cannot tell which file this writes: the command holds `%s`, which the lease walk does not read; write it without that character or ask for the path in full"},
 }
 
@@ -626,15 +635,15 @@ func tarWrites(args []word) []word {
 }
 
 // git walks past git's global options to the subcommand. `-C <dir>` moves where git runs;
-// `--git-dir`, `--work-tree` and a GIT_ variable move it somewhere the walk does not follow. A
-// `-c` value may be a command git runs (`core.pager`), from the repository root. A `-c alias.`
-// key makes a verb the walk cannot read, with options or a second alias in its value (audit 5,
-// B13), so it refuses the command; git reads the key in any case.
+// `--git-dir`, `--work-tree` and a GIT_ variable move it somewhere the walk does not follow, and a
+// GIT_ variable refuses the command (gitVariable). `-c` values go to gitConfig; `--config-env`,
+// whose value is in the environment, refuses the command for every key.
 func (w *walker) git(args []word) {
 	dirs := w.dirs
 	if strings.Contains(w.whole, "GIT_") {
 		dirs = []string{""}
 	}
+	from := len(w.targets)
 	for i := 0; i < len(args); i++ {
 		switch a := args[i].text; {
 		case a == "-C" && i+1 < len(args):
@@ -642,56 +651,165 @@ func (w *walker) git(args []word) {
 			dirs = moved(dirs, args[i])
 		case a == "-c" && i+1 < len(args):
 			i++
-			k, v, _ := strings.Cut(args[i].text, "=")
-			if strings.HasPrefix(strings.ToLower(k), "alias.") {
-				w.add(dirs, unread(aliasPrefix, k[len("alias."):]))
+			if !w.gitConfig(dirs, args[i].text) {
 				return
 			}
-			w.nested([]string{""}, strings.TrimPrefix(v, "!"))
+		case strings.HasPrefix(a, "--config-env"):
+			if !strings.Contains(a, "=") && i+1 < len(args) {
+				i++
+				a += " " + args[i].text
+			}
+			w.add(dirs, unread(gitConfigPrefix, a))
 		case strings.HasPrefix(a, "--git-dir") || strings.HasPrefix(a, "--work-tree"):
 			dirs = []string{""}
 			if !strings.Contains(a, "=") {
 				i++
 			}
-		case a == "--namespace" || a == "--config-env" || a == "--super-prefix" || a == "--attr-source":
+		case a == "--namespace" || a == "--super-prefix" || a == "--attr-source":
 			i++
 		case strings.HasPrefix(a, "-"):
 		default:
 			w.gitCommand(dirs, a, args[i+1:])
+			w.gitVariable(from)
 			return
 		}
 	}
 }
 
+// gitConfig judges one `-c` key and value and reports whether the walk goes on. A `-c alias.` key
+// makes a verb the walk cannot read, with options or a second alias in its value (audit 5, B13),
+// so it stops the walk; git reads the key in any case. A key of programKeys is refused, and any
+// other value may be a command git runs (`core.fsmonitor`, `core.pager`), walked from the root.
+func (w *walker) gitConfig(dirs []string, kv string) bool {
+	k, v, _ := strings.Cut(kv, "=")
+	key := strings.ToLower(k)
+	switch {
+	case strings.HasPrefix(key, "alias."):
+		w.add(dirs, unread(aliasPrefix, k[len("alias."):]))
+		return false
+	case slices.ContainsFunc(programKeys, func(p string) bool { return keyMatches(key, p) }):
+		w.add(dirs, unread(gitConfigPrefix, "-c "+kv))
+	default:
+		w.nested([]string{""}, strings.TrimPrefix(v, "!"))
+	}
+	return true
+}
+
+// programKeys are the config keys, in lower case, that name a program git runs or a file git
+// reads as config; a `*` stands for any subsection.
+var programKeys = []string{
+	"include.path", "includeif.*", "core.hookspath", "core.sshcommand", "core.editor", "core.askpass",
+	"core.gitproxy", "sequence.editor", "protocol.ext.allow", "diff.external", "diff.*.command",
+	"diff.*.textconv", "merge.tool", "merge.*.driver", "mergetool.*", "difftool.*", "filter.*",
+	"credential.*helper", "remote.*.uploadpack", "remote.*.receivepack", "gpg.program", "gpg.*.program",
+}
+
+func keyMatches(key, pattern string) bool {
+	pre, post, star := strings.Cut(pattern, "*")
+	if !star {
+		return key == pattern
+	}
+	return len(key) >= len(pre)+len(post) && strings.HasPrefix(key, pre) && strings.HasSuffix(key, post)
+}
+
+var gitVariableName = regexp.MustCompile(`GIT_[A-Za-z0-9_]*`)
+
+// gitVariable refuses a git command beside a GIT_ variable, which can carry a command or config
+// (GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF, GIT_CONFIG_COUNT), unless a target since from, one the walk
+// could not place, refuses it already.
+func (w *walker) gitVariable(from int) {
+	name := gitVariableName.FindString(w.whole)
+	if name == "" || slices.ContainsFunc(w.targets[from:], func(t target) bool { return !filepath.IsAbs(t.path) }) {
+		return
+	}
+	w.add(w.dirs, unread(gitVariablePrefix, name))
+}
+
 // gitCommand judges one git verb. A verb the walk does not know, such as a stored alias (`git
 // config alias.x rm`, then `git x`), refuses the command.
 func (w *walker) gitCommand(dirs []string, sub string, args []word) {
-	if opt, ok := fromFile(sub, args); ok {
-		w.add(dirs, unread(fromFilePrefix, opt))
+	if t, ok := gitRuns(sub, args); ok {
+		w.add(dirs, t)
 		return
 	}
+	ops := operands(args)
 	switch {
 	case sub == "mv" || sub == "rm":
-		w.add(dirs, pathspecs(sub, operands(args))...)
+		w.add(dirs, pathspecs(sub, ops)...)
+	case sub == "worktree" && len(ops) > 0 && ops[0].text == "add":
+		w.add(dirs, worktreePath(args)...)
 	case gitWritesTree(sub, args):
 		for _, d := range dirs {
 			w.targets = append(w.targets, target{path: place(d, word{text: "."}), repo: true})
 		}
 	case !gitReads(sub, args):
 		w.add(dirs, unread(gitVerbPrefix, sub))
+	default:
+		w.add(dirs, outputs(args)...)
 	}
 }
 
-// pathspecVerbs are the git verbs that take `--pathspec-from-file`.
-var pathspecVerbs = []string{"rm", "add", "mv", "checkout", "restore", "reset", "stash", "commit"}
+// pathspecVerbs are the git verbs that take `--pathspec-from-file` (`git mv` does not).
+var pathspecVerbs = []string{"rm", "add", "checkout", "restore", "reset", "stash", "commit"}
 
-// fromFile returns a `--pathspec-from-file` option, with its value after `=` or in the next word:
-// git reads the paths from a file or standard input, which the walk does not open (audit 5, B12).
-func fromFile(sub string, args []word) (string, bool) {
-	if !slices.Contains(pathspecVerbs, sub) {
-		return "", false
+// transports are the git verbs that reach another repository and take a command for it.
+var transports = []string{"fetch", "pull", "push", "ls-remote", "clone", "archive"}
+
+// gitRuns returns the target of an option through which git reads paths from a file or standard
+// input (`--pathspec-from-file`, audit 5, B12), or runs a command the walk does not read: `git
+// grep -O` on the matched files, a transport's `--upload-pack`, `--receive-pack` or `--exec`, and
+// an `ext::` URL.
+func gitRuns(sub string, args []word) (word, bool) {
+	if o, ok := option(args, "", "--pathspec-from-file"); ok && slices.Contains(pathspecVerbs, sub) {
+		return unread(fromFilePrefix, o), true
 	}
-	return option(args, "", "--pathspec-from-file")
+	if o, ok := option(args, "O", "--open-files-in-pager"); ok && sub == "grep" {
+		return unread(grepPrefix, o), true
+	}
+	if !slices.Contains(transports, sub) {
+		return word{}, false
+	}
+	if o, ok := option(args, "", "--upload-pack", "--receive-pack", "--exec"); ok {
+		return unread(transportPrefix, o), true
+	}
+	ext := func(a word) bool { return strings.HasPrefix(a.text, "ext::") || strings.Contains(a.text, "=ext::") }
+	if i := slices.IndexFunc(args, ext); i >= 0 {
+		return unread(transportPrefix, args[i].text), true
+	}
+	return word{}, false
+}
+
+// worktreePath is the directory `git worktree add` checks a whole tree out into: the first operand
+// after `add`, past the values of `-b`, `-B` and `--reason`.
+func worktreePath(args []word) []word {
+	for i := slices.IndexFunc(args, func(a word) bool { return a.text == "add" }) + 1; i < len(args); i++ {
+		switch a := args[i].text; {
+		case a == "-b" || a == "-B" || a == "--reason":
+			i++
+		case a == "--":
+			return args[i+1 : min(i+2, len(args))]
+		case !strings.HasPrefix(a, "-"):
+			return args[i : i+1]
+		}
+	}
+	return nil
+}
+
+// outputs returns the files `--output` writes on a git verb that otherwise only reads (`git log
+// --output=web/x.ts`), placed like a redirection. Git 2.49.0 takes the option only whole.
+func outputs(args []word) []word {
+	var out []word
+	for i, a := range args {
+		switch {
+		case a.text == "--":
+			return out
+		case strings.HasPrefix(a.text, "--output="):
+			out = append(out, literal(a.text[len("--output="):]))
+		case a.text == "--output" && i+1 < len(args):
+			out = append(out, args[i+1])
+		}
+	}
+	return out
 }
 
 // pathspecs marks as unplaceable each `git rm` or `git mv` operand git reads by text, not where
@@ -707,43 +825,77 @@ func pathspecs(sub string, ops []word) []word {
 	return out
 }
 
-// gitReaders are the git verbs that write no file in the worktree: the read-only porcelain, and
-// `add`, `commit` and `push`, which write the index, objects and refs only. With the verbs
-// gitWritesTree judges and the forms of gitReads, they are the edge of the walk's allowlist.
+// gitReaders are the git verbs that write no worktree file except through `--output`, which
+// outputs places: the read-only porcelain and plumbing, and `add`, `commit` and `push`, which
+// write the index, objects and refs. `commit` and `push` run hooks the walk cannot see, and a
+// transport's command options are refused (gitRuns). With the verbs gitWritesTree judges and the
+// forms of gitReads, they are the edge of the walk's allowlist.
 var gitReaders = map[string]bool{
 	"status": true, "log": true, "diff": true, "show": true, "blame": true, "grep": true,
 	"ls-files": true, "ls-tree": true, "rev-parse": true, "rev-list": true, "cat-file": true,
 	"describe": true, "shortlog": true, "fetch": true, "merge-base": true, "name-rev": true,
-	"for-each-ref": true, "help": true, "version": true, "add": true, "commit": true, "push": true,
+	"for-each-ref": true, "help": true, "version": true, "merge-tree": true, "show-ref": true,
+	"diff-tree": true, "check-ignore": true, "show-branch": true, "range-diff": true,
+	"whatchanged": true, "var": true, "count-objects": true, "ls-remote": true,
+	"add": true, "commit": true, "push": true,
 }
 
 // gitReadForms are the first operands with which a git verb reads only; with no operand it lists.
 var gitReadForms = map[string][]string{
-	"remote": {"show", "get-url"},
-	"reflog": {"show", "list", "exists"},
-	"config": {"get", "list"},
+	"remote":    {"show", "get-url"},
+	"reflog":    {"show", "list", "exists"},
+	"submodule": {"status"},
 }
 
 // gitReads reports a git verb, past gitWritesTree, that writes no worktree file. A branch or tag
-// it deletes or renames, a remote it changes, a reflog it expires and a config it sets are
-// refused: a stored config is where a later command finds a verb or a program to run.
+// it deletes or renames, a remote, reflog, submodule or symbolic ref it changes and a config it
+// sets are refused: a stored config is where a later command finds a verb or a program to run.
 func gitReads(sub string, args []word) bool {
-	has := func(shorts string, longs ...string) bool { _, ok := option(args, shorts, longs...); return ok }
 	ops := operands(args)
-	first := len(ops) > 0 && slices.Contains(gitReadForms[sub], ops[0].text)
 	switch sub {
 	case "reset", "checkout", "stash", "worktree":
 		return true
 	case "branch":
-		return !has("dDmM", "--delete", "--move")
+		return !hasOption(args, "dDmM", "--delete", "--move")
 	case "tag":
-		return !has("d", "--delete")
+		return !hasOption(args, "d", "--delete")
 	case "config":
-		return first || has("l", "--get-all", "--get-regexp", "--get-urlmatch", "--get-colorbool", "--list")
-	case "remote", "reflog":
-		return len(ops) == 0 || first
+		return configReads(args)
+	case "symbolic-ref":
+		return len(ops) == 1 && !hasOption(args, "d", "--delete")
+	case "remote", "reflog", "submodule":
+		return len(ops) == 0 || slices.Contains(gitReadForms[sub], ops[0].text)
 	}
 	return gitReaders[sub]
+}
+
+// configValues are the `git config` options that take the next word as their value.
+var configValues = []string{"-f", "--file", "--blob", "--type", "--default", "--comment"}
+
+// configReads reports a `git config` that only reads: the `get` or `list` subcommand, a get or
+// list option, or one key with no option that writes. The options are the words before the first
+// operand, because legacy `git config` reads every later word as an operand, so `git config NAME
+// VALUE -l` stores VALUE (row 14 audit 1, F1).
+func configReads(args []word) bool {
+	i := 0
+	for ; i < len(args) && strings.HasPrefix(args[i].text, "-") && args[i].text != "--"; i++ {
+		if slices.Contains(configValues, args[i].text) {
+			i++
+		}
+	}
+	opts, ops := args[:min(i, len(args))], args[min(i, len(args)):]
+	switch {
+	case len(ops) > 0 && (ops[0].text == "get" || ops[0].text == "list"):
+		return true
+	case hasOption(opts, "l", "--get-all", "--get-regexp", "--get-urlmatch", "--get-colorbool", "--list"):
+		return true
+	}
+	return len(ops) == 1 && !hasOption(opts, "e", "--unset-all", "--remove-section", "--rename-section", "--replace-all", "--add", "--edit")
+}
+
+func hasOption(args []word, shorts string, longs ...string) bool {
+	_, ok := option(args, shorts, longs...)
+	return ok
 }
 
 // option returns the first argument before any `--` that is a short option of shorts, alone or
@@ -774,7 +926,8 @@ var treeWriters = map[string]bool{
 }
 
 // gitWritesTree reports a subcommand that rewrites files across the worktree. A bare `git stash`
-// is `git stash push`, which puts every changed file back.
+// is `git stash push`, which puts every changed file back. `reset` options match abbreviated as git
+// allows (`--har`), and `--m` too, which git refuses as ambiguous.
 func gitWritesTree(sub string, args []word) bool {
 	ops := operands(args)
 	first := ""
@@ -783,7 +936,7 @@ func gitWritesTree(sub string, args []word) bool {
 	}
 	switch sub {
 	case "reset":
-		return slices.ContainsFunc(args, func(a word) bool { return a.text == "--hard" || a.text == "--merge" || a.text == "--keep" })
+		return hasOption(args, "", "--hard", "--merge", "--keep")
 	case "checkout":
 		return checkoutWrites(args)
 	case "stash":
@@ -795,7 +948,8 @@ func gitWritesTree(sub string, args []word) bool {
 }
 
 // checkoutWrites: every `git checkout` rewrites the worktree (`<ref>`, `-`, `-- <path>`, `-f`)
-// except `git checkout -b <new>` with no start point and no `-f`.
+// except `git checkout -b <new>` with no start point and no `-f` or `--force`, which matches
+// abbreviated (`--forc`).
 func checkoutWrites(args []word) bool {
 	branch, other := false, false
 	for i := 0; i < len(args); i++ {
@@ -803,7 +957,7 @@ func checkoutWrites(args []word) bool {
 		case a == "-b" || a == "-B" || a == "--orphan":
 			branch = true
 			i++
-		case a == "-f" || a == "--force" || a == "-" || !strings.HasPrefix(a, "-"):
+		case a == "-f" || len(a) > 2 && strings.HasPrefix("--force", a) || a == "-" || !strings.HasPrefix(a, "-"):
 			other = true
 		}
 	}
