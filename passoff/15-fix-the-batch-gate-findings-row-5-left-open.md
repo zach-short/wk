@@ -177,3 +177,14 @@ One Opus 5.5 reviewer in the detached worktree `.claude/worktrees/dl-row-15-revi
 
 - 2026-10-17 15:38:37 to 15:41:07 EDT at b361308: exit 0, every package `ok` (`internal/wk` 132.9 s, `internal/gate` 5.7 s), `0 issues.`, 150 s, load 15.09 at the start and 25.66 at the end.
 - 2026-10-17 15:57:48 to 16:01:50 EDT on the final tree (review fixes): exit 0, every package `ok` (`internal/wk` 209.0 s, `internal/gate` 7.9 s, `internal/slot` 7.1 s), `0 issues.`, 241 s, load 102.95 at the start and 130.72 at the end. `TestHookPreToolUseTiming` passed at that load.
+
+### Sign-off, 2026-10-17
+
+- Builder: Opus 5.5, worktree `.claude/worktrees/dl-row-15-build`, branch `dl/row-15-build`, one pass, no relay. The worktree was made by the lead with `git worktree add`, because the Agent tool's isolation could not make a wk worktree from the lead's session.
+- Auditor: Opus 5.5, worktree `.claude/worktrees/dl-row-15-audit`, branch `dl/row-15-audit`. It reproduced the build by fast-forward to e528cc9 (12 files, 838 insertions, 67 deletions), ran the gate (exit 0, 190 s, load 28.06 to 55.04), and turned each fix off: every new test failed with its fix off and passed after the restore.
+- Verdict: non-blocking findings. Commit state: landed on `main` by fast-forward after this commit.
+- F1, open. `gatestart.go` lines 112 to 113: a slotted gate that waited for its place, took it (the `wk run: took a ` line), and then ran past its limit reads as a start error, though its command ran. A changeset that deadlocks then stops the queue while the slot is busy, and nobody is blamed. Latent on 2026-10-17: no live gate sets `timeout_seconds`, and wk has no slots file. Fix: a start error only when no `took a` line is present, with its own wording; the README sentence at line 277 changes with it.
+- F2, open. `trial.go` lines 79 to 83 with `new.go` line 107: a create that fails after its directory exists says the directory is left for inspection, but `trial.making` stays, so the next worker removes that directory with `git worktree remove --force`. Fix: the wording, or remove the record when the error is returned.
+- F3, open. `trial.go` line 150: `post_clone` in the trial runs with no timeout, under `trial.lock`, so a hung install holds the worker. A limit needs a key, which this row's "Not in scope" forbids.
+- F4, open. Style (conventions L1): `refreshDeps` is about 30 lines; `ensureTrial` and `makeTrial` are near 20.
+- Review findings N3 (a Ctrl-C or group kill of the worker leaves a timed gate running) and N4 (from row 11: a changeset that breaks a gate's own script reads as a start error) stay open as the close-out says.
