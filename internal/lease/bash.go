@@ -43,7 +43,8 @@ var zshRange = regexp.MustCompile(`<[0-9]*-[0-9]*>`)
 // Targets are absolute, one for each directory the command may run in: every `cd` and `pushd`
 // adds a directory and keeps the ones before it. A target the walk cannot place (an unknown
 // directory, a word the shell rewrites, git beside a GIT_ variable) is returned as written, which
-// the judgment refuses. A quote that never closes returns the one target openQuote. Every other
+// the judgment refuses. A quote that never closes returns the one target openQuote, and a heredoc
+// with no end line the one target openHeredoc. Every other
 // verb passes.
 func WriteTargets(cwd, command string) []string {
 	var out []string
@@ -85,13 +86,17 @@ func printable(r rune) string {
 // The targets that name no file but a reason the walk cannot read the command.
 const (
 	openQuote        = "<open quote>"
+	openHeredoc      = "<open heredoc>"
 	unreadablePrefix = "<character "
 )
 
 // refusal returns the denial for a target that names no file.
 func refusal(path string) (string, bool) {
-	if path == openQuote {
+	switch path {
+	case openQuote:
 		return "wk: cannot tell which file this writes: the command has an open quote, and bash runs the lines before it; close the quote", true
+	case openHeredoc:
+		return "wk: cannot tell which file this writes: a heredoc in the command has no end line; end it with its delimiter alone on a line", true
 	}
 	if c, ok := strings.CutPrefix(path, unreadablePrefix); ok {
 		return fmt.Sprintf("wk: cannot tell which file this writes: the command holds `%s`, which the lease walk does not read; write it without that character or ask for the path in full", strings.TrimSuffix(c, ">")), true
@@ -277,9 +282,9 @@ func moved(dirs []string, to word) []string {
 // nested walks a program the command runs (`sh -c`, `eval`) from dirs. A quote that never
 // closes refuses the program: bash runs every complete line before it reports the open quote.
 func (w *walker) nested(dirs []string, program string) {
-	words, ok := split(program)
-	if !ok {
-		w.targets = append(w.targets, target{path: openQuote})
+	words, failed := split(program)
+	if failed != "" {
+		w.targets = append(w.targets, target{path: failed})
 		return
 	}
 	sub := walker{dirs: slices.Clone(dirs), whole: w.whole}
@@ -755,8 +760,10 @@ var operators = []string{
 
 // splitter turns a command into words and operators. Quotes join a word and keep what they hold.
 // A newline ends a command, and a `#` at the start of a word starts a comment. A heredoc body is
-// read as commands, never skipped: a data body that looks like a write refuses, and a body fed to
-// a shell (`cat <<EOF | sh`) is walked.
+// not shell text to the command around it: its lines, up to the terminator, are cut out first, so
+// no quote in them pairs with one outside, and then each line is read as commands, never skipped.
+// A data body that looks like a write refuses, and a body fed to a shell (`cat <<EOF | sh`) is
+// walked.
 type splitter struct {
 	s       string
 	i       int
@@ -765,17 +772,37 @@ type splitter struct {
 	in      bool // a word is open, even an empty quoted one
 	quoted  bool
 	expands bool
+	body    bool     // one heredoc body line, where `<<` opens nothing
+	pending *heredoc // a `<<` waiting for its delimiter word
+	open    []heredoc
+	failed  string // openQuote or openHeredoc
 }
 
-func split(s string) ([]word, bool) {
+type heredoc struct {
+	delim string
+	tabs  bool
+}
+
+// split returns the words of s, or the target that refuses it.
+func split(s string) ([]word, string) {
 	p := splitter{s: s}
+	return p.run()
+}
+
+func (p *splitter) run() ([]word, string) {
 	for p.i < len(p.s) {
 		if !p.step() {
-			return nil, false
+			break
 		}
 	}
 	p.flush()
-	return p.out, true
+	if p.failed == "" && len(p.open) > 0 {
+		p.failed = openHeredoc
+	}
+	if p.failed != "" {
+		return nil, p.failed
+	}
+	return p.out, ""
 }
 
 func (p *splitter) step() bool {
@@ -787,6 +814,7 @@ func (p *splitter) step() bool {
 		p.flush()
 		p.out = append(p.out, word{op: ";"})
 		p.i++
+		return p.bodies()
 	case c == '#' && !p.in:
 		p.i += strings.IndexByte(p.s[p.i:]+"\n", '\n')
 	case c == '\'' || c == '"':
@@ -806,6 +834,7 @@ func (p *splitter) step() bool {
 func (p *splitter) quote(q byte) bool {
 	end := strings.IndexByte(p.s[p.i+1:], q)
 	if end < 0 {
+		p.failed = openQuote
 		return false
 	}
 	p.cur.WriteString(p.s[p.i+1 : p.i+1+end])
@@ -831,13 +860,62 @@ func (p *splitter) operator() {
 	}
 	p.out = append(p.out, word{op: op})
 	p.i += len(op)
+	if (op == "<<" || op == "<<-") && !p.body {
+		p.pending = &heredoc{tabs: op == "<<-"}
+	}
 }
 
+// flush ends the open word. The word after `<<` is its delimiter; a `<<` followed by an operator
+// or a newline has none and opens nothing.
 func (p *splitter) flush() {
 	if p.in {
 		p.out = append(p.out, word{text: p.cur.String(), expands: p.expands})
+		if p.pending != nil {
+			p.open = append(p.open, heredoc{delim: p.cur.String(), tabs: p.pending.tabs})
+		}
 	}
+	p.pending = nil
 	p.reset()
+}
+
+// bodies cuts out the bodies of the heredocs opened on the line just ended, in order, each up to
+// its terminator: the delimiter alone on a line, after leading tabs for `<<-`.
+func (p *splitter) bodies() bool {
+	for _, h := range p.open {
+		if !p.cutBody(h) {
+			p.failed = openHeredoc
+			return false
+		}
+	}
+	p.open = nil
+	return true
+}
+
+func (p *splitter) cutBody(h heredoc) bool {
+	for p.i < len(p.s) {
+		line, _, _ := strings.Cut(p.s[p.i:], "\n")
+		p.i = min(p.i+len(line)+1, len(p.s))
+		if h.tabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		if line == h.delim {
+			return true
+		}
+		p.out = append(append(p.out, bodyLine(line)...), word{op: ";"})
+	}
+	return false
+}
+
+// bodyLine reads one body line as commands. A quote that does not close on the line is taken out,
+// and the line read again.
+func bodyLine(line string) []word {
+	q := splitter{s: line, body: true}
+	if words, failed := q.run(); failed == "" {
+		return words
+	}
+	q = splitter{s: strings.NewReplacer("'", "", `"`, "").Replace(line), body: true}
+	words, _ := q.run()
+	return words
 }
 
 func (p *splitter) reset() {
