@@ -153,3 +153,12 @@ From audit 1 (`docs/incomplete/autopilot-2026-10-16/reports/row-4-audit-1.md`), 
 - N6 (open): `spawnLand` returns silently when `installedExe` fails or the binary is transient; the record stays `submitted` for the timer.
 
 Line counts after the fix: `landing.go` 340, `submit.go` 113 (`Submit` 40 lines, unchanged), `status.go` 52; `landOne` 31.
+
+### Sign-off, 2026-10-17
+
+- Builder: Fable 5.1 (agent a7ee7d2520d69799a; one fix round). Auditors: Fable 5.1 (a0cd3bbbf4c05586f blocking F1; a2ef7e906338c2dbe clean with N7 to N9). A Deep row lifted by the owner at the autopilot's opening round; Deep builder and Deep review.
+- Worktree `.claude/worktrees/ap-row-4`, branch `ap/row-4`, tip `0adb43f` before this commit. Relay passes: 0. Fix rounds: 1.
+- Verdict: clean (audit 2, 2026-10-17 11:52 EDT): gate exit 0, 209 PASS, a crash on either side of the swap lands once with only the submitted change, 13 ref writes each with an old value, none naming `main`.
+- Open, non-blocking: N3 `wk submit` appends to the queue with no lock of the queue's own (a crash mid-write leaves a torn line that `Load` refuses until a hand repair); N4 `wk sync` folds the branch before `landing.Sync` runs (recoverable from the reflog line); N6 a transient binary makes `spawnLand` return silently; N7 the behind line prints with `push = false`; N8 a swapped `landing` record is refused on the rerun when `require_review` was turned on in between (the ref's tree is right; the leases stay); N9 the behind line's hint is stale once a later landing moved the ref.
+- Owner questions decided by the owner's rule (2026-10-16 22:23 EDT): the gc absorption amendment stays unbuilt (reversal named in the close-out); `wk sync` folds without a flag.
+- Config and timer: the lead writes `[landing]` into `~/.wk/ezhomesteading.toml` (`enabled = false`) and `~/.wk/wk.toml` (`enabled = true`) after the reinstall from `main`; the launchd plist is the owner's to install.
