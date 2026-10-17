@@ -30,7 +30,7 @@ Hand back: the gate output, the proof, the As built note, and a `## Close-out, <
 
 From the owner's research review of 2026-10-16, applied by the autopilot run before this row launched. They bind the build; where they differ from the steps above, they win.
 
-- Held until the owner answers "daemon" or "files" (see row 3's amendments for the kill test). If the answer is "files", the landing loop is a detached run-to-completion worker started by `wk submit` and by the launchd timer, not a goroutine of the daemon; change the plan's P3 section before this row launches.
+- Held until the daemon-or-files question is decided by the owner's rule (see row 3's amendments: `docs/incomplete/integration/KILL-TEST.md`, files unless the file store shows more lost or stale leases, or more manual recovery steps, than the daemon). If the rule picks files, the landing loop is a detached run-to-completion worker started by `wk submit` and by the launchd timer, not a goroutine of the daemon; the plan's P3 section is changed before this row launches.
 - Journal the landing commit hash before the compare-and-swap, and treat a merge result equal to the tip's tree as already landed, so a crash cannot write a duplicate commit.
 - After a changeset lands, gc treats the workspace as absorbed when its working tree, written through a private index, equals the landed tree.
 - Give `wk sync` a path for a branch that carries commits (PD-7 refuses it today), and list at submit time what `add -A` will include.
