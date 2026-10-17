@@ -158,8 +158,10 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	}
 	absorbed, ancestor := gitx.IsAbsorbed(e.Repo.Primary, w.Head, s.base)
 	// A stopped subagent's commits are kept on its branch, which /land-worktrees lands from
-	// refs/heads, so its worktree can go whether or not the base holds them yet.
-	if !absorbed && !stopped {
+	// refs/heads, so its worktree can go whether or not the base holds them yet. A detached
+	// HEAD has no branch to keep them, so it gets no such pass (F1, 2026-10-16).
+	keptOnBranch := stopped && w.Branch != ""
+	if !absorbed && !keptOnBranch {
 		if w.Branch != "" {
 			keep("branch %s has commits %s does not hold", w.Branch, e.Cfg.Workspace.Base)
 		} else {
@@ -174,7 +176,7 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	}
 
 	switch {
-	case len(reasons) == 0 && stopped && !absorbed:
+	case len(reasons) == 0 && keptOnBranch && !absorbed:
 		j.Verdict = Removable
 		j.Reasons = []string{stoppedReason(e.Cfg.Workspace.Base, w.Branch)}
 	case len(reasons) == 0:
@@ -224,10 +226,9 @@ func (s survey) quietFor(path string) (time.Duration, bool, string) {
 	return max(s.quiet, s.unmarkedQuiet), false, fmt.Sprintf("a subagent worktree with no stop marker waits %d hours", int(s.unmarkedQuiet.Hours()))
 }
 
+// stoppedReason is the removable line for a stopped subagent whose branch keeps its commits;
+// judge never reaches it for a detached HEAD.
 func stoppedReason(base, branch string) string {
-	if branch == "" {
-		return "stopped subagent, clean and idle; its detached commits are not on " + base
-	}
 	return "stopped subagent, clean and idle; branch " + branch + " is kept, with commits " + base + " does not hold"
 }
 

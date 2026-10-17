@@ -83,6 +83,7 @@ func (h *hookRun) create(home string, configure func(*Env)) (path, how string, e
 	h.dir = filepath.Join(h.repo.Primary, filepath.FromSlash(strings.ReplaceAll(cfg.Dir, config.NamePlaceholder, h.name)))
 	h.branch = strings.ReplaceAll(cfg.Branch, config.NamePlaceholder, h.name)
 	if isWorktree(h.repo.Primary, h.dir) {
+		h.clearStopMarker()
 		return h.dir, "reused", nil
 	}
 
@@ -108,6 +109,19 @@ func (h *hookRun) create(home string, configure func(*Env)) (path, how string, e
 		return "", "", fmt.Errorf("the plain worktree fallback failed too: %w", err)
 	}
 	return h.dir, "plain fallback", nil
+}
+
+// clearStopMarker removes the SubagentStop marker from a reused worktree: a session is in it
+// again, so gc must give it a live worktree's quiet window, not a stopped subagent's short one
+// (F2, 2026-10-16). Nothing else clears the marker; SubagentStop writes it again at the next stop.
+func (h *hookRun) clearStopMarker() {
+	gd, err := privateGitDir(h.dir)
+	if err != nil {
+		return
+	}
+	if err := os.Remove(filepath.Join(gd, StoppedMarkerName)); err == nil {
+		_, _ = fmt.Fprintf(h.log, "cleared the stop marker in %s\n", h.dir)
+	}
 }
 
 // plain is the worktree Claude Code makes when no hook is set: git alone, no clones and no
