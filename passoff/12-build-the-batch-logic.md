@@ -1,5 +1,7 @@
 # 12. Build the batch policy and the failure attribution in `internal/batch`
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P4 sibling of row 5 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 4).*
 
 **Model: Opus 5.5. Lane I. Waits on 9** (this package imports `internal/changeset` for the `Record` type, row 9's deliverable, and nothing else from P2 to P4).
