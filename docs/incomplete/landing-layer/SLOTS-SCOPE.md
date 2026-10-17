@@ -116,7 +116,7 @@ A `wk run --slot <class> -- <command>` command that runs a command only while it
 
 ### What this is not
 
-- Not P4. No daemon, no socket, no batch gate, no trial workspace. The slot files are the seam P4's daemon takes later: its trial gates take the same `heavy` and `check` places, so the batch gate and the agents' gates share one cap (option F).
+- Not P4. No daemon, no socket, no batch gate, no trial workspace. The slot files are the seam P4's daemon takes later: its trial gates take the same `heavy` and `check` places, so the batch gate and the agents' gates share one cap (option F). (Amended 2026-10-17: P4 has no daemon; its trial gates run in the `wk land --loop` worker, `docs/incomplete/integration/KILL-TEST.md`, and take the same places.)
 - Not a cap on Claude Code sessions. Section 1.2's 250 MiB per session is outside any gate.
 - Not a change to which gates agents run. "The builder and the auditor each build" is `/delegate`'s rule, in personal-config; making only one of them build is a skill change for Zach, and P4 is the long answer.
 - Not an edit to a tracked file of this repository: `CLAUDE.md`, `web/package.json`, `ci.yml`, any rule file (DESIGN.md section 2). The hook goes in `.claude/settings.local.json` (D6).
@@ -176,7 +176,7 @@ The machine had 3,965 to 5,172 MiB free, inactive or speculative with no gate of
 
 - F1. Machine-wide: lock files under `~/.wk/slots/`, capacities in a new machine file `~/.wk/machine.toml`; the matcher (which spellings map to which class) in each repository's `~/.wk/<repo>.toml`, because spellings are a repository fact (D19). For: memory is a machine fact, and D19 plans several repositories; an old `wk` binary never reads the machine file, so adding it cannot break the hooks the way section 5's first hazard did. Against: a second config file, and a repository can no longer choose its own capacity.
 - F2. Per repository: `~/.wk/<repo>/slots/` and `[slots]` in `~/.wk/<repo>.toml`. For: one config file, as today. Against: two repositories building at once each get the full cap, which is the oversubscription the slot exists to stop; and a new table in the repository file makes any older binary reject the whole file.
-- Recommended: F1. P4's daemon takes the same files for its trial gates.
+- Recommended: F1. P4's daemon takes the same files for its trial gates. (Amended 2026-10-17: P4's `wk land --loop` worker, not a daemon, by `docs/incomplete/integration/KILL-TEST.md`.)
 
 ### G. When `wk` itself is broken
 

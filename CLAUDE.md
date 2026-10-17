@@ -12,6 +12,12 @@ wk is a Go CLI that makes warm git worktrees for parallel agents and removes fin
 (`docs/incomplete/landing-layer/PLAN.md` section 4). Its one live user on 2026-10-16 is
 ezhomesteading, whose Claude Code hooks and launchd gc agent run the installed binary.
 
+(Superseded 2026-10-17: "P2 to P4 are designed, not built" is out of date. They are planned in
+`docs/incomplete/landing-layer/PLAN-P2-P4.md` and `docs/incomplete/integration/PLAN.md`, and seven
+of their libraries are on `main` with their tests, imported by no command: `internal/lease`,
+`internal/board` and `internal/daemon` (P2), `internal/changeset` and `internal/landing` (P3),
+`internal/gate` and `internal/batch` (P4). Board rows 3, 4 and 5 wire them.)
+
 ## The rules that get broken
 
 Each rule comes from the code or the README, not from an incident log: the ledger here
@@ -64,6 +70,12 @@ other three, no test was checked on 2026-10-16, so read the cited code before yo
   through it.
 - There is no daemon, no socket and no lease. Those are P2 and later, and are not built
   (`docs/incomplete/landing-layer/PLAN.md` section 4).
+  (Superseded 2026-10-17: the kill test of 2026-10-16, `docs/incomplete/integration/KILL-TEST.md`,
+  decided files, so no phase builds a resident daemon or a socket. Leases go in
+  `~/.wk/<repo>/leases.json` under an exclusive `flock` on `leases.lock`, and the hook reads that
+  file itself. The landing loop is a detached `wk land --loop` worker. `internal/lease` is on
+  `main`, imported by no command; `internal/daemon` keeps `SaveJSON`, `LoadJSON` and `Spawn` for
+  that work, and its unused `Server` and `Client` are deleted after P3 lands.)
 - State lives in three places: the config at `$WK_HOME/<repo>.toml` (default `~/.wk`,
   `internal/config/config.go:1`), logs under `$WK_HOME/<repo>/`, and marker files in each
   worktree's private git directory (`internal/wk/template.go:15`, `internal/wk/pool.go:21`,
@@ -87,9 +99,20 @@ other three, no test was checked on 2026-10-16, so read the cited code before yo
 | `internal/setup/` | The guided setup a bare `wk` opens | |
 | `internal/hive/`, `internal/viz/`, `internal/theme/` | The terminal view, the web page, and the colors they share | Anything that removes a worktree |
 | `internal/testrepo/` | Throwaway test repositories and git isolation | Production code |
+| `internal/lease/` | P2: the lease store and `Judge`, which decides each edit against the leases | Disk or git; the caller saves the store |
+| `internal/board/` | P2: one row's "Files it owns" cell, parsed into lease paths plus what it could not read | Reading the board file or running git |
+| `internal/daemon/` | `SaveJSON`, `LoadJSON` and `Spawn`; a unix-socket `Server` and `Client` that nothing calls | A resident process; the kill test decided files |
+| `internal/changeset/` | P3: a workspace's tree through a private index, its base, and the queue file | A commit in the workspace |
+| `internal/landing/` | P3: predicting a merge, the compare-and-swap of the landing ref, `wk sync`, the fast-forward and push of `main` | A ref write without the old value |
+| `internal/gate/` | P4: running the configured gates, the paths a failing gate prints, the wait for free memory | Batch or blame decisions |
+| `internal/batch/` | P4: which changesets form a batch, how a red batch shrinks, which changeset a red gate blames | Git or any write |
 | `docs/conventions-go.md` | The Go code standard | |
 | `docs/incomplete/landing-layer/` | The design and plans for P1 to P4 | Closed efforts |
+| `docs/incomplete/integration/` | The lifecycle plan, the kill test and the owner's decision record | |
 | `passoff/` | One prompt file per board item, `<n>-<slug>.md` | |
+
+(Rows `internal/lease/` to `internal/batch/` and `docs/incomplete/integration/` added 2026-10-17.
+No command imports the seven packages yet; board rows 3, 4 and 5 wire them.)
 
 ## Commands
 
