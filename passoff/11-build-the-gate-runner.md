@@ -51,7 +51,12 @@ Built `internal/gate/` (`run.go`, `paths.go`, `memory.go` and a test file for ea
 - `NeedsEnv` reads the process environment, as the prompt says, not `gates.env`. A variable set only in `gates.env` still skips the gate.
 - `Run` has no timeout, so a hung gate holds the trial. If row 5 wants one, add it to this package (a context or a per-gate limit) rather than wrap it.
 - `Result` does not carry `Dir`, so row 5 keeps its own `[]Gate` to map a result back to its directory.
+- `Seconds` includes the 2 s `pipeGrace` when a background child holds the output pipe (audit round 2).
+- A background child the gate left running is not killed, and any output it writes after `pipeGrace` is lost (audit round 2).
+- The lazy `position` regexp can match a line that is not a path but holds ":N "; the existence check drops it (audit round 2).
 
 **Questions answered:** none were open. **Left owed:** the wiring, the config keys and the live proof, which are all row 5's.
 
 **Fix round 1, 2026-10-16** (from the audit of `6fdca3a`). `Paths` now reads a path with spaces in the position form (`position` takes `.+?` and ends the position at a colon, a space or the line's end); a table case over tsc's real output for `src/my dir/a b.ts` covers it, relative and absolute. `Run` set no `WaitDelay`, so a gate that left a child in the background (`sleep 5 &`) held `Run` until the child exited; it now sets `WaitDelay` to 2 s (`pipeGrace`), treats `exec.ErrWaitDelay` as the gate's own exit status, and a test shows such a gate returns `pass` in about 2 s. For L1, `Run` now hands the loop to `runAll`, and `runOne` hands the command to `execute`. The per-gate timeout stays with row 5.
+
+Sign-off, 2026-10-16, under /autopilot (agent-pushes). Builder: Opus 5.5. Auditors: Opus 5.5, round 1 (non-blocking, seven notes; the spaced-path regexp and the missing WaitDelay fixed in fix round 1 at e5132b6); Opus 5.5, round 2 (non-blocking, three notes carried to row 5). Worktree `.claude/worktrees/ap-row-11`, branch `ap/row-11`, commits 6fdca3a, e5132b6 and the land commit. Relay passes: 0. Verdict: non-blocking, findings carried to row 5. Commit state: landed on main from ap/row-11, 2026-10-16. Not a Deep row.
