@@ -38,12 +38,16 @@ Questions it answered. "Ask before building: nothing", and none arose. One promp
 
 Findings for row 4, none of them edits here:
 
-1. An untracked file outside a sparse workspace's cone is not in the tree: `add -A` skips it, as git does for any add outside the cone. `wk submit` may want to say so when `workspace.sparse_exclude` is set, since the file is silently not submitted.
+1. An untracked file outside a sparse workspace's cone makes `Tree` fail closed: on git 2.49.0 `git add -A` exits 1 with the `updateSparsePath` advice, so `Tree` returns an error naming the path and writes no tree. (Corrected at the land step: the first draft of this line said the file was silently dropped; the auditor reproduced the real behaviour.)
 2. `Append` does not create the parent directory. `~/.wk/<repo>/` exists for the logs, so row 4 owns it.
 3. `runIndexed` is a copy of `gitx.Run` plus `GIT_INDEX_FILE`. Reversal: a `gitx.RunEnv(dir, env, args...)` and this copy deleted, in the same change that folds row 10's second copy of the sequence (plan section 3, "Not built").
 4. `Base` and `Head` take any directory git accepts; the main-checkout refusal (D15) is row 4's, before either is called.
 5. `Record.State` is a plain `string`, as the prompt binds it, so the constants are untyped; a `type State string` (conventions T1) is a one-line change if row 12 wants it typed.
+6. Row 4 must catch the error of finding 1 and replace git's `--sparse` hint with its own message: `wk submit` has no `--sparse`, and the hint tells a session to run a git command the workspace design does not want.
+7. A tracked path outside the cone that a session materialises and edits is kept at its HEAD blob by `Tree`, while `git status` shows it modified. That is a silent drop. `wk submit` should refuse, or at least warn, when `git status` lists a path outside the cone.
 
 Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'` exit 0, `0 issues`, every package ok; `go test -race -count=1 ./internal/changeset/...` ok.
 
 Left owed: nothing in this package. The merge into `main`, the push and the worktree removal belong to the orchestrating session under this run.
+
+Sign-off, 2026-10-16, under /autopilot (agent-pushes). Deep row, lifted by the owner in the opening round. Builder: Fable 5.1. Auditor: Fable 5.1, round 1 (non-blocking: close-out line on the sparse untracked case corrected at the land step; a tracked out-of-cone edit is a silent drop for row 4 to guard; L1 lengths; Record.State a bare string as the prompt binds; removeIndex prints to stderr from a library package). Independent tree proofs equal byte for byte. Worktree `.claude/worktrees/ap-row-9`, branch `ap/row-9`, commit 1b05d88 and the land commit. Relay passes: 0. Verdict: non-blocking, findings carried to row 4. Commit state: landed on main from ap/row-9, 2026-10-16.
