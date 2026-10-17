@@ -1,0 +1,9 @@
+# Row 12, builder report (Opus 5.5, agent a195436a07c2024c7), arrived 2026-10-16 21:57 EDT
+
+Commit `94b2c74` on `ap/row-12` from main b1d97ea (ff: Already up to date). Not merged, not pushed. No hook block. No trailer.
+Gate exit 0 (wk 36.4 s, 0 issues). Package tests ok 1.3 s: TestPick 10 subtests, TestShrink 4, TestShrinkKeptDoesNotAliasDropped, TestBlame 11.
+Diffstat main...HEAD: batch.go 50, batch_test.go 102, blame.go 50, blame_test.go 51, passoff/12 43; 5 files +296. Files added: the four internal/batch files. Imports only internal/changeset; no git, no writes.
+Surface: Pick(records, max, idle, now) []Record (first max submitted records in queue order, only when max are present or the newest is at least idle old, else nil); Shrink(batch) (kept, dropped, ok) drops the last record, ok false under two; Blame(failedPaths, diffs map[id][]path) (id, unique) returns the one changeset whose diff paths equal or contain a failed path, "" and false otherwise. The plan table's "state transitions" have no function in the prompt, so none built.
+Build-level calls (5): age exactly idle forms a batch (reversal: < to <=); max < 1 picks nothing; Blame never picks among several matches; Blame cleans paths and ignores "", ".", "/"; Shrink caps kept's capacity so an append cannot overwrite the dropped record.
+Findings for row 5: Pick takes only submitted, so a gated-but-not-landed record is stranded if the daemon stops between the two; a unique Blame can be wrong (A removes a symbol, the type check names B), so mark failed only after the re-gate without it is green, else Shrink (the quiet failure behind the plan's Fable review recommendation, not taken); Shrink writes nothing and a red batch of one is the changeset to mark failed; Blame needs repository-relative paths on both sides (gate.Paths and diff-tree --name-only Base Tree keyed by Record.ID).
+Numbers: 296 insertions, test counts above, 0 issues. Questions: none.

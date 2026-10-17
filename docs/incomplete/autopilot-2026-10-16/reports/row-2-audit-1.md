@@ -1,0 +1,12 @@
+# Row 2, audit round 1 (Fable 5.1, agent af073911d561df070), arrived 2026-10-16 21:13 EDT
+
+Verdict: non-blocking findings (N1 to N13, plus F1 and one observation). Reproduced exactly: ff main, ff ap/row-2 to d51f151, diffstat 13 files +453/-26 matches, name-only within the allowed set, SLOTS-*.md, PLAN.md, CLAUDE.md untouched, no trailer. Gate exit 0 (internal/wk 46.6 s, 0 issues).
+Check 1 DESIGN.md: additive, every `-` line reappears tagged; D22 to D26 correct; D25's numbers all in PLAN.md As built phase 3. N1: D5 has no in-place tag though D23 amends it. N2: D17 not tagged for "opus review of 3,5".
+Check 2: 20 of 20 section 0 facts true. N3: "Hook commands" cites main.go:243 (runGC); refusal is hooks.go:17-28. N4: "agent-pushes" cited to CLAUDE.md, which never says it.
+Check 3 Done when: P2 word for word plus two extra proofs; P3 as D14/D20 amend it; P4 matches. N5: P4 memory dial read as gates.min_free_mb; other dials go to row 200 by PD-10.
+Check 4 split: pairwise disjoint, no sibling owns the integration files, imports forbidden across. F1 early start: rows 9, 10, 11 import only gitx and testrepo and can start when row 2 lands; row 12 imports internal/changeset (row 9), so waits on 9 not 4.
+Check 5 prompts: each stands alone; shared interfaces agree (Request, check call, lease path form, Record, Predict/Land/Ensure/Sync/FastForward/Push, Gate/[[gates.run]], Pick/Shrink/Blame, socket and lock, config keys). N6: plan table vs prompt signatures drift (Judge, Run, Paths, Ensure cases, Head). N7: row 3 Owns cell omits internal/wk/hooks.go. N8: prompt 7 cites a nonexistent ~/.claude/hooks/personal-config/commit-guard.sh; precedent is personal-config/templates/hooks/commit-guard.sh; DESIGN.md 1.4 has the same stale path. N9: prompt 8 cites ezh row 83, gone from the board. N10: prompt 3 step 9's claude -p sessions must use wk new worktrees or the proof passes vacuously.
+Check 6 D13 L3: safe default (leases.enabled false, written false into both live files); question answerable in one word but phrased as a statement.
+Check 7 lean: every key has a default and a reader; one queue format. N11: row 10 Sync duplicates row 9's private-index lines. N12: dials renamed without a note. N13: P3 and P4 live proofs push wk's main during the build, against the run's land rule.
+Check 8 prose: clean; six uncited build constants are the builder's choices.
+Observation: D26 one-file config vs SLOTS-PLAN.md SB-4 (separate file); mitigation stated in section 5.

@@ -1,0 +1,5 @@
+# Row 8, builder fix round 1 (Opus 5.5, agent aae094256279607c9), arrived 2026-10-16 21:41 EDT
+
+Commit `a564db6` on `ap/row-8` (parent 3c8c8ac). Not merged, not pushed. Clean worktree. No trailer.
+Fixes: trimDir strips trailing /, /** and /**/* repeatedly, so dir/, dir/**, dir/**/, dir/**/*, dir/**/** all give the prefix dir/; a directory token whose base is a glob still becomes <base>/**/*; classify cleans globs with path.Clean (./src/*.ts and src//*.ts give src/*.ts, duplicates dropped, unmatched returned cleaned); Expand cleans each pattern too. New tests: e/**/, f/**/**, ./web/*/**/, TestExpandCleanedGlobs, Parse cases for ./src/*.ts, src//*.ts, ./x?.go. L1 split done: Parse keeps the backtick loop with a parsed type; matchSegments delegates ** to matchAnyDepth.
+Diffstat main...HEAD: board.go 212, board_test.go 210, passoff/8 35; 3 files +457 (the fix commit alone 3 files +84/-39). Package tests ok 1.2 s. Full gate exit 0 (board 2.3 s, wk 36.1 s, 0 issues). No new files. Questions: none.

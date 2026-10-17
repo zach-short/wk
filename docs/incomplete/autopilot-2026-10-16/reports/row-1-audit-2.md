@@ -1,0 +1,4 @@
+# Row 1, audit round 2 (Opus 5.5, agent a30ea2f3f15182cbe), arrived 2026-10-16 21:03 EDT
+
+Verdict: non-blocking findings (2). Reproduced: ff main (a4d4ed2), ff ap/row-1 to 51f1282, diffstat matches the builder's (2 files +179/-18), name-only the two files only, fix commits f06b396 and 51f1282 touch CLAUDE.md only with no trailer. Gate exit 0 in 47 s (internal/wk 41.8 s, 0 issues). All six audit-1 findings verified fixed, with each cited test opened and confirmed. Read-through of the whole file and the fix diff: headings in order, no double colon, no em dash, no contraction.
+Findings: (1) CLAUDE.md:41-42 cites cmd/wk/main.go:196 for the go run install refusal; that line is spawnFill's transient check. Correct cites: internal/wk/hooks.go:25 (checkInstalled) and internal/wk/schedule.go:35. (2) The go run rule is a fourth tested rule: cmd/wk/main_test.go:196-209 and internal/wk/gc_test.go:489; the intro should count four tested, three unchecked.

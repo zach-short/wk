@@ -1,0 +1,5 @@
+# Row 11, builder fix round 1 (Opus 5.5, agent a8b44aa3e7b8fccec), arrived 2026-10-16 21:45 EDT
+
+Commit `e5132b6` on `ap/row-11` (parent 6fdca3a). Not merged, not pushed. No trailer.
+Fix 1 paths.go: position is now ^(.+?)(?::\d+(?::\d+)?(?::|\s|$)|\(\d+,\d+\)), so a spaced path in position form yields a result; tsc --pretty prints path:1:7 - error with no trailing colon, so none is required; new table case "path with spaces" from real tsc 5.8.3 output (go vet refuses a package dir with a space, so no Go sample). Fix 2 run.go: execute sets cmd.WaitDelay = pipeGrace (2 s) and treats exec.ErrWaitDelay as the gate's own exit; TestRunDoesNotWaitForBackgroundChild (sleep 5 &; exit 0) returns pass in 2.01 s, fails above 3 s; the per-gate timeout stays with row 5. L1: Run 8 lines, runAll 13, execute 17 (no second seam).
+Package tests ok, 13 tests. Full gate exit 0 (wk 37.9 s, 0 issues). Diffstat main...HEAD: 7 files +778 (memory.go 73, memory_test.go 94, paths.go 80, paths_test.go 181, run.go 167, run_test.go 148, passoff/11 35). No new files. Questions: none.
