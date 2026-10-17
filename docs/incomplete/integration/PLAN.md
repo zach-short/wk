@@ -1,6 +1,6 @@
 # Plan: one task lifecycle for wk and personal-config
 
-Status: DECIDED, written 2026-10-16 by the integration session (Fable 5.1) from the research review of the same day and the owner's decision record (`DECISIONS.md`, Appendix F of the review). The owner delegated every owner call on 2026-10-16 at 22:25 EDT; a later call is decided by the standing rule in that record (prevent a silent failure first, keep work landing without the owner second, least code third) and written here or in the item file's close-out, with its reversal. The ratified designs this plan builds on are wk `docs/incomplete/landing-layer/DESIGN.md` D1 to D26 and personal-config `docs/incomplete/autonomous-autopilot/` D1 and S1; it reverses none of them except where a decision number below says so.
+Status: DECIDED, written 2026-10-16 by the integration session (Fable 5.1) from the research review of the same day and the owner's decision record (`docs/incomplete/integration/DECISIONS.md`, Appendix F of the review). The owner delegated every owner call on 2026-10-16 at 22:25 EDT; a later call is decided by the standing rule in that record (prevent a silent failure first, keep work landing without the owner second, least code third) and written here or in the item file's close-out, with its reversal. The ratified designs this plan builds on are wk `docs/incomplete/landing-layer/DESIGN.md` D1 to D26 and personal-config `docs/incomplete/autonomous-autopilot/` D1 and S1; it reverses none of them except where a decision number below says so.
 
 ## 1. The end state
 
