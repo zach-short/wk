@@ -68,35 +68,35 @@ func TestPick(t *testing.T) {
 	}
 }
 
-func TestShrink(t *testing.T) {
+func TestHalves(t *testing.T) {
 	sub := changeset.Submitted
 	tests := []struct {
 		name        string
 		batch       []changeset.Record
-		wantKept    []string
-		wantDropped string
+		first, rest []string
 		wantOK      bool
 	}{
-		{"three drops the last", []changeset.Record{rec("a", sub, t0), rec("b", sub, t0), rec("c", sub, t0)}, []string{"a", "b"}, "c", true},
-		{"two keeps the first", []changeset.Record{rec("a", sub, t0), rec("b", sub, t0)}, []string{"a"}, "b", true},
-		{"one cannot shrink", []changeset.Record{rec("a", sub, t0)}, []string{"a"}, "", false},
-		{"none cannot shrink", nil, nil, "", false},
+		{"four splits two and two", []changeset.Record{rec("a", sub, t0), rec("b", sub, t0), rec("c", sub, t0), rec("d", sub, t0)}, []string{"a", "b"}, []string{"c", "d"}, true},
+		{"three puts the extra one first", []changeset.Record{rec("a", sub, t0), rec("b", sub, t0), rec("c", sub, t0)}, []string{"a", "b"}, []string{"c"}, true},
+		{"two splits one and one", []changeset.Record{rec("a", sub, t0), rec("b", sub, t0)}, []string{"a"}, []string{"b"}, true},
+		{"one cannot split", []changeset.Record{rec("a", sub, t0)}, []string{"a"}, nil, false},
+		{"none cannot split", nil, nil, nil, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			kept, dropped, ok := batch.Shrink(tc.batch)
-			if !slices.Equal(ids(kept), tc.wantKept) || dropped.ID != tc.wantDropped || ok != tc.wantOK {
-				t.Errorf("Shrink = %v, %q, %v; want %v, %q, %v", ids(kept), dropped.ID, ok, tc.wantKept, tc.wantDropped, tc.wantOK)
+			first, rest, ok := batch.Halves(tc.batch)
+			if !slices.Equal(ids(first), tc.first) || !slices.Equal(ids(rest), tc.rest) || ok != tc.wantOK {
+				t.Errorf("Halves = %v, %v, %v; want %v, %v, %v", ids(first), ids(rest), ok, tc.first, tc.rest, tc.wantOK)
 			}
 		})
 	}
 }
 
-func TestShrinkKeptDoesNotAliasDropped(t *testing.T) {
+func TestHalvesFirstDoesNotAliasSecond(t *testing.T) {
 	b := []changeset.Record{rec("a", changeset.Submitted, t0), rec("b", changeset.Submitted, t0)}
-	kept, _, _ := batch.Shrink(b)
-	_ = append(kept, rec("x", changeset.Submitted, t0))
+	first, _, _ := batch.Halves(b)
+	_ = append(first, rec("x", changeset.Submitted, t0))
 	if b[1].ID != "b" {
-		t.Errorf("appending to kept overwrote the dropped record: batch[1] = %q", b[1].ID)
+		t.Errorf("appending to first overwrote the second half: batch[1] = %q", b[1].ID)
 	}
 }

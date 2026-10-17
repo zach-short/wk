@@ -156,8 +156,11 @@ func (e *Env) finishClaim(dir, branch, commit string, slot poolSlot) error {
 // tree and index are already right, so it only writes the branch ref and points HEAD at it:
 // `git checkout -b` would re-stat every file, which in a burst waits behind other workspaces'
 // clones on the same volume (about 5 s each on 2026-10-16). At any other commit, git writes
-// the files that differ.
+// the files that differ. With branch "" the slot stays detached, moved to commit.
 func attachBranch(dir, branch, commit, at string) error {
+	if branch == "" {
+		return detachAt(dir, commit, at)
+	}
 	if commit != at {
 		_, err := gitx.Run(dir, "checkout", "--quiet", "-b", branch, commit)
 		return err
@@ -166,6 +169,14 @@ func attachBranch(dir, branch, commit, at string) error {
 		return err
 	}
 	_, err := gitx.Run(dir, "symbolic-ref", "HEAD", "refs/heads/"+branch)
+	return err
+}
+
+func detachAt(dir, commit, at string) error {
+	if commit == at {
+		return nil
+	}
+	_, err := gitx.Run(dir, "checkout", "--quiet", "--detach", commit)
 	return err
 }
 

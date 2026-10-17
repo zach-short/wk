@@ -36,8 +36,30 @@ type Template struct {
 	Build      []Command `toml:"build"`
 }
 
+// Gates is the batch gate (PLAN-P2-P4.md section 4). The landing worker gates each batch of
+// at most BatchMax changesets once, in the trial workspace at TrialDir, after BatchIdleSeconds
+// of quiet; Run lists the gates in order, Env is added to each, every FreshCaches variable
+// points at a fresh directory per gate run, and gating pauses while free memory is under
+// MinFreeMB (0 turns the pause off). With no Run, nothing is gated and main never moves by
+// itself (PD-11).
 type Gates struct {
-	Env map[string]string `toml:"env"`
+	Env              map[string]string `toml:"env"`
+	TrialDir         string            `toml:"trial_dir"`
+	BatchMax         int               `toml:"batch_max"`
+	BatchIdleSeconds int               `toml:"batch_idle_seconds"`
+	MinFreeMB        int               `toml:"min_free_mb"`
+	FreshCaches      []string          `toml:"fresh_caches"`
+	Run              []GateRun         `toml:"run"`
+}
+
+// GateRun is one [[gates.run]] entry: Run is the argument vector, run in Dir under the trial's
+// root; a variable of NeedsEnv unset in the worker's environment makes the gate skip, which
+// never counts as a pass.
+type GateRun struct {
+	Name     string   `toml:"name"`
+	Dir      string   `toml:"dir"`
+	Run      []string `toml:"run"`
+	NeedsEnv []string `toml:"needs_env"`
 }
 
 // Workspace names and shapes a `wk new` workspace. Each SparseExclude entry is a directory, or
@@ -101,12 +123,15 @@ type Leases struct {
 // the queue and starts the worker, which moves Ref by compare-and-swap; Remote is where
 // `wk land --apply` pushes the base branch when Push is set (D20). RequireReview refuses to
 // land a changeset that names no review (owner amendment, 2026-10-16); off, D20 stands.
+// FFMain fast-forwards the base branch to Ref after a green batch gate (D14); with no
+// [[gates.run]] it does nothing (PD-11).
 type Landing struct {
 	Enabled       bool   `toml:"enabled"`
 	Ref           string `toml:"ref"`
 	Remote        string `toml:"remote"`
 	Push          bool   `toml:"push"`
 	RequireReview bool   `toml:"require_review"`
+	FFMain        bool   `toml:"ff_main"`
 }
 
 type Config struct {
@@ -134,7 +159,12 @@ func Defaults() Config {
 			FollowBase: true,
 			CloneDirs:  []string{"node_modules"},
 		},
-		Gates: Gates{Env: map[string]string{}},
+		// batch_max 1, a serial gate then land, until the busy fraction passes 0.5 (D16 as
+		// amended 2026-10-16, decision 20).
+		Gates: Gates{
+			Env: map[string]string{}, TrialDir: ".claude/worktrees/wk-trial", BatchMax: 1,
+			BatchIdleSeconds: 120, MinFreeMB: 2048, FreshCaches: []string{"GOCACHE", "GOLANGCI_LINT_CACHE"},
+		},
 		Workspace: Workspace{
 			Dir:    ".claude/worktrees/wk-" + RowPlaceholder,
 			Branch: "wk/" + RowPlaceholder,
@@ -148,7 +178,7 @@ func Defaults() Config {
 		New:     New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
 		Pool:    Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
 		Leases:  Leases{Board: "PASSOFF.md", SingleWriter: []string{}, BashGuard: true},
-		Landing: Landing{Ref: "refs/heads/wk/landing", Remote: "origin", Push: true},
+		Landing: Landing{Ref: "refs/heads/wk/landing", Remote: "origin", Push: true, FFMain: true},
 	}
 }
 
@@ -234,6 +264,9 @@ func (c Config) validate() error {
 	if err := c.Landing.validate(); err != nil {
 		return err
 	}
+	if err := c.Gates.validate(); err != nil {
+		return err
+	}
 	// The worker would then move the base branch by itself, which only wk land --apply does
 	// until P4 (PD-6; row 4 audit 1, N1).
 	if c.Landing.Ref == "refs/heads/"+c.Workspace.Base {
@@ -296,6 +329,45 @@ func (l Landing) validate() error {
 	}
 	if l.Remote == "" {
 		return fmt.Errorf("landing.remote is empty")
+	}
+	return nil
+}
+
+// validate refuses a trial outside the main checkout, a batch of fewer than one, a negative
+// wait or floor, an empty cache name, and a gate with no name or no command, because the
+// worker would otherwise find each of them only when it gates.
+func (g Gates) validate() error {
+	if g.TrialDir == "" {
+		return errors.New("gates.trial_dir is empty")
+	}
+	if err := checkRelative(g.TrialDir); err != nil {
+		return fmt.Errorf("gates.trial_dir: %w", err)
+	}
+	if g.BatchMax < 1 {
+		return fmt.Errorf("gates.batch_max is %d; it must be at least 1", g.BatchMax)
+	}
+	if g.BatchIdleSeconds < 0 || g.MinFreeMB < 0 {
+		return errors.New("gates.batch_idle_seconds and gates.min_free_mb must not be negative")
+	}
+	for i, v := range g.FreshCaches {
+		if v == "" || strings.ContainsAny(v, "= ") {
+			return fmt.Errorf("gates.fresh_caches[%d]: %q is not a variable name", i, v)
+		}
+	}
+	return g.validateRuns()
+}
+
+func (g Gates) validateRuns() error {
+	for i, r := range g.Run {
+		if r.Name == "" {
+			return fmt.Errorf("gates.run[%d].name is empty", i)
+		}
+		if len(r.Run) == 0 || r.Run[0] == "" {
+			return fmt.Errorf("gates.run[%d] (%s): run is empty", i, r.Name)
+		}
+		if err := checkRelative(r.Dir); err != nil {
+			return fmt.Errorf("gates.run[%d].dir: %w", i, err)
+		}
 	}
 	return nil
 }

@@ -55,13 +55,14 @@ func (e *Env) New(row string, c Checkout) (string, error) {
 	return e.create(dir, branch, commit, e.sparseFor(c))
 }
 
-// create makes the workspace at dir on a new branch at commit: from a pool slot when one is
-// ready, else from the template. Either way the pool is topped up afterwards, in the background.
+// create makes the workspace at dir on a new branch at commit, or with a detached HEAD at
+// commit when branch is "" (the trial): from a pool slot when one is ready, else from the
+// template. Either way the pool is topped up afterwards, in the background.
 func (e *Env) create(dir, branch, commit string, sparse bool) (string, error) {
 	if _, err := os.Lstat(dir); err == nil {
 		return "", fmt.Errorf("%s already exists", dir)
 	}
-	if gitx.BranchExists(e.Repo.Primary, branch) {
+	if branch != "" && gitx.BranchExists(e.Repo.Primary, branch) {
 		return "", fmt.Errorf("branch %s already exists", branch)
 	}
 	defer e.refill()
@@ -89,7 +90,7 @@ func (e *Env) createCold(dir, branch, commit string, sparse bool) (string, error
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return err
 		}
-		_, err := gitx.Run(e.Repo.Primary, "worktree", "add", "--quiet", "--no-checkout", "-b", branch, dir, commit)
+		_, err := gitx.Run(e.Repo.Primary, worktreeAdd(dir, branch, commit)...)
 		return err
 	})
 	if err == nil {
@@ -106,6 +107,16 @@ func (e *Env) createCold(dir, branch, commit string, sparse bool) (string, error
 		return "", fmt.Errorf("%w; the workspace is left at %s for inspection", err, dir)
 	}
 	return dir, nil
+}
+
+// worktreeAdd is the `git worktree add` that puts dir on a new branch, or detached at commit
+// when branch is "".
+func worktreeAdd(dir, branch, commit string) []string {
+	args := []string{"worktree", "add", "--quiet", "--no-checkout"}
+	if branch == "" {
+		return append(args, "--detach", dir, commit)
+	}
+	return append(args, "-b", branch, dir, commit)
 }
 
 // postClone runs the post-clone commands unless the workspace sits at the commit its clones

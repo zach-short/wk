@@ -286,11 +286,18 @@ func TestGCSkipsTheTemplateAndATrial(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(gd, TrialMarkerName), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	gateTrial := addWorktree(t, f, "gate-trial")
+	gd = testrepo.Git(t, gateTrial, "rev-parse", "--absolute-git-dir")
+	if err := os.WriteFile(filepath.Join(gd, GateTrialMarkerName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	expect(t, e, e.TemplateDir(), Skipped, "the wk template")
 	expect(t, e, trial, Skipped, "a land-worktrees trial")
+	expect(t, e, gateTrial, Skipped, "the wk gate trial")
 	apply(t, e)
 	assertStays(t, e.TemplateDir())
 	assertStays(t, trial)
+	assertStays(t, gateTrial)
 }
 
 func TestGCNeverJudgesTheMainCheckout(t *testing.T) {

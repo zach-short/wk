@@ -21,9 +21,10 @@ func (e *Env) queue() changeset.Queue {
 func (e *Env) LandingLogPath() string { return filepath.Join(e.State, "landing.log") }
 
 // LandLoop is `wk land --loop`, the worker: one at a time under landing.lock, it runs passes
-// until no changeset is submitted or landing, then exits (files decision, 2026-10-16). A git
-// failure ends the worker with the error on its log; the next submit or the timer starts one
-// again, which predicts afresh. A second worker finds the lock held and leaves at once.
+// until no changeset is pending, then exits (files decision, 2026-10-16). A git failure, a gate
+// that cannot start and an all-skip gate run end the worker with the error on its log; the next
+// submit or the timer starts one again, which predicts afresh. A second worker finds the lock
+// held and leaves at once.
 func (e *Env) LandLoop(out io.Writer) error {
 	if !e.Cfg.Landing.Enabled {
 		return fmt.Errorf("landing.enabled is false in %s; the worker moves nothing", e.configPath())
@@ -45,8 +46,9 @@ func (e *Env) LandLoop(out io.Writer) error {
 	}
 }
 
-// landPass puts the ref where the loop lands (landing.Ensure), then takes every submitted or
-// landing changeset in queue order. more is whether a submit during the pass left work.
+// landPass puts the ref where the loop lands (landing.Ensure), then lands: with gates, one batch
+// behind one gate run (gatePass); without, every pending changeset in queue order (landAll).
+// more is whether pending work is left, a submit during the pass or the rest of the queue.
 func (e *Env) landPass(out io.Writer) (more bool, err error) {
 	tip, err := e.ensureLanding()
 	if err != nil {
@@ -56,13 +58,13 @@ func (e *Env) landPass(out io.Writer) (more bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	for _, r := range records {
-		if !pending(r) {
-			continue
-		}
-		if tip, err = e.landOne(r, tip, out); err != nil {
-			return false, err
-		}
+	if e.gatesOn() {
+		err = e.gatePass(records, tip, out)
+	} else {
+		err = e.landAll(records, tip, out)
+	}
+	if err != nil {
+		return false, err
 	}
 	if records, err = e.queue().Load(); err != nil {
 		return false, err
@@ -75,8 +77,24 @@ func (e *Env) landPass(out io.Writer) (more bool, err error) {
 	return false, nil
 }
 
+// landAll is P3's pass, the one a repository with no [[gates.run]] keeps (PD-11): every pending
+// changeset in queue order, landed ungated onto the ref.
+func (e *Env) landAll(records []changeset.Record, tip string, out io.Writer) (err error) {
+	for _, r := range records {
+		if !pending(r) {
+			continue
+		}
+		if tip, err = e.landOne(r, tip, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pending is a changeset the worker still owes a landing or a refusal. gated is pending too, so
+// a worker stopped between the gate and the land leaves nothing that is never picked again.
 func pending(r changeset.Record) bool {
-	return r.State == changeset.Submitted || r.State == changeset.Landing
+	return r.State == changeset.Submitted || r.State == changeset.Landing || r.State == changeset.Gated
 }
 
 // landOne predicts r onto tip and lands it, and returns the new tip. A review is demanded

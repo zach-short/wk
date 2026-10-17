@@ -8,7 +8,7 @@ import (
 
 func TestLandingDefaultsAreOff(t *testing.T) {
 	l := Defaults().Landing
-	if l.Enabled || l.Ref != "refs/heads/wk/landing" || l.Remote != "origin" || !l.Push || l.RequireReview {
+	if l.Enabled || l.Ref != "refs/heads/wk/landing" || l.Remote != "origin" || !l.Push || l.RequireReview || !l.FFMain {
 		t.Fatalf("landing defaults = %+v", l)
 	}
 }
@@ -39,7 +39,6 @@ func TestLandingValidation(t *testing.T) {
 		"[landing]\nref = \"refs/heads/\"",
 		"[landing]\nref = \"refs/tags/v1\"",
 		"[landing]\nremote = \"\"",
-		"[landing]\nff_main = true",
 		"[landing]\nref = \"refs/heads/main\"",
 		"[workspace]\nbase = \"trunk\"\n[landing]\nref = \"refs/heads/trunk\"",
 	} {

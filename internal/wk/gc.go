@@ -20,6 +20,11 @@ import (
 // git directory (lib.sh trial_marker). The trial belongs to that skill, so gc leaves it alone.
 const TrialMarkerName = "land-worktrees-trial"
 
+// GateTrialMarkerName marks the landing worker's trial workspace at gates.trial_dir (PD-9 as
+// amended 2026-10-16: /land-worktrees force-removes its own trial marker, so wk has its own).
+// The worker reuses the trial for every batch, so gc leaves it alone.
+const GateTrialMarkerName = "wk-trial"
+
 type Verdict string
 
 const (
@@ -209,6 +214,9 @@ func (e *Env) skipReason(s survey, w gitx.Worktree) string {
 	}
 	if exists(filepath.Join(gd, TrialMarkerName)) {
 		return "a land-worktrees trial; that skill removes it"
+	}
+	if exists(filepath.Join(gd, GateTrialMarkerName)) {
+		return "the wk gate trial; the landing worker reuses it"
 	}
 	return ""
 }

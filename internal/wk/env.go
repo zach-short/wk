@@ -23,9 +23,14 @@ type Env struct {
 	// Refill starts a pool fill that outlives this process. Open leaves it nil, so a library
 	// caller or a test never forks; the command line sets it to a detached `wk pool fill`.
 	Refill func()
-	home   string
-	log    *syncWriter
-	clock  func() time.Time
+	// WKExe is the wk binary a gate is routed through, by `wk run --slot`, when the slots file
+	// recognises its command (PD-10). Open leaves it "", and the gate then runs as it is; the
+	// command line sets it for the landing worker.
+	WKExe string
+	home  string
+	log   *syncWriter
+	clock func() time.Time
+	sleep func(time.Duration)
 }
 
 // Open resolves the repository holding dir and reads its config from home/<repo>.toml. All
@@ -43,7 +48,7 @@ func Open(home, dir string, log io.Writer) (*Env, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Env{Repo: repo, Cfg: cfg, State: filepath.Join(home, repo.Name), home: home, log: &syncWriter{w: log}, clock: time.Now}
+	e := &Env{Repo: repo, Cfg: cfg, State: filepath.Join(home, repo.Name), home: home, log: &syncWriter{w: log}, clock: time.Now, sleep: time.Sleep}
 	if !found {
 		e.say("no %s; using the defaults", path)
 	}

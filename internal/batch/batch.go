@@ -1,6 +1,6 @@
 // Package batch is the pure policy of P4 (DESIGN.md D16, options T and U): which submitted
-// changesets form a batch, how a red batch shrinks, and which changeset a red gate's paths
-// blame. It runs no git and writes nothing; the daemon's landing loop calls it.
+// changesets form a batch, how a red batch splits, and which changeset a red gate's paths
+// blame. It runs no git and writes nothing; the landing worker calls it.
 package batch
 
 import (
@@ -37,14 +37,15 @@ func Pick(records []changeset.Record, max int, idle time.Duration, now time.Time
 	return picked
 }
 
-// Shrink drops the last changeset of a red batch so the rest re-gate without it (T1). ok is
-// false on a batch of fewer than two, which comes back as kept: a lone red changeset is the
-// one that failed, and there is nothing left to re-gate.
-func Shrink(batch []changeset.Record) (kept []changeset.Record, dropped changeset.Record, ok bool) {
+// Halves splits a red batch in two in queue order, the first half holding the extra record of
+// an odd batch, so each half re-gates as a batch of its own (bisection, D16 as amended
+// 2026-10-16; it replaces the drop-the-last fallback T1). ok is false on a batch of fewer than
+// two: a lone red changeset is the one that failed, and there is nothing left to split.
+func Halves(batch []changeset.Record) (first, second []changeset.Record, ok bool) {
 	if len(batch) < 2 {
-		return batch, changeset.Record{}, false
+		return batch, nil, false
 	}
-	last := len(batch) - 1
-	// Capped at last, so a caller appending to kept cannot overwrite the dropped record in batch.
-	return batch[:last:last], batch[last], true
+	mid := (len(batch) + 1) / 2
+	// Capped at mid, so a caller appending to first cannot overwrite second in batch.
+	return batch[:mid:mid], batch[mid:], true
 }

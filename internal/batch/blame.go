@@ -11,7 +11,8 @@ import (
 // diff path equal to it or under it, so a gate that names a directory blames the changesets
 // that changed a file inside it. Both sides are repository-relative: an absolute or ../ path
 // never matches. unique is true only when exactly one changeset matches; with none or several,
-// id is "" and the caller falls back to Shrink (T1).
+// id is "" and the caller bisects with Halves. A unique match is a first guess only: a type
+// check can print the path of an innocent caller (row 12's audit, probe B11).
 func Blame(failedPaths []string, diffs map[string][]string) (id string, unique bool) {
 	failed := clean(failedPaths)
 	var hits []string

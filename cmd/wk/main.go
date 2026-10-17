@@ -96,12 +96,15 @@ wk submit, in a workspace with landing.enabled true, writes the working tree as 
 as the only line on stdout, and starts the landing worker. wk land --loop is that worker: one
 at a time under landing.lock, it lands every submitted changeset onto landing.ref in order by
 compare-and-swap, refuses one that conflicts, and exits when the queue is empty; its log is
-$WK_HOME/<repo>/landing.log. wk sync moves the workspace to the landing tip with its work
+$WK_HOME/<repo>/landing.log. With [[gates.run]] in the config, it gates each batch of up to
+gates.batch_max changesets once in the trial at gates.trial_dir, lands a green batch, marks the
+changeset a red gate traces to failed, and fast-forwards and pushes the base branch when
+landing.ff_main and landing.push are true; a skipped gate never counts as a pass. wk sync moves the workspace to the landing tip with its work
 carried across; a conflict leaves git's markers in the tree. wk land prints the landing tip
 against the base branch and the dirty paths in the main checkout that block a fast-forward;
 wk land --apply --expect <hash> fast-forwards the base branch to the landing ref while it
 still holds <hash>, then pushes it to landing.remote when landing.push is true. wk status
-lists every changeset after the leases.
+lists every changeset after the leases, the last gate run, and why the base branch did not move.
 wk hook lease judges one Edit, Write, MultiEdit, NotebookEdit or Bash call against the leases
 when leases.enabled is true. It prints Claude Code's deny on stdout, logs each deny to
 $WK_HOME/<repo>/hook.log, and always exits 0. wk hooks install adds its two PreToolUse entries
@@ -346,7 +349,10 @@ func runLand(home, repoDir string, args []string, stdout, stderr io.Writer) int 
 	case what == "":
 		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.Land(stdout) })
 	case what == "--loop":
-		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.LandLoop(stdout) })
+		return runLanding(home, repoDir, stderr, func(env *wk.Env) error {
+			env.WKExe = slotExe()
+			return env.LandLoop(stdout)
+		})
 	case len(args) == 3 && args[0] == "--apply" && args[1] == "--expect" && args[2] != "" && args[2][0] != '-':
 		return runLanding(home, repoDir, stderr, func(env *wk.Env) error { return env.LandApply(args[2], stdout) })
 	}
@@ -364,6 +370,16 @@ func spawnLand(env *wk.Env, stderr io.Writer) {
 	if err := daemon.Spawn(exe, []string{"--repo", env.Repo.Primary, "land", "--loop"}, env.LandingLogPath()); err != nil {
 		_, _ = fmt.Fprintf(stderr, "wk: the landing worker did not start (%v); the timer runs it, or run wk land --loop\n", err)
 	}
+}
+
+// slotExe is the binary the worker routes a gate through with wk run --slot (PD-10), or ""
+// for a go run build, whose path is gone once it exits; the gates then run as they are.
+func slotExe() string {
+	exe, err := installedExe()
+	if err != nil || wk.TransientBinary(exe) {
+		return ""
+	}
+	return exe
 }
 
 // runConfigShow prints the effective config, or why the file cannot be read (D26).
