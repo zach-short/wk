@@ -1,5 +1,7 @@
 # 11. Build the gate runner, the path extractor and the memory floor in `internal/gate`
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P4 sibling of row 5 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 4).*
 
 **Model: Opus 5.5. Lane H. Waits on 2** (this package imports nothing from P2 or P3; its tests are shell scripts and a captured `vm_stat`, so it starts with the P2 siblings).

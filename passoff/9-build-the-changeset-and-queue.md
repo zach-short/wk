@@ -1,5 +1,7 @@
 # 9. Build the changeset tree and the queue file in `internal/changeset`
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P3 sibling of row 4 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 3).*
 
 **Model: Fable 5.1. Lane F. Waits on 2** (this package imports only `internal/gitx` and `internal/testrepo`, nothing from P2, so it starts with the P2 siblings).

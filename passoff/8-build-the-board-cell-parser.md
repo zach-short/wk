@@ -1,5 +1,7 @@
 # 8. Build the board cell parser in `internal/board`
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P2 sibling of row 3 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 2).*
 
 **Model: Opus 5.5. Lane E. Waits on 2.**

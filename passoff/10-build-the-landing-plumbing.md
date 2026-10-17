@@ -1,5 +1,7 @@
 # 10. Build the landing plumbing in `internal/landing`: predict, land by CAS, sync, fast-forward
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P3 sibling of row 4 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 3).*
 
 **Model: Fable 5.1. Lane G. Waits on 2** (this package imports only `internal/gitx` and `internal/testrepo`; row 9 builds beside it, so `Sync` reproduces the private-index sequence that prompt 9 step 1 spells out, and nothing of row 9's code is needed).

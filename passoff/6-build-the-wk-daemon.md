@@ -1,5 +1,7 @@
 # 6. Build the wk daemon: a unix-socket server and client in `internal/daemon`
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P2 sibling of row 3 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 2).*
 
 **Model: Opus 5.5. Lane C. Waits on 2.**

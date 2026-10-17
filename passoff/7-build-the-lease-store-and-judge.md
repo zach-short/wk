@@ -1,5 +1,7 @@
 # 7. Build the lease store, the edit judgment and the `Bash` word walk in `internal/lease`
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16 by row 2, as a P2 sibling of row 3 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 2).*
 
 **Model: Opus 5.5. Lane D. Waits on 2.**
