@@ -99,3 +99,12 @@ Open, as the lead asked:
 - N-b. The `GIT_` rule reads the whole command text, so it over-refuses `git var GIT_EDITOR`, `git log --grep=GIT_X`, `echo GIT_X; git status` and `git status # GIT_X`. It never allows a write.
 - N-c. `EDITOR='rm web/page.ts' git commit` passes the walk; with `GIT_EDITOR` unset git runs the editor. The agent environment sets `GIT_EDITOR=true`, and `unset GIT_EDITOR` is refused, so it is inert here; `env -i EDITOR=...` is not verified.
 - N-d. A value that names a script (`-c core.fsmonitor=./hook.sh`, `-c core.pager=./script.sh`, `-c core.alternateRefsCommand=x`, `-c uploadpack.packObjectsHook=x`, `HOME=/tmp/h git status` with a planted config, `git --exec-path=/tmp/e fetch .`) passes, as scripts do everywhere in the walk.
+
+### Sign-off, 2026-10-17
+
+- Builder: Opus 5.5 (agent aa81df3e0bf24ad6e; two fix rounds). Auditors: Opus 5.5 (a1bc7b964a99615a2 blocking F1 to F7; ae25226e2a80508f4 blocking B1 to B3 under a scoped verdict; ae59ee80efc3a562a clean).
+- Worktree `.claude/worktrees/ap-row-14`, branch `ap/row-14`, tip `619eb01` before this commit. Relay passes: 0. Fix rounds: 2.
+- Verdict: clean (audit 3, 2026-10-17 11:49 EDT): gate exit 0, 418 PASS, no input refused by main or ef61fe5 that 619eb01 allows and git writes.
+- Open, non-blocking: `checkout -t<x>` over-refused (`t` not in `checkoutValues`); `stash show --output <file>` next-word over-refused; the `ext::` checks are case-sensitive (enough on git 2.49.0); the `GIT_` text rule over-refuses `git var GIT_EDITOR` and comments; `EDITOR=` inert while `GIT_EDITOR` is set; a `-c` value that names a script passes as an unknown command (the walk's known gap); repository hooks stay outside the walk.
+- The README's known-spellings paragraph still names `--pathspec-from-file`, aliases, `git merge-file` and `git submodule update --init` as open; the lead removes those sentences after row 4, which owns README.md while in flight, lands.
+- Lifted: not a Deep row.
