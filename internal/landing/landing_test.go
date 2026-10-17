@@ -527,7 +527,16 @@ func mayRun(section, cmd string, rest []string) bool {
 	case readOnly[cmd]:
 		return true
 	case cmd == "symbolic-ref":
-		return len(rest) > 0 && rest[len(rest)-1] == "HEAD" // a write names a target after HEAD
+		// The read form is options then HEAD; a write names a ref before its target.
+		if len(rest) == 0 || rest[len(rest)-1] != "HEAD" {
+			return false
+		}
+		for _, a := range rest[:len(rest)-1] {
+			if !strings.HasPrefix(a, "--") {
+				return false
+			}
+		}
+		return true
 	case cmd == "worktree":
 		return len(rest) > 0 && rest[0] == "list"
 	}
