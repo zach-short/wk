@@ -1,0 +1,519 @@
+package lease
+
+import (
+	"path/filepath"
+	"strings"
+)
+
+// WriteTargets returns the files a shell command writes, by the spellings the walk recognises
+// (D11), without a shell parser (PD-4): `sed -i`, `tee`, the `>` family of redirections, `cp`
+// (its last argument), `mv` (every argument: the sources disappear), `rm`, `touch`, `git mv`,
+// `git rm`, and `python`, `python3` or `node` given a `-c` or `-e` program that opens a file for
+// writing. Leading `VAR=value` words and shell keywords are skipped, `cd` moves the directory
+// for what follows it, `git -C` for its own arguments, and a subshell's `cd` ends at its `)`.
+//
+// Targets are absolute. A word the shell would expand is narrowed to its literal directory
+// (`web/*.ts` is `web`), and one that could be anywhere (`$X/a`, `~/a`, a relative path after a
+// `cd` the walk cannot follow) is returned as written, not absolute, for the judgment to refuse.
+// A command the walk cannot split, such as one with an open quote, returns nothing. Every other
+// spelling passes: the walk fails closed only on what it recognises.
+func WriteTargets(cwd, command string) []string {
+	words, ok := split(command)
+	if !ok {
+		return nil
+	}
+	w := walker{dir: absOrUnknown(cwd)}
+	w.run(words)
+	return w.targets
+}
+
+// word is one word after quote removal, or one operator when op is set. exp is the index in text
+// of the first character the shell would expand, or -1 when the word is literal.
+type word struct {
+	text string
+	op   string
+	exp  int
+}
+
+// redirection kinds: a write names a target, a dup may (`>&file`) or may not (`>&2`), a read
+// never does. Every operator not listed here ends a command.
+const (
+	read = iota + 1
+	write
+	dup
+)
+
+var redirections = map[string]int{
+	">": write, ">>": write, ">|": write, "&>": write, "&>>": write, "<>": write,
+	">&": dup, "<": read, "<&": read, "<<": read, "<<-": read, "<<<": read,
+}
+
+type walker struct {
+	dir     string // "" when the walk cannot tell
+	saved   []string
+	argv    []word
+	targets []string
+}
+
+func (w *walker) run(words []word) {
+	for i := 0; i < len(words); i++ {
+		t := words[i]
+		kind, isRedirect := redirections[t.op]
+		switch {
+		case t.op == "":
+			w.argv = append(w.argv, t)
+		case isRedirect:
+			if i+1 < len(words) && words[i+1].op == "" {
+				i++
+				w.redirect(kind, words[i])
+			}
+		default:
+			w.end()
+			w.subshell(t.op)
+		}
+	}
+	w.end()
+}
+
+func (w *walker) redirect(kind int, target word) {
+	if kind == write || kind == dup && strings.Trim(target.text, "0123456789") != "" && target.text != "-" {
+		w.add(w.dir, target)
+	}
+}
+
+// subshell keeps a `cd` inside `( ... )` from reaching past its `)`.
+func (w *walker) subshell(op string) {
+	switch {
+	case op == "(":
+		w.saved = append(w.saved, w.dir)
+	case op == ")" && len(w.saved) > 0:
+		w.dir = w.saved[len(w.saved)-1]
+		w.saved = w.saved[:len(w.saved)-1]
+	}
+}
+
+// end judges the simple command gathered so far.
+func (w *walker) end() {
+	argv := skipPrefix(w.argv)
+	w.argv = nil
+	if len(argv) == 0 {
+		return
+	}
+	args := argv[1:]
+	switch filepath.Base(argv[0].text) {
+	case "cd":
+		w.cd(args)
+	case "sed":
+		w.add(w.dir, sedFiles(args)...)
+	case "tee", "rm", "touch", "mv":
+		w.add(w.dir, operands(args)...)
+	case "cp":
+		if ops := operands(args); len(ops) > 0 {
+			w.add(w.dir, ops[len(ops)-1])
+		}
+	case "git":
+		w.git(args)
+	case "python", "python3", "node":
+		w.add(w.dir, inlineWrites(args)...)
+	}
+}
+
+func (w *walker) add(dir string, words ...word) {
+	for _, t := range words {
+		w.targets = append(w.targets, place(dir, t))
+	}
+}
+
+func (w *walker) cd(args []word) {
+	ops := operands(args)
+	if len(ops) == 0 || ops[0].text == "-" || ops[0].exp >= 0 {
+		w.dir = ""
+		return
+	}
+	w.dir = absOrUnknown(place(w.dir, ops[0]))
+}
+
+// git walks past git's global options to `mv` or `rm`. `-C <dir>` moves where git reads paths.
+func (w *walker) git(args []word) {
+	dir := w.dir
+	for i := 0; i < len(args); i++ {
+		switch a := args[i].text; {
+		case a == "-C" && i+1 < len(args):
+			i++
+			dir = absOrUnknown(place(dir, args[i]))
+			if args[i].exp >= 0 {
+				dir = ""
+			}
+		case a == "-c" || a == "--git-dir" || a == "--work-tree" || a == "--namespace":
+			i++
+		case strings.HasPrefix(a, "-"):
+		case a == "mv" || a == "rm":
+			w.add(dir, operands(args[i+1:])...)
+			return
+		default:
+			return
+		}
+	}
+}
+
+// place makes a target absolute against dir, or returns it as written when it cannot.
+func place(dir string, t word) string {
+	s := t.text
+	if t.exp == 0 && strings.ContainsRune("$`~", rune(s[0])) {
+		return s
+	}
+	if t.exp >= 0 {
+		s = s[:strings.LastIndexByte(s[:t.exp], '/')+1]
+		if s == "" {
+			s = "."
+		}
+	}
+	if filepath.IsAbs(s) {
+		return filepath.Clean(s)
+	}
+	if dir == "" {
+		return s
+	}
+	return filepath.Join(dir, s)
+}
+
+func absOrUnknown(dir string) string {
+	if filepath.IsAbs(dir) {
+		return filepath.Clean(dir)
+	}
+	return ""
+}
+
+var keywords = map[string]bool{
+	"!": true, "{": true, "if": true, "then": true, "else": true, "elif": true,
+	"do": true, "while": true, "until": true, "time": true,
+}
+
+func skipPrefix(argv []word) []word {
+	for len(argv) > 0 && (keywords[argv[0].text] || isAssignment(argv[0].text)) {
+		argv = argv[1:]
+	}
+	return argv
+}
+
+func isAssignment(s string) bool {
+	name, _, ok := strings.Cut(s, "=")
+	if !ok || name == "" || name[0] >= '0' && name[0] <= '9' {
+		return false
+	}
+	return strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == ""
+}
+
+// operands drops flags; after `--` every word is an operand.
+func operands(args []word) []word {
+	var out []word
+	for i, a := range args {
+		if a.text == "--" {
+			return append(out, args[i+1:]...)
+		}
+		if len(a.text) < 2 || a.text[0] != '-' {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// sedFiles returns the files `sed` edits in place, or nothing without `-i`. The first operand
+// is the script unless `-e` or `-f` gave one. A bare `-i` followed by an empty word is the macOS
+// BSD form, and the empty word is its backup suffix.
+func sedFiles(args []word) []word {
+	inPlace, script := false, false
+	var rest []word
+	for i := 0; i < len(args); i++ {
+		a := args[i].text
+		switch {
+		case a == "--":
+			rest = append(rest, args[i+1:]...)
+			i = len(args)
+		case a == "--expression" || a == "--file":
+			script = true
+			i++
+		case strings.HasPrefix(a, "--expression=") || strings.HasPrefix(a, "--file="):
+			script = true
+		case strings.HasPrefix(a, "--in-place"):
+			inPlace = true
+		case strings.HasPrefix(a, "--"):
+		case len(a) > 1 && a[0] == '-':
+			in, s, next := sedCluster(a[1:])
+			inPlace, script = inPlace || in, script || s
+			if in && a == "-i" && i+1 < len(args) && args[i+1].text == "" || next {
+				i++
+			}
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	if !inPlace {
+		return nil
+	}
+	if !script && len(rest) > 0 {
+		rest = rest[1:]
+	}
+	return rest
+}
+
+// sedCluster reads one short-flag cluster as sed does: `i` takes the rest as its suffix, and
+// `e` or `f` take the rest, or the next word when they end the cluster.
+func sedCluster(letters string) (inPlace, script, next bool) {
+	for j := 0; j < len(letters); j++ {
+		switch letters[j] {
+		case 'i':
+			return true, script, false
+		case 'e', 'f':
+			return inPlace, true, j == len(letters)-1
+		}
+	}
+	return inPlace, script, false
+}
+
+// inlineWrites returns the program of `-c`, `-e`, `--eval`, `-p` or `--print` read for the
+// files it opens for writing.
+func inlineWrites(args []word) []word {
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i].text {
+		case "-c", "-e", "--eval", "-p", "--print":
+			return codeWrites(args[i+1].text)
+		}
+	}
+	return nil
+}
+
+// The calls whose first string literal is a file written. A call with a mode counts only when
+// the literal after it holds `w`, `a`, `x` or `+`.
+var writeCalls = []struct {
+	name string
+	mode bool
+}{
+	{"open(", true}, {"openSync(", true},
+	{"writeFile(", false}, {"writeFileSync(", false}, {"appendFile(", false}, {"appendFileSync(", false},
+}
+
+func codeWrites(code string) []word {
+	var out []word
+	for _, c := range writeCalls {
+		for rest := code; ; {
+			i := strings.Index(rest, c.name)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(c.name):]
+			if f, ok := callTarget(rest, c.mode); ok {
+				out = append(out, word{text: f, exp: -1})
+			}
+		}
+	}
+	return out
+}
+
+func callTarget(args string, mode bool) (string, bool) {
+	name, rest, ok := literal(args)
+	if !ok || !mode {
+		return name, ok
+	}
+	rest = strings.TrimLeft(rest, " \t")
+	if !strings.HasPrefix(rest, ",") {
+		return "", false
+	}
+	rest = strings.TrimPrefix(strings.TrimLeft(rest[1:], " \t"), "mode=")
+	m, _, ok := literal(rest)
+	return name, ok && strings.ContainsAny(m, "wax+")
+}
+
+// literal reads one quoted string literal at the start of s, after spaces.
+func literal(s string) (val, rest string, ok bool) {
+	s = strings.TrimLeft(s, " \t")
+	if s == "" || !strings.ContainsRune("'\"`", rune(s[0])) {
+		return "", s, false
+	}
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case s[0]:
+			return s[1:i], s[i+1:], true
+		}
+	}
+	return "", s, false
+}
+
+// Operators, longest first so `&&` is never read as two `&`.
+var operators = []string{
+	"&>>", "<<<", "<<-", "&&", "||", ";;", "|&", ">>", ">|", ">&", "&>", "<<", "<&", "<>",
+	";", "&", "|", "<", ">", "(", ")",
+}
+
+// splitter turns a command into words and operators the way the shell reads quotes: single
+// quotes keep everything, double quotes keep all but `\`, `$` and backticks, a backslash keeps
+// the next character, and a backslash before a newline joins the lines. A newline ends a
+// command, a `#` at the start of a word starts a comment, and a heredoc's body is skipped.
+type splitter struct {
+	s       string
+	i       int
+	out     []word
+	cur     strings.Builder
+	in      bool
+	exp     int
+	bodies  []heredoc
+	pending *heredoc
+}
+
+type heredoc struct {
+	delim string
+	tabs  bool
+}
+
+func split(s string) ([]word, bool) {
+	p := splitter{s: s, exp: -1}
+	for p.i < len(p.s) {
+		if !p.step() {
+			return nil, false
+		}
+	}
+	p.flush()
+	return p.out, true
+}
+
+func (p *splitter) step() bool {
+	c := p.s[p.i]
+	switch {
+	case c == ' ' || c == '\t':
+		p.flush()
+		p.i++
+	case c == '\n':
+		p.flush()
+		p.out = append(p.out, word{op: ";"})
+		p.i++
+		p.skipBodies()
+	case c == '#' && !p.in:
+		for p.i < len(p.s) && p.s[p.i] != '\n' {
+			p.i++
+		}
+	case c == '\\':
+		return p.escape()
+	case c == '\'':
+		return p.single()
+	case c == '"':
+		return p.double()
+	case strings.IndexByte(";&|<>()", c) >= 0:
+		p.operator()
+	default:
+		p.char(c, strings.IndexByte("$`*?[", c) >= 0 || c == '~' && !p.in)
+		p.i++
+	}
+	return true
+}
+
+func (p *splitter) char(c byte, expands bool) {
+	if expands && p.exp < 0 {
+		p.exp = p.cur.Len()
+	}
+	p.cur.WriteByte(c)
+	p.in = true
+}
+
+func (p *splitter) escape() bool {
+	if p.i+1 >= len(p.s) {
+		return false
+	}
+	if p.s[p.i+1] != '\n' {
+		p.char(p.s[p.i+1], false)
+	}
+	p.i += 2
+	return true
+}
+
+func (p *splitter) single() bool {
+	end := strings.IndexByte(p.s[p.i+1:], '\'')
+	if end < 0 {
+		return false
+	}
+	p.cur.WriteString(p.s[p.i+1 : p.i+1+end])
+	p.in = true
+	p.i += end + 2
+	return true
+}
+
+func (p *splitter) double() bool {
+	p.in = true
+	for p.i++; p.i < len(p.s); p.i++ {
+		switch c := p.s[p.i]; {
+		case c == '"':
+			p.i++
+			return true
+		case c == '\\' && p.i+1 < len(p.s) && strings.IndexByte("$`\"\\\n", p.s[p.i+1]) >= 0:
+			p.i++
+			if p.s[p.i] != '\n' {
+				p.char(p.s[p.i], false)
+			}
+		default:
+			p.char(c, c == '$' || c == '`')
+		}
+	}
+	return false
+}
+
+// operator reads one operator. Digits right before a redirection are its file descriptor
+// (`2>err`), not a word.
+func (p *splitter) operator() {
+	op := ""
+	for _, o := range operators {
+		if strings.HasPrefix(p.s[p.i:], o) {
+			op = o
+			break
+		}
+	}
+	text := p.cur.String()
+	if (op[0] == '<' || op[0] == '>') && p.in && p.exp < 0 && strings.Trim(text, "0123456789") == "" && text != "" {
+		p.reset()
+	} else {
+		p.flush()
+	}
+	p.out = append(p.out, word{op: op})
+	if op == "<<" || op == "<<-" {
+		p.pending = &heredoc{tabs: op == "<<-"}
+	}
+	p.i += len(op)
+}
+
+func (p *splitter) flush() {
+	if !p.in {
+		return
+	}
+	p.out = append(p.out, word{text: p.cur.String(), exp: p.exp})
+	if p.pending != nil {
+		p.pending.delim = p.cur.String()
+		p.bodies = append(p.bodies, *p.pending)
+		p.pending = nil
+	}
+	p.reset()
+}
+
+func (p *splitter) reset() {
+	p.cur.Reset()
+	p.in = false
+	p.exp = -1
+}
+
+// skipBodies passes over the bodies of the heredocs opened on the line just ended, so a `>` or
+// an `rm` in a body is never read as a command.
+func (p *splitter) skipBodies() {
+	for _, h := range p.bodies {
+		for p.i < len(p.s) {
+			line, _, _ := strings.Cut(p.s[p.i:], "\n")
+			p.i += len(line) + 1
+			if h.tabs {
+				line = strings.TrimLeft(line, "\t")
+			}
+			if line == h.delim {
+				break
+			}
+		}
+	}
+	p.i = min(p.i, len(p.s))
+	p.bodies = nil
+}

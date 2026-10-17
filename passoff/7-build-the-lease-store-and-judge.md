@@ -20,3 +20,60 @@ Ask before building: nothing.
 Not in scope, whoever asks: parsing the board (row 8), the socket (row 6), the hook, any subcommand or config key, a shell parser dependency (PD-4), D13 L3. A need outside your package is a finding for row 3 in your close-out, never an edit.
 
 Hand back: the gate output, the exported surface with each function's one-line contract, the list of recognised spellings as tested, the findings for row 3, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Close-out, 2026-10-16
+
+Built on `ap/row-7` from `main` at `344f8c7` by Opus 5.5, the model the row names. The package is `internal/lease/` and nothing else changed except this section. It imports only the standard library, so `go.mod` is untouched (PD-4), and it imports no sibling package.
+
+### What changed and why
+
+`store.go` holds the claims, `judge.go` resolves a path to its worktree and judges a tool call, and `bash.go` finds the files a `Bash` command writes. The three test files hold the tables the prompt asks for. The exported surface, with each contract:
+
+- `Store{Workspaces map[string]Workspace}` and `Workspace{Row, Session, Leases, ClaimedAt}`, JSON tags on every field (`workspaces`, `row`, `session`, `leases`, `claimed_at`). The zero value is ready. A `Store` is not safe for concurrent use.
+- `(*Store).Claim(root, row, session, leases) error`: records the claim, replacing any earlier claim of that root; refuses a malformed lease or one that overlaps a lease of another root, with the message `lease <l> overlaps <h>, held by row <row> in <root>`.
+- `(*Store).Add(root, leases) error`: the same rule; refuses a root with no claim.
+- `(*Store).Release(root)`: drops the claim and its leases.
+- `(*Store).Claimed(root) bool`: true for any claim, `--none` included.
+- `(*Store).Holder(rel) (root, row, ok)`: the first root, in sorted order, holding a lease that overlaps `rel`, where `rel` counts as a possible directory.
+- `Resolve(roots, cwd, path) (root, rel, ok)`: joins a relative path to `cwd`, cleans it, and picks the longest root that contains it; `rel` is slash-separated and `.` for the root itself; `ok` is false outside every root. It reads no disk.
+- `Judge(store, Rules{SingleWriter, BashGuard}, roots, Request{Tool, Cwd, Path, Command}) Decision{Allow, Reason}`: the order of section 2, with every target of a `Bash` command judged and one denial denying the command.
+- `WriteTargets(cwd, command) []string`: the files the command writes, absolute, or as written when the walk cannot place them.
+
+The deny messages, as the tests write them out:
+
+- ``wk: this workspace has not claimed a row; run `wk claim <row>` or `wk claim --none` in <root>``
+- `wk: <rel> is leased by row <row> in <holder root>; leave it to that workspace or wait until it releases`
+- ``wk: <path> is single-writer (leases.single_writer) and this workspace does not lease it; run `wk lease add <path>` in <root>``
+- `wk: cannot tell which file this writes ("<path>"); give the path in full`
+- A `Bash` denial adds ` (the command writes <target>)`.
+
+The spellings the walk recognises, each in `bash_test.go` (48 commands, PD-13 asks for 25): `sed -i` in its GNU, attached-suffix (`-i.bak`), macOS empty-suffix (`-i ''`), clustered (`-Ei`), `-e` and `--` forms; `tee` and `tee -a`, also in a pipe; `>`, `>>`, `>|`, `&>`, `>file`, `2>file`, with `2>&1` and `<` read as no target; `cp` (last argument); `mv`, `rm`, `touch` (every operand, `--` honoured); `git rm -r`, `git mv`, `git -C <dir>`; `python`, `python3` with `-c` and `open(` with a write mode, also `mode=`; `node -e` with `writeFileSync(`. The walk also covers leading `VAR=value` words, `cd` then `&&` or `;`, an absolute `cd`, a subshell whose `cd` ends at `)`, shell keywords (`if ... then`), newlines, comments, quoted and escaped spaces, `>` inside quotes, heredoc bodies (skipped, with `<<-` too), and an open quote (no targets).
+
+### Build-level calls, each with its reversal
+
+- `mv` and `git mv` judge every operand, not only the last: a moved source disappears from the tree, so a pass on it is a collision. Reversal: the last operand only.
+- A fifth denial, before the four of section 2, for a path the judgment cannot place: an empty path, a relative path with no absolute `cwd`, a `Bash` target that starts with `$`, a backtick or `~`, or a relative target after a `cd` the walk cannot follow. Treating these as outside every root would be a silent pass. Reversal: allow them as outside every root.
+- A word with a glob or a mid-word `$` is narrowed to its literal directory (`web/*.ts` is `web`), and every target is judged as a possible directory, so `rm -r web` is refused when another root leases anything under `web/`. Reversal: judge the word as written.
+- A write mode is `w`, `a`, `x` or `+`, and Node's `openSync(`, `writeFile(`, `writeFileSync(`, `appendFile(` and `appendFileSync(` count, because Node has no `open(` idiom. Reversal: `open(` with `w` or `a` alone.
+- A second `Claim` by one root replaces its claim. Reversal: refuse until `Release`.
+- `Claim` and `Add` refuse a lease that is empty, absolute, holds `..` or `.`, or is not in clean form. Reversal: accept and clean.
+- No mutex in `Store`; the daemon serialises. Reversal: a mutex and a locking `MarshalJSON`.
+
+### What is now fixed
+
+The overlap rule, the claim refusal that names the holder, the judgment order and its messages, and the `Bash` walk exist and are tested. The package gate line ran green on 2026-10-16: `go test -race -count=1 ./internal/lease/...` gave `ok`, and the whole gate exited 0 with `0 issues.` from golangci-lint.
+
+### Questions answered
+
+Whether the walk needs a shell parser: it does not for the spellings of section 2 (PD-4 holds). Whether an untracked worktree nested under the main checkout resolves to itself: yes, by longest prefix (`TestResolve`, "nested root wins").
+
+### Left owed, findings for row 3
+
+- Canonical paths. `Resolve` reads no disk. Row 3 must make the roots from `git worktree list` and the hook's `cwd` and `file_path` agree on symlinks (macOS `/tmp` is `/private/tmp`, `/var` is `/private/var`), or a path inside a root reads as outside every root and is allowed. A symlink inside a worktree that points into another worktree (DESIGN.md section 6) is judged where it is written.
+- The judgment keys on the root that holds the path, not the root of `cwd`. A session in worktree A that writes an absolute path in worktree B is judged as B's write. If row 3 wants the session's own root to be the holder, `judgePath` needs the `cwd` root as well.
+- `Judge` has no `enabled` flag: with `leases.enabled` false, row 3 must not call it. The daemon-down refusal is row 3's too.
+- Map `NotebookEdit`'s `notebook_path` and `MultiEdit`'s `file_path` into `Request.Path`.
+- Hold one lock around each store operation and the `SaveJSON` after it.
+- `Claim` refuses the whole claim on one malformed lease. Row 3 should turn row 8's `**` tokens into a trailing `/`, and route a token that is not clean into the unread list before it calls `Claim`.
+- Spellings that pass unseen, for the README's statement that `Bash` coverage is partial: wrappers (`sudo`, `env`, `xargs`, `sh -c`, `bash -c`), `find -delete` and `-exec`, `perl -i`, `dd of=`, `ln`, `chmod`, `truncate`, `install`, `patch`, `git checkout -- <file>`, `git restore`, `cp -t`, and a program fed on standard input (`python3 - <<EOF`).
+- Known over-refusals, each costing one message: `[[ a > b ]]` and `(( a > b ))` read `>` as a redirection, and a glob or mid-word `$` in the working directory (`rm *.log`) is judged as the whole tree, so it is refused while any other root holds a lease.
