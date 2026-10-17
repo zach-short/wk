@@ -177,7 +177,7 @@ What changed:
 - N12. `request` places a cwd it cannot read (a link loop) as the unplaceable marker again, as `1c4a1fd` did, by one helper shared with the target spelling. N13 stays open.
 - README: the entry spelling reads the parent through links before it keeps the last component, and the cleaned spelling is for the edit tools only; the over-refusal list names the write through a link that sits in a directory leased elsewhere.
 
-Build-level call, with its reversal: the cleaned spelling applies to the edit tools only, and for `Bash` it only refused writes that land outside, with a message naming the wrong file. (Corrected 2026-10-17 by pass 3: the reason first given here, that no program in a shell removes a `..` by text, is false for git, which does so in `git rm` and `git mv` pathspecs; audit 4, B9. Pass 3 refuses those operands in the walk instead.) Reversal: give `Bash` all three spellings again, as `53be9d5` did.
+Build-level call, with its reversal: the cleaned spelling applies to the edit tools only, because a shell never removes a `..` by text, and for `Bash` it only refused writes that land outside, with a message naming the wrong file. (Corrected 2026-10-17 by pass 3: the reason first given here, that no program in a shell removes a `..` by text, is false for git, which does so in `git rm` and `git mv` pathspecs; audit 4, B9. Pass 3 refuses those operands in the walk instead.) Reversal: give `Bash` all three spellings again, as `53be9d5` did.
 
 Not verified in this pass: what Claude Code 2.1.301 does with a `..` in `file_path` (the edit tools keep the cleaned spelling, so both behaviours are closed). No `claude -p` was run, `go install` was not run, and `~/.wk` was not touched.
 
