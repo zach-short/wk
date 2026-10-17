@@ -8,10 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
-	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -260,7 +259,6 @@ func TestHookPreToolUseFailsOpenOnResolveErrorAndPanic(t *testing.T) {
 // 20 runs, with the timing printed. Git reads no user or system config (testrepo.Isolate's
 // variables, set per test because TestMain is not this file's to define).
 func TestHookPreToolUseTiming(t *testing.T) {
-	hookTestSkipUnderLoad(t)
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	repo := filepath.Join(t.TempDir(), "ezhomesteading")
@@ -271,7 +269,9 @@ func TestHookPreToolUseTiming(t *testing.T) {
 	if err := os.MkdirAll(web, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := hookTestSetup(t, matchTestSlotsTOML)
+	// A 5 s deadline, so the stdout check proves the real-git rewrite at any machine load; the
+	// 200 ms deadline is TestHookPreToolUseDeadline's, with a stub resolver.
+	env := hookTestSetup(t, strings.Replace(matchTestSlotsTOML, "timeout_ms = 200", "timeout_ms = 5000", 1))
 	env.deps.Resolve = nil
 	input := strings.Replace(hookTestInput("Bash", `{"command":"`+hookTestGateLine+`","description":"Run the web gates"}`), "/r/ezhomesteading", web, 1)
 	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{` +
@@ -279,64 +279,37 @@ func TestHookPreToolUseTiming(t *testing.T) {
 		`"description":"Run the web gates","timeout":600000}}}` + "\n"
 	var total, longest time.Duration
 	runs := make([]string, 0, 20)
+	cpuStart := hookTestCPU(t)
 	for range 20 {
 		start := time.Now()
 		got := env.run(t, input)
 		took := time.Since(start)
 		if got != want {
-			hookTestSkipUnderLoad(t)
 			t.Fatalf("stdout\n got %s\nwant %s", got, want)
 		}
 		total, longest = total+took, max(longest, took)
 		runs = append(runs, fmt.Sprintf("%.1f", float64(took.Microseconds())/1000))
 	}
-	mean := total / 20
-	t.Logf("HookPreToolUse, 20 runs, ms: %s; mean %.1f ms, longest %.1f ms", strings.Join(runs, " "),
-		float64(mean.Microseconds())/1000, float64(longest.Microseconds())/1000)
-	if mean >= 50*time.Millisecond {
-		hookTestSkipUnderLoad(t)
-		t.Errorf("mean %v over 20 runs; the row asks for under 50 ms", mean)
+	cpu, mean := (hookTestCPU(t)-cpuStart)/20, total/20
+	t.Logf("HookPreToolUse, 20 runs, wall ms: %s; wall mean %.1f ms, longest %.1f ms; CPU mean %.1f ms", strings.Join(runs, " "),
+		float64(mean.Microseconds())/1000, float64(longest.Microseconds())/1000, float64(cpu.Microseconds())/1000)
+	if cpu >= 50*time.Millisecond {
+		t.Errorf("mean CPU time %v per run over 20 runs; the bound is 50 ms", cpu)
 	}
 }
 
-// The hook's 200 ms deadline and the 50 ms bound are wall time, and the hook runs in this
-// process, so neither can be read as CPU time. With more runnable threads than CPUs the git
-// child waits for a core: the deadline passes and the hook rightly prints nothing, so the
-// expected output is impossible, and the mean measures the wait for a core, not the code. The
-// limit is one runnable thread per CPU because that is where the wait starts: on a 10-CPU
-// machine the mean was 37 to 49 ms, near the bound, at load 11 to 12, and 58 to 80 ms or no
-// output at 10 to 40 (ezhomesteading row 234). The check runs again at a failure because the
-// one-minute average lags and may cross the limit during the runs.
-const hookTestMaxLoadPerCPU = 1.0
-
-func hookTestSkipUnderLoad(t *testing.T) {
+// The bound is CPU time because wall time on a loaded machine measures the wait for a core, not
+// the hook (ezhomesteading row 234). The children's share counts the resolver's git run, which
+// gitx.Run reaps, and nothing else runs meanwhile: no parallel test runs beside a sequential one.
+func hookTestCPU(t *testing.T) time.Duration {
 	t.Helper()
-	limit := hookTestMaxLoadPerCPU * float64(runtime.NumCPU())
-	if load, ok := hookTestLoad(); ok && load > limit {
-		t.Skipf("one-minute load average %.2f is above %.0f (%d CPUs); the timing bound is checked only below it", load, limit, runtime.NumCPU())
+	var total time.Duration
+	for _, who := range []int{syscall.RUSAGE_SELF, syscall.RUSAGE_CHILDREN} {
+		var ru syscall.Rusage
+		if err := syscall.Getrusage(who, &ru); err != nil {
+			t.Fatal(err)
+		}
+		total += time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 	}
-}
-
-// hookTestLoad returns ok false where the load cannot be read, so an unknown load never skips.
-func hookTestLoad() (float64, bool) {
-	text, err := hookTestLoadText()
-	fields := strings.Fields(text)
-	if err != nil || len(fields) == 0 {
-		return 0, false
-	}
-	load, err := strconv.ParseFloat(fields[0], 64)
-	return load, err == nil
-}
-
-// The absolute path, so a PATH without /usr/sbin cannot turn the skip off.
-func hookTestLoadText() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		out, err := exec.Command("/usr/sbin/sysctl", "-n", "vm.loadavg").Output()
-		return strings.Trim(string(out), "{} \n"), err
-	case "linux":
-		data, err := os.ReadFile("/proc/loadavg")
-		return string(data), err
-	}
-	return "", errors.New("no load average on " + runtime.GOOS)
+	return total
 }
