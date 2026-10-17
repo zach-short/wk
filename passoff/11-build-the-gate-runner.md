@@ -20,3 +20,36 @@ Ask before building: nothing.
 Not in scope, whoever asks: the trial workspace, the batch, attribution, the slots (row 200), any subcommand or config key. A need outside your package is a finding for row 5 in your close-out, never an edit.
 
 Hand back: the gate output, the exported surface with each function's one-line contract, the output samples the path table covers, the findings for row 5, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Close-out, 2026-10-16
+
+Built `internal/gate/` (`run.go`, `paths.go`, `memory.go` and a test file for each). The package imports only the standard library. Nothing outside `internal/gate/` changed except this section.
+
+**Exported surface.**
+
+- `Gate{Name, Dir string; Run, NeedsEnv []string}`: `Run` is the argument vector, `Dir` is relative to the root.
+- `Result{Name, Status, Reason string; Output []byte; Seconds float64}`, with `Status` one of the constants `Pass`, `Fail`, `Skip` (`"pass"`, `"fail"`, `"skip"`).
+- `Run(root, gates, env, caches, log) ([]Result, error)`: runs the gates in order in `root/Dir`, with `env` added to the process environment, and stops after the first `fail`. A gate whose `NeedsEnv` names a variable unset in the process environment is `skip` with "<VAR> is unset" and is not run. Each `caches` variable points at one fresh empty `os.MkdirTemp` directory for the whole run, shared by its gates, removed afterwards; it wins over the same name in `env`. Stdout and stderr go together into `Output`; a status line and the last 20 lines go to `log` (PD-13). A non-zero exit is `fail` with `exit status N` as the reason. The error is only for a gate that could not start (missing binary or directory, empty `Run`): that says nothing about the tree, so it must not be blamed on a changeset.
+- `Paths(root, output) []string`: the root-relative paths of existing files the output names, deduplicated in first-seen order. It strips ANSI colours, then reads each unindented line as `path:line[:col]`, `path(line,col)`, a madge `a > b` chain, or a lone path (gofmt `-l`, eslint stylish headers). Absolute paths under `root` (or under its resolved form) become relative; anything outside `root`, missing, or a directory is dropped. Indented lines are never read, because tsc, golangci-lint and eslint indent quoted source there.
+- `FreeMB() (int, error)`: free plus inactive plus speculative pages from `vm_stat`, times the page size in its first line, in MiB.
+- `WaitForMemory(min int, sample time.Duration, log io.Writer) error`: returns when `FreeMB() >= min`, logging one line when it starts to wait and one when it stops, nothing when no wait was needed.
+
+**Output samples the path table covers** (`paths_test.go`). Each one was captured on 2026-10-16 in a throwaway probe project in the builder's scratchpad, not in ezhomesteading, and not from `SLOTS-SCOPE.md` 1.4, which records timings and no output. Only the absolute prefix is replaced: `go build` and `go vet` (go1.24.1), `gofmt -l`, `golangci-lint` v2.12.2, `tsc` 5.8.3 with and without `--pretty`, eslint 9.39.5 stylish, and madge 8.0.0 run from the root and from a subdirectory. The table also covers a path outside the root, a missing path, a directory, a `..` escape and a duplicate. A separate test covers a root reached through a symlink. `memory_test.go` reads a `vm_stat` captured the same day (5905 MiB).
+
+**Build-level calls, each with its reversal.**
+
+- `WaitForMemory` returns `error`; the prompt gave no return type. Without one, an unreadable `vm_stat` either blocks gating for ever or passes silently. Reversal: drop the return and log the error.
+- `Run` returns an error, not a `fail`, for a gate it cannot start. Reversal: make it `fail` with the start error as the reason.
+- `Paths` also accepts `path:line` with no column. No sample here needs it; the existence check keeps it safe. Reversal: make the column required in `position`.
+- MB means MiB (`1 << 20`).
+
+**Findings for row 5.**
+
+- Tools print paths relative to their own working directory: `go build` prints `./main.go` relative to the gate's `dir`, `tsc` relative to its project, and madge relative to the directory or file it was given (`madge ... src/b.ts` printed `b.ts > c.ts`). `Paths(root, out)` drops all of these when the gate runs in a subdirectory. Recommendation: call `Paths(filepath.Join(trial, g.Dir), r.Output)` and join `g.Dir` onto each result. Give a madge gate the `dir` of its base directory, or its paths stay unreadable.
+- eslint 9 (9.39.5 at ezhomesteading's root, 9.20.1 in `web/`) no longer ships the compact formatter, and the `lint` scripts use the default stylish one. The prompt's "eslint compact form" has no real sample here, so it is not covered.
+- `go test` failures print `    x_test.go:12:` indented and relative to the package, so they give no path; a red `go test` falls back to T1.
+- `NeedsEnv` reads the process environment, as the prompt says, not `gates.env`. A variable set only in `gates.env` still skips the gate.
+- `Run` has no timeout, so a hung gate holds the trial. If row 5 wants one, add it to this package (a context or a per-gate limit) rather than wrap it.
+- `Result` does not carry `Dir`, so row 5 keeps its own `[]Gate` to map a result back to its directory.
+
+**Questions answered:** none were open. **Left owed:** the wiring, the config keys and the live proof, which are all row 5's.
