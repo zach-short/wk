@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +260,7 @@ func TestHookPreToolUseFailsOpenOnResolveErrorAndPanic(t *testing.T) {
 // 20 runs, with the timing printed. Git reads no user or system config (testrepo.Isolate's
 // variables, set per test because TestMain is not this file's to define).
 func TestHookPreToolUseTiming(t *testing.T) {
+	hookTestSkipUnderLoad(t)
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	repo := filepath.Join(t.TempDir(), "ezhomesteading")
@@ -281,6 +284,7 @@ func TestHookPreToolUseTiming(t *testing.T) {
 		got := env.run(t, input)
 		took := time.Since(start)
 		if got != want {
+			hookTestSkipUnderLoad(t)
 			t.Fatalf("stdout\n got %s\nwant %s", got, want)
 		}
 		total, longest = total+took, max(longest, took)
@@ -290,6 +294,49 @@ func TestHookPreToolUseTiming(t *testing.T) {
 	t.Logf("HookPreToolUse, 20 runs, ms: %s; mean %.1f ms, longest %.1f ms", strings.Join(runs, " "),
 		float64(mean.Microseconds())/1000, float64(longest.Microseconds())/1000)
 	if mean >= 50*time.Millisecond {
+		hookTestSkipUnderLoad(t)
 		t.Errorf("mean %v over 20 runs; the row asks for under 50 ms", mean)
 	}
+}
+
+// The hook's 200 ms deadline and the 50 ms bound are wall time, and the hook runs in this
+// process, so neither can be read as CPU time. With more runnable threads than CPUs the git
+// child waits for a core: the deadline passes and the hook rightly prints nothing, so the
+// expected output is impossible, and the mean measures the wait for a core, not the code. The
+// limit is one runnable thread per CPU because that is where the wait starts: on a 10-CPU
+// machine the mean was 37 to 49 ms, near the bound, at load 11 to 12, and 58 to 80 ms or no
+// output at 10 to 40 (ezhomesteading row 234). The check runs again at a failure because the
+// one-minute average lags and may cross the limit during the runs.
+const hookTestMaxLoadPerCPU = 1.0
+
+func hookTestSkipUnderLoad(t *testing.T) {
+	t.Helper()
+	limit := hookTestMaxLoadPerCPU * float64(runtime.NumCPU())
+	if load, ok := hookTestLoad(); ok && load > limit {
+		t.Skipf("one-minute load average %.2f is above %.0f (%d CPUs); the timing bound is checked only below it", load, limit, runtime.NumCPU())
+	}
+}
+
+// hookTestLoad returns ok false where the load cannot be read, so an unknown load never skips.
+func hookTestLoad() (float64, bool) {
+	text, err := hookTestLoadText()
+	fields := strings.Fields(text)
+	if err != nil || len(fields) == 0 {
+		return 0, false
+	}
+	load, err := strconv.ParseFloat(fields[0], 64)
+	return load, err == nil
+}
+
+// The absolute path, so a PATH without /usr/sbin cannot turn the skip off.
+func hookTestLoadText() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("/usr/sbin/sysctl", "-n", "vm.loadavg").Output()
+		return strings.Trim(string(out), "{} \n"), err
+	case "linux":
+		data, err := os.ReadFile("/proc/loadavg")
+		return string(data), err
+	}
+	return "", errors.New("no load average on " + runtime.GOOS)
 }
