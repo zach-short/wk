@@ -5,16 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wk hive</title>
 <script>
-// Set the light or dark mode before the first paint, so the page never flashes the wrong palette.
-let modePref = "";
-(function () {
-  try { modePref = localStorage.getItem("wk.mode") || ""; } catch (e) {}
-  applyMode();
-})();
+// Follow the system light or dark setting, before the first paint.
 function applyMode() {
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  document.documentElement.dataset.mode = modePref || (dark ? "dark" : "light");
+  document.documentElement.dataset.mode = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
+applyMode();
 </script>
 <style>
   /* The palette tokens for light and dark. The verdict hues keep one meaning: green working, amber
@@ -50,66 +45,19 @@ function applyMode() {
   }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px 24px; }
 
-  .masthead {
-    position: relative; overflow: hidden; margin: 16px 0 14px; padding: 26px 24px 20px;
-    border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); min-height: 190px;
-  }
-  .hero {
-    position: absolute; inset: 0 0 0 auto; width: min(62%, 720px); pointer-events: none;
-    background: var(--hero) left center / cover no-repeat; filter: var(--hero-filter); opacity: var(--hero-op);
-    -webkit-mask-image: linear-gradient(to left, transparent 0, #000 38%);
-    mask-image: linear-gradient(to left, transparent 0, #000 38%);
-    transform: scaleX(-1);
-  }
-  .brand, .status, .controls { position: relative; }
-  .brand { display: flex; gap: 14px; align-items: center; }
-  .mark { width: 44px; height: 44px; flex: none; color: var(--accent); }
-  h1 {
-    margin: 0; font: var(--display-weight) 34px/1.05 var(--font-display);
-    text-transform: var(--display-case); letter-spacing: var(--display-track);
-  }
-  .tag { margin: 4px 0 0; color: var(--muted); font-size: 14px; max-width: 34ch; }
-  .status { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 16px 0 14px; color: var(--muted); font-size: 12px; }
-  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
-  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--working); box-shadow: 0 0 0 3px color-mix(in srgb, var(--working) 25%, transparent); }
-  .live.off i { background: var(--removable); box-shadow: none; }
-  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .mode {
-    font: 12px/1 var(--font-body); color: var(--ink); background: transparent; border: 0;
-    padding: 8px 12px; cursor: pointer; display: inline-flex; gap: 7px; align-items: center;
-  }
-  .mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .mode { border: 1px solid var(--line); border-radius: calc(var(--radius) / 2 + 6px); background: var(--panel); }
-
-  .counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; align-items: center; }
-  .key-title {
-    font: var(--display-weight) 12px var(--font-display); color: var(--muted);
-    text-transform: uppercase; letter-spacing: .12em; margin-right: 2px;
-  }
-  .chip .beh { color: var(--muted); }
-  .chip svg { width: 30px; height: 22px; flex: none; overflow: visible; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink);
-    padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel);
-  }
-  .chip.zero { opacity: .45; }
-  .chip b { font-variant-numeric: tabular-nums; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; }
+  .wrap { padding-top: 14px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; }
   @media (max-width: 820px) {
     main { grid-template-columns: 1fr; }
-    .hero { width: 100%; opacity: calc(var(--hero-op) * .35); }
-    h1 { font-size: 28px; }
   }
   .stage, aside { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-  .stage { position: relative; min-height: 360px; overflow: hidden; display: grid; place-items: center; padding: 8px 8px 28px; }
+  .stage { position: relative; min-height: 78vh; overflow: hidden; display: grid; place-items: center; padding: 8px 8px 28px; }
   .stage::after {
     content: var(--plate); position: absolute; right: 12px; bottom: 10px;
     font: 11px/1 var(--font-display); color: var(--muted); letter-spacing: .08em;
   }
   svg { width: 100%; height: auto; display: block; }
-  #hive { max-height: min(460px, 70vh); }
+  #hive { max-height: 74vh; }
 
   .cell { cursor: pointer; outline: none; }
   .cell .hex { fill: var(--c); stroke: var(--cell-stroke); stroke-width: var(--cell-sw); transition: fill .3s, stroke .3s; }
@@ -187,48 +135,43 @@ function applyMode() {
     body { transition: none; }
   }
 
-  aside { padding: 16px; align-self: start; }
-  aside h2 { font: var(--display-weight) 16px/1.3 var(--font-display); margin: 0 0 8px; word-break: break-all; }
+  aside { padding: 18px; align-self: start; }
+  aside h2 { font: var(--display-weight) 18px/1.3 var(--font-display); margin: 0 0 8px; word-break: break-all; }
+  aside h3 { font: 600 12px var(--font-display); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 20px 0 8px; }
+  aside p { margin: 0 0 10px; }
   aside dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0; font-size: 12px; }
   aside dt { color: var(--muted); }
   aside dd { margin: 0; word-break: break-word; }
   aside ul { padding-left: 18px; margin: 6px 0 0; font-size: 12px; }
-  aside .why { font-size: 12px; font-weight: 700; text-transform: var(--display-case); letter-spacing: var(--display-track); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  .state { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; }
+  .legend { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  .legend li { display: grid; grid-template-columns: 34px 1fr; gap: 2px 10px; align-items: start; font-size: 13px; }
+  .legend svg { width: 34px; height: 26px; overflow: visible; }
+  .legend div { display: grid; gap: 2px; }
+  .legend b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .legend span { color: var(--muted); font-size: 12px; }
+  .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; }
   .empty { color: var(--muted); font-size: 13px; margin: 0; }
-  .error { color: var(--land); font-size: 12px; margin: 0 0 12px; }
-  footer { color: var(--muted); font-size: 11px; margin-top: 14px; }
+  .act { margin-top: 16px; }
+  .act button {
+    font: 600 13px var(--font-body); color: var(--bg); background: var(--land); border: 0;
+    border-radius: 999px; padding: 9px 16px; cursor: pointer;
+  }
+  .act button:disabled { opacity: .4; cursor: default; }
+  .act p { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .notice { font-size: 12px; margin: 10px 0 0; white-space: pre-wrap; }
+  .notice.bad { color: var(--land); }
+  .notice.good { color: var(--working); }
+  footer { color: var(--muted); font-size: 11px; margin-top: 12px; }
   footer code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header class="masthead">
-    <div class="hero" aria-hidden="true"></div>
-    <div class="brand">
-      <svg class="mark" viewBox="0 0 44 44" aria-hidden="true">
-        <polygon points="22,3 38.5,12.5 38.5,31.5 22,41 5.5,31.5 5.5,12.5" fill="none" stroke="currentColor" stroke-width="3"/>
-        <polygon points="22,13 30,17.5 30,26.5 22,31 14,26.5 14,17.5" fill="currentColor"/>
-      </svg>
-      <div>
-        <h1>wk hive</h1>
-        <p class="tag">Warm worktrees for parallel agents, and a clear verdict on every one.</p>
-      </div>
-    </div>
-    <div class="status">
-      <span class="live off" id="live"><i></i><span id="liveText">connecting</span></span>
-      <span id="base"></span>
-      <span id="stamp"></span>
-    </div>
-    <div class="controls">
-      <button class="mode" id="mode" type="button" aria-label="Color mode"></button>
-    </div>
-  </header>
-
-  <div class="counts" id="counts"></div>
-  <p class="error" id="error" hidden></p>
   <main>
     <section class="stage"><svg id="hive" viewBox="0 0 600 520" role="img" aria-label="Worktree hive"><text class="empty-note" x="300" y="260" text-anchor="middle">Reading the worktrees...</text></svg></section>
-    <aside id="detail"><p class="empty">Select a cell to see why it is kept or removable.</p></aside>
+    <aside id="detail"></aside>
   </main>
   <footer id="footer"></footer>
 </div>
@@ -263,11 +206,14 @@ function styleOf(item) {
   return { key: "idle", label: "kept" };
 }
 
-// The key: each style's label and what its bee does.
+// The legend: each style's label and what it means for the worktree.
 const STYLES = [
-  ["working", "working now", "circles its cell"], ["idle", "kept", "hovers"],
-  ["land", "run /land-worktrees", "carries to the hub"], ["removable", "removable", "asleep"],
-  ["skip", "skipped", "parked"], ["prunable", "prunable", "fading"]
+  ["working", "working now", "A session or a recent edit is using it. Leave it alone."],
+  ["idle", "kept", "It has work, or it was made recently. wk keeps it."],
+  ["land", "run /land-worktrees", "Its commits already reached main, but it has changes to sort. Run /land-worktrees."],
+  ["removable", "removable", "Its work is on main, and it is clean and idle. Safe to remove."],
+  ["skip", "skipped", "The wk template. wk never removes it."],
+  ["prunable", "prunable", "Git still lists it, but its folder is gone. Clearing the entry is safe."]
 ];
 
 // Honeycomb layout: the hub sits at the centre, cells fill rings outward by hex distance.
@@ -304,22 +250,10 @@ function clip(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-function save(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
-
-// Controls: the light, dark or automatic mode button.
-function drawControls() {
-  document.getElementById("mode").textContent = "mode: " + (modePref || "auto");
-}
-document.getElementById("mode").addEventListener("click", () => {
-  modePref = { "": "light", light: "dark", dark: "" }[modePref];
-  save("wk.mode", modePref);
-  applyMode();
-  drawControls();
-});
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyMode);
-drawControls();
 
 let selected = null;
+let live = false;
 
 // The alien, facing right: a long tapered abdomen with a light core and spots, narrow swept-back
 // wings, a small head with filament antennae, and tail filaments. Wings flap by CSS; the loop moves
@@ -468,14 +402,9 @@ function fitText(svg) {
 }
 
 function render(data) {
-  document.getElementById("base").textContent = "base " + data.base;
-  document.getElementById("stamp").textContent = "updated " + ago(data.generated);
-
   const styled = data.worktrees.map(it => ({ it, st: styleOf(it) }));
   const counts = {};
   styled.forEach(({ st }) => counts[st.key] = (counts[st.key] || 0) + 1);
-  document.getElementById("counts").innerHTML = `<span class="key-title">Bee key</span>` + STYLES.map(([k, label, beh]) =>
-    `<span class="chip${counts[k] ? "" : " zero"}"><svg viewBox="-24 -16 46 28" aria-hidden="true"><g class="bee" data-k="${k}" style="--c:var(--${k})">${ALIEN}</g></svg><b>${counts[k] || 0}</b> ${label} <span class="beh">${beh}</span></span>`).join("");
 
   const svg = document.getElementById("hive");
   const slots = ringCoords(styled.length);
@@ -511,41 +440,90 @@ function render(data) {
   fitText(cellsLayer);
   updateSwarm(styled.map(({ it, st }, i) => ({ id: it.path, key: st.key, ...toPixel(slots[i].q, slots[i].r) })));
   cellsLayer.querySelectorAll(".cell").forEach(g => {
-    const open = () => { selected = +g.dataset.i; render(current); svg.querySelector(`[data-i="${selected}"]`)?.focus(); };
+    const open = () => { selected = +g.dataset.i; notice = null; render(current); svg.querySelector(`[data-i="${selected}"]`)?.focus(); };
     g.addEventListener("click", open);
     g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
   });
 
+  drawDetail(styled, counts);
+}
+
+// The side panel. With no cell selected it explains the hive. With a cell selected it says why
+// the worktree has its state, and a dead worktree gets a button that removes it.
+function drawDetail(styled, counts) {
   const detail = document.getElementById("detail");
+  const note = notice ? `<p class="notice ${notice.bad ? "bad" : "good"}">${esc(notice.text)}</p>` : "";
   if (selected !== null && styled[selected]) {
     const { it, st } = styled[selected];
-    detail.innerHTML = `
+    const dead = it.verdict === "removable" || it.verdict === "prunable";
+    const act = dead ? `<div class="act">
+        <button type="button" id="remove" ${live ? "" : "disabled"}>${it.verdict === "prunable" ? "Clear this entry" : "Remove this worktree"}</button>
+        <p>${it.verdict === "prunable"
+          ? "Runs git worktree prune. The folder is already gone, so only the entry goes."
+          : "Git refuses if the worktree has uncommitted files. wk checks it again before it removes anything."}</p>
+      </div>` : "";
+    detail.innerHTML = `${note}
       <h2>${esc(it.path)}</h2>
-      <span class="chip"><span class="dot" style="background:var(--${st.key})"></span>${esc(st.label)}</span>
+      <span class="state"><span class="dot" style="background:var(--${st.key})"></span>${esc(st.label)}</span>
+      <h3>Why</h3>
+      <ul>${it.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+      <h3>Details</h3>
       <dl>
         <dt>branch</dt><dd>${esc(it.branch || "detached")}</dd>
         <dt>head</dt><dd>${esc(it.head)}</dd>
         <dt>changed</dt><dd>${it.dirty} path${it.dirty === 1 ? "" : "s"}</dd>
         <dt>activity</dt><dd>${esc(ago(it.last_activity))}</dd>
-        <dt>delete branch</dt><dd>${it.delete_branch ? "yes" : "no"}</dd>
+        <dt>branch goes too</dt><dd>${it.delete_branch ? "yes" : "no"}</dd>
       </dl>
-      <span class="why">Why</span>
-      <ul>${it.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>`;
-  } else {
-    detail.innerHTML = `<p class="empty">Select a cell to see why it is kept or removable.</p>`;
+      ${act}
+      <p><button type="button" class="link" id="back">Back to the explanation</button></p>`;
+    document.getElementById("back").addEventListener("click", () => { selected = null; render(current); });
+    const remove = document.getElementById("remove");
+    if (remove) remove.addEventListener("click", () => removeDead(it.path));
+    return;
   }
+  const rows = STYLES.map(([k, label, text]) =>
+    `<li><svg viewBox="-24 -16 46 28" aria-hidden="true"><g class="bee" data-k="${k}" style="--c:var(--${k})">${ALIEN}</g></svg>
+      <div><b>${counts[k] || 0} ${label}</b><span>${text}</span></div></li>`).join("");
+  detail.innerHTML = `${note}
+    <h2>How to read this</h2>
+    <p>Each hexagon is one worktree. The center is the base branch, ${esc(current ? current.base : "")}. The bee in each hexagon shows its state. Its movement and its color say the same thing.</p>
+    <h3>The states</h3>
+    <ul class="legend">${rows}</ul>
+    <h3>Remove a dead worktree</h3>
+    <p>Select a hexagon to see why it has its state. A removable or prunable worktree has a button that removes it. The button runs the same check as <code>wk gc --apply</code>, for that one worktree only.</p>`;
+}
+
+// removeDead asks the server to remove one worktree, after the person confirms. The server judges
+// it again first, so a worktree that became busy since the page loaded is kept.
+async function removeDead(path) {
+  if (!confirm("Remove " + path + "?\n\nwk checks it again before it removes anything.")) return;
+  notice = { text: "Removing " + path + "...", bad: false };
+  render(current);
+  try {
+    const res = await fetch("remove", {
+      method: "POST",
+      headers: { "X-Wk-Action": "remove", "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const text = (await res.text()).trim();
+    if (!res.ok) throw new Error(text || "HTTP " + res.status);
+    notice = { text: text || "Removed " + path + ".", bad: false };
+    selected = null;
+  } catch (err) {
+    notice = { text: "Not removed: " + err.message, bad: true };
+  }
+  load();
 }
 
 let current = null;
-function show(data, live, error) {
+let notice = null;
+function show(data, isLive, error) {
   current = data;
-  document.getElementById("error").hidden = !error;
-  document.getElementById("error").textContent = error || "";
-  document.getElementById("live").classList.toggle("off", !live);
-  document.getElementById("liveText").textContent = live ? "live" : "sample data";
-  document.getElementById("footer").innerHTML = live
-    ? "Live verdicts from <code>wk gc --json</code>, read again every 5 seconds. This page is read-only and removes nothing; <code>wk gc --apply</code> does that."
-    : "Sample data: this page is not served by <code>wk viz</code>, or the report did not load. Run <code>wk viz</code> to see your own worktrees.";
+  live = isLive;
+  document.getElementById("footer").innerHTML = isLive
+    ? "Read from <code>wk gc --json</code> every 5 seconds. Base " + esc(data.base) + ", updated " + esc(ago(data.generated)) + "."
+    : esc(error || "Sample data.") + " Run <code>wk viz</code> to see your own worktrees.";
   render(data);
 }
 

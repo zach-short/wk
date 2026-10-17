@@ -64,7 +64,8 @@ wk gc schedule install writes and loads a launchd agent that runs wk gc --apply 
 gc.apply_interval_minutes; uninstall unloads and deletes it.
 
 wk viz serves the hive page on --addr (default 127.0.0.1:8787). The page reads the live
-verdicts on every load and changes nothing.
+verdicts on every load. Its remove button removes one dead worktree, judged again first, and
+nothing else.
 wk hive draws the same hive in the terminal and reads the verdicts again every 3 seconds.
 Arrow keys select a cell, q quits. Like wk gc without --apply, it changes nothing.
 
@@ -732,7 +733,7 @@ func runViz(home, repoDir string, args []string, stderr io.Writer) int {
 		return fail(stderr, err, exitError)
 	}
 	_, _ = fmt.Fprintf(stderr, "wk viz: http://%s (Ctrl-C stops it)\n", addr)
-	srv := &http.Server{Addr: addr, Handler: viz.Handler(env.GCJSON), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: viz.Handler(env.GCJSON, env.RemoveDead), ReadHeaderTimeout: 5 * time.Second}
 	return fail(stderr, srv.ListenAndServe(), exitError)
 }
 

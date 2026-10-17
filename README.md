@@ -312,7 +312,7 @@ wk gc schedule uninstall
 
 ## See the hive
 
-`wk hive` draws every worktree as a cell in the terminal, colored by verdict, and reads the verdicts again every 3 seconds. The arrow keys select a cell and `q` quits. `wk viz` serves the same view as a web page on `127.0.0.1:8787`, or on the address given with `--addr host:port`, and reads the live verdicts on every load. Both views read the dry-run report, so neither can remove anything.
+`wk hive` draws every worktree as a cell in the terminal, colored by verdict, and reads the verdicts again every 3 seconds. The arrow keys select a cell and `q` quits. `wk viz` serves the same view as a web page on `127.0.0.1:8787`, or on the address given with `--addr host:port`, and reads the live verdicts on every load. The terminal view only reads. The web page can remove one dead worktree at a time, with a confirm step: a worktree that gc judges removable, or one whose folder is gone (pruned). It judges the worktree again before it acts, never forces, and answers only to requests from this machine.
 
 ## Configuration
 

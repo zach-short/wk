@@ -380,6 +380,50 @@ func (e *Env) removeOne(out io.Writer, w gitx.Worktree) (bool, error) {
 	return true, nil
 }
 
+// RemoveDead removes the one worktree at path when gc judges it removable, or prunes it when its
+// directory is gone. It judges the worktree again at the moment of removal, never forces, and
+// refuses any path that is not a worktree of this repository or is not dead. The hive page calls
+// it from its remove button; path is absolute, or relative to the main checkout.
+func (e *Env) RemoveDead(out io.Writer, path string) error {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(e.Repo.Primary, path)
+	}
+	list, err := gitx.Worktrees(e.Repo.Primary)
+	if err != nil {
+		return err
+	}
+	var target *gitx.Worktree
+	for i := range list {
+		if physical(list[i].Path) == physical(path) {
+			target = &list[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("%s is not a worktree of this repository", path)
+	}
+	if physical(target.Path) == physical(e.Repo.Primary) {
+		return errors.New("the main checkout is never removed")
+	}
+	j, err := e.rejudge(*target)
+	if err != nil {
+		return err
+	}
+	switch j.Verdict {
+	case Removable:
+		_, err := e.removeOne(out, j.Worktree)
+		return err
+	case Prunable:
+		if err := e.prune(); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "pruned %s: its directory was gone\n", e.display(path))
+		return nil
+	default:
+		return fmt.Errorf("%s is %s, not dead, so it is kept", e.display(path), j.Verdict)
+	}
+}
+
 // rejudge reads the worktree list, the base and the processes again and judges w alone.
 func (e *Env) rejudge(w gitx.Worktree) (Judgment, error) {
 	s, err := e.takeSurvey()
