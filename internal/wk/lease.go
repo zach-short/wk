@@ -86,7 +86,7 @@ func (e *Env) ClaimNone(dir string, out io.Writer) error {
 }
 
 func (e *Env) claimLeases(root, row string, leases []string, out io.Writer) error {
-	return e.changeLeases(func(f *leaseFile) error {
+	return e.changeLeases(root, func(f *leaseFile) error {
 		if ws, ok := f.Workspaces[root]; ok && ws.Row == row && subset(leases, ws.Leases) {
 			_, _ = fmt.Fprintf(out, "already claimed: row %s in %s\n", row, root)
 			printLeases(out, ws.Leases)
@@ -134,7 +134,7 @@ func (e *Env) LeaseAdd(dir string, paths []string, out io.Writer) error {
 		}
 		rels = append(rels, rel)
 	}
-	return e.changeLeases(func(f *leaseFile) error {
+	return e.changeLeases(root, func(f *leaseFile) error {
 		if err := f.Add(root, rels); err != nil {
 			return err
 		}
@@ -149,7 +149,7 @@ func (e *Env) Release(dir string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return e.changeLeases(func(f *leaseFile) error {
+	return e.changeLeases(root, func(f *leaseFile) error {
 		f.Release(root)
 		_, _ = fmt.Fprintf(out, "released: %s\n", root)
 		return nil
@@ -178,8 +178,8 @@ func (e *Env) LeaseStatus(out io.Writer) error {
 
 // changeLeases runs change on the store under an exclusive lock held from the read to the
 // rename (files decision, KILL-TEST.md), after the repository check, the reap and a refresh of
-// the roots from git. A change that fails writes nothing.
-func (e *Env) changeLeases(change func(*leaseFile) error) error {
+// the roots from git, run in root, the caller's workspace. A change that fails writes nothing.
+func (e *Env) changeLeases(root string, change func(*leaseFile) error) error {
 	lock, err := flock.Take(filepath.Join(e.State, "leases.lock"), true, func() { e.say("waiting for leases.lock") })
 	if err != nil {
 		return err
@@ -192,7 +192,7 @@ func (e *Env) changeLeases(change func(*leaseFile) error) error {
 	if f.CommonDir != "" && f.CommonDir != e.Repo.CommonDir {
 		return fmt.Errorf("%s belongs to the repository at %s, not %s; two repositories share the name %s", leasesPath(e.State), f.CommonDir, e.Repo.CommonDir, e.Repo.Name)
 	}
-	if f.Roots, err = worktreeRoots(e.Repo.Primary); err != nil {
+	if f.Roots, err = worktreeRoots(root); err != nil {
 		return err
 	}
 	f.Primary, f.CommonDir = e.Repo.Primary, e.Repo.CommonDir
@@ -262,9 +262,9 @@ func workspaceRoot(dir string) (string, error) {
 	return canonical(top), nil
 }
 
-// worktreeRoots are the canonical roots of every worktree of the repository.
-func worktreeRoots(primary string) ([]string, error) {
-	list, err := gitx.Worktrees(primary)
+// worktreeRoots are the canonical roots of every worktree of the repository holding dir.
+func worktreeRoots(dir string) ([]string, error) {
+	list, err := gitx.Worktrees(dir)
 	if err != nil {
 		return nil, err
 	}

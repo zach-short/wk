@@ -50,14 +50,14 @@ The template is a detached worktree at the base branch's commit, under `template
 
 ## The Claude Code hooks
 
-`wk hooks install` adds four hooks to `.claude/settings.local.json` in the main checkout and in the template, with the permission twins of the gates the `PreToolUse` hook wraps (see "Permission twins" below). It keeps every other key in the file in its order, refuses a file that is not a JSON object, and changes nothing when the entries are already there. It never writes `~/.claude/settings.json` or a tracked settings file. `wk hooks uninstall` removes only wk's entries and twins.
+`wk hooks install` adds four hooks to `.claude/settings.local.json` in the main checkout and in the template, and the two entries of the lease hook while leases are on (see "Path leases" below), with the permission twins of the gates the `PreToolUse` hook wraps (see "Permission twins" below). It keeps every other key in the file in its order, refuses a file that is not a JSON object, and changes nothing when the entries are already there. It never writes `~/.claude/settings.json` or a tracked settings file. `wk hooks uninstall` removes only wk's entries and twins.
 
 - `WorktreeCreate` runs `wk hook worktree-create`. Every worktree Claude Code makes, for a session, a desktop-app worktree session or a subagent with `isolation: "worktree"`, then comes from wk, named as Claude Code names its own (`.claude/worktrees/<name>` on `worktree-<name>`) and starting from the HEAD of the session that asked. Claude Code has no fallback when this hook fails, so wk falls back to a plain `git worktree add` whenever the warm path fails, and exits non-zero only when git cannot make a worktree either. Setting `WK_HOOK_FAIL=1` in the hook's command makes the warm path fail on purpose, to prove the fallback.
 - `SubagentStop` runs `wk hook subagent-stop`, which marks a stopped subagent's own worktree for `wk gc`. It marks nothing unless the worktree at the subagent's working directory is named for that subagent, and it always exits 0, because a failing stop hook would keep the subagent running.
 - `WorktreeRemove` runs `wk hook worktree-remove`. Claude Code sends it only when the owner discards a worktree explicitly; wk then removes it with `--force` and keeps its branch unless the base already holds it.
 - `PreToolUse`, on the `Bash` tool only, runs `wk hook pre-tool-use || true`, which routes gate commands through `wk run --slot` (see "Cap heavy gates" below). Its timeout is 5 seconds, and it goes after any other tool's `Bash` hook, such as a commit guard. A binary older than this hook prints its usage and exits 2, and exit 2 from a `PreToolUse` hook blocks the call, so the `|| true` turns an old binary into no answer and every `Bash` call runs unchanged. The guard needs Claude Code to run the command through a shell, which it does for a hook command with no `args`.
 
-Claude Code never removes a hook-made worktree by itself, so `wk gc` is what cleans up after agents. Every call is logged in `~/.wk/<repo>/hook.log`.
+Claude Code never removes a hook-made worktree by itself, so `wk gc` is what cleans up after agents. Every call of these four is logged in `~/.wk/<repo>/hook.log`.
 
 ## Cap heavy gates
 
@@ -163,6 +163,49 @@ Two limits are known. A rule that starts with `VAR=value` words, such as `Bash(G
 
 Once the `PreToolUse` hook is installed, `~/go/bin/wk` must always be built from a commit that has `wk run` and `wk hook pre-tool-use`. A binary from an older commit has neither: the `|| true` keeps every `Bash` call running, but nothing is slotted, every `Bash` call still starts one wk process, and any command that calls `wk run` itself fails with exit 2. So the order is: install the binary, write the two config files, then run `wk hooks install`, which reads the slots file to write the twins. In ezhomesteading the binary with this feature is installed by board row 214, not by the commit that adds it.
 
+## Path leases
+
+Two agents in two worktrees can edit the same file, and the clash shows only when the branches land. Path leases stop the second edit when it is made. Each workspace claims a board row, takes a lease on the paths in that row's "Files it owns" cell, and a `PreToolUse` hook refuses every edit to a path that another workspace leases. Leases are off until `leases.enabled = true` is in the repository's config.
+
+### The claim
+
+```bash
+wk claim 12             # lease the paths of row 12's "Files it owns" cell
+wk claim --none         # claim no path, for a session that reads and does not edit
+wk lease add web/x.ts   # lease one more path; a trailing / leases a directory
+wk release              # drop the claim and every lease
+wk status               # every claim, its row and its leases
+```
+
+Every session runs `wk claim <row>` or `wk claim --none` in its workspace before its first edit. With leases on, the hook refuses any edit from a workspace that has not claimed. `wk claim` reads the board named by `leases.board` in the main checkout and finds the row's cell by the column header "Files it owns". Each backtick token becomes a lease: an exact path, a directory (a trailing `/`, `/**` or `/**/*`), or a glob, which is expanded against the files git tracks in the workspace. Every token it cannot read (prose, a path starting with `~` or `/`, a path with `..`, a glob that matches nothing) is printed as `unread:`, and only what it read is leased, so a cell written as prose leases nothing and says so. A claim is refused when one of its paths overlaps a lease another workspace holds, and the refusal names that workspace's row and directory. Running the same claim again succeeds and prints the claim it found. A workspace holds one claim at a time, so a second row needs `wk release` first. A lease has no time limit; it ends with `wk release`, or when its worktree is removed.
+
+The leases live in `~/.wk/<repo>/leases.json`. Each change takes an exclusive lock on `~/.wk/<repo>/leases.lock`, rewrites the file and renames it into place, so a crash leaves the old file or the new one. Readers take no lock. The file records the repository's git directory, and wk refuses a store that belongs to another repository with the same name.
+
+### The hook
+
+`wk hooks install` adds two `PreToolUse` entries while `leases.enabled` is true, and removes them when it is false. Both run `wk hook lease --repo <main checkout>` with a timeout of 5 seconds.
+
+- The first matches `Edit|Write|MultiEdit|NotebookEdit` and carries `"onFailure": "block"`, so Claude Code (2.1.295 or later) refuses the edit when the hook cannot run at all: a missing binary, a crash or a timeout.
+- The second matches `Bash` and ends in `|| true`, without `onFailure`, so a missing or older binary leaves `Bash` free and the binary can always be installed again.
+
+The hook refuses an edit, with a reason that says what to do next, when the workspace has not claimed, when another workspace leases the path, when the path is in `leases.single_writer` and this workspace does not lease it, and when the path is in another worktree of the repository than the session's own. A path outside every worktree of the repository is allowed. The hook reads `leases.json` itself and runs no git, and it places each path through symbolic links before it compares it, so `/tmp/x` and `/private/tmp/x` are one path on macOS. It measured 20 ms or less over 20 runs on 2026-10-17. Each refusal is a line in `~/.wk/<repo>/hook.log`.
+
+The guard fails closed. With leases on, a config file wk cannot read, a store wk cannot read, input it cannot parse, or a failure inside the hook refuses the edit, because an edit that passes by mistake is a silent clash, and a refusal costs one message. The hook always exits 0 and refuses by printing Claude Code's deny on standard output, so a non-zero exit never blocks a call by accident.
+
+A worktree not made by `wk new` or by the `WorktreeCreate` hook has no `.claude/settings.local.json`, so the guard is absent in it. Add `.claude/settings.local.json` to `template.copy_files` so that `wk new` copies the hook into each workspace.
+
+### Bash coverage is partial
+
+The `Bash` entry walks the command's words and refuses the write spellings it recognises when they reach a leased path: the `>` redirections, `rm`, `touch`, `tee`, `mv`, `cp`, `sed -i`, `git mv`, `git rm`, the git commands that rewrite the whole worktree, and more. A command it cannot read is refused whole: any `$`, backtick, parenthesis, brace, bracket, `*`, `?`, backslash or non-ASCII byte, a subshell, a shell function, a `case`, an `xargs` with a writing verb, `patch`, `find -exec`, or a shell reading standard input. A command with no write target the walk recognises is allowed without reading the store, and so is a single `wk` command with no operator or redirection, so `wk claim` is never locked out.
+
+The walk is a list of known spellings, so a program it does not know writes unseen: `make`, `go fmt`, `go generate`, `npm install`, `curl -o`, `unzip`, `mkdir -p`, `chown`, a script run by name (`./script.sh`, `python3 f.py`), `perl -e` and `ruby -e` programs without parentheses, and wrappers outside its table such as `flock`, `watch` or `npx`. An alias or function from the shell profile is not seen either. The `Edit`, `Write`, `MultiEdit` and `NotebookEdit` entries have no such gap.
+
+The known over-refusals each cost one message. A command with `$` or a glob anywhere is refused even when it writes nothing leased; a `cd` makes a later relative target count in both directories; a whole-tree git command such as `git pull` or `git merge` is refused while any other workspace holds a lease; and an apostrophe in a heredoc body reads as an open quote.
+
+### The ledger files
+
+In a repository whose `leases.single_writer` lists `HANDOFF.md` and `PASSOFF.md`, the lead session writes them from the main checkout under a lease of its own: `wk claim --none` there once, then `wk lease add HANDOFF.md PASSOFF.md` before it writes. While the lead holds them, another workspace's edit to either file is refused, and the lead's `wk release` frees them. A builder in a worktree cannot write the main checkout's copy in any case, because the hook refuses an edit into another worktree than the session's own.
+
 ## Remove finished workspaces
 
 `wk gc` prints one line for every worktree except the main checkout, with a verdict and every reason behind it. It changes nothing. `wk gc --apply` removes the worktrees judged removable.
@@ -233,9 +276,15 @@ max_parallel = 2
 size = 0
 sparse_size = 0
 dir = ".claude/worktrees/wk-pool-{slot}"
+
+[leases]
+enabled = false                    # true turns the guard on; see "Path leases"
+board = "PASSOFF.md"               # the board wk claim reads, in the main checkout
+single_writer = []                 # paths an edit may touch only under its own lease
+bash_guard = true                  # walk Bash commands for writes
 ```
 
-Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands and `[gates.env]`, are the defaults. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
+Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands and `[gates.env]`, are the defaults. `wk config show` prints the effective config as TOML, with the file it read and whether that file was found. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
 
 ## Disk use
 
