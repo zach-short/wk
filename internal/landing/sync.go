@@ -17,6 +17,9 @@ import (
 // whose HEAD is not an ancestor of tip has commits of its own and is refused (PD-7), because
 // the branch move keeps no commits.
 func Sync(workspace, base, tip string) ([]string, error) {
+	if err := notPrimary(workspace); err != nil {
+		return nil, err
+	}
 	head, branch, err := headOf(workspace)
 	if err != nil {
 		return nil, err
@@ -32,16 +35,43 @@ func Sync(workspace, base, tip string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, args := range [][]string{
-		{"read-tree", "-u", "--reset", result},
-		{"update-ref", branch, tip, head},
-		{"reset", "-q"},
-	} {
-		if _, err := gitx.Run(workspace, args...); err != nil {
-			return nil, err
-		}
+	if _, err := gitx.Run(workspace, "read-tree", "-u", "--reset", result); err != nil {
+		return nil, err
+	}
+	// The CAS is the last point of refusal, and by then the working tree has changed: say so.
+	if _, err := gitx.Run(workspace, "update-ref", branch, tip, head); err != nil {
+		return nil, fmt.Errorf("%s is no longer at %s, where sync read it, so it was not moved; the working tree and the index hold the merge of %s: run wk sync again (%w)", branch, head, tip, err)
+	}
+	if _, err := gitx.Run(workspace, "reset", "-q"); err != nil {
+		return nil, fmt.Errorf("%s moved to %s, but the index still holds the merged tree: run git reset -q in %s (%w)", branch, tip, workspace, err)
 	}
 	return conflicts, nil
+}
+
+// notPrimary refuses the repository's main checkout: Sync moves the branch the checkout has,
+// and on the primary that is main, which only FastForward moves (D15 reserves the primary
+// for landing; `wk submit` refuses it too). Both paths come back from git as real paths, and
+// are resolved once more so a symlinked workspace path cannot slip past.
+func notPrimary(workspace string) error {
+	repo, err := gitx.Resolve(workspace)
+	if err != nil {
+		return err
+	}
+	top, err := gitx.Run(workspace, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return err
+	}
+	if realPath(top) == realPath(repo.Primary) {
+		return fmt.Errorf("%s is the repository's main checkout, and wk sync runs in a workspace", workspace)
+	}
+	return nil
+}
+
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }
 
 // headOf is the workspace's HEAD and the full name of the branch it is on. A detached HEAD is

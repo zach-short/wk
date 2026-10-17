@@ -37,17 +37,25 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// realGit is the git the shim runs, for a test that moves a ref behind the package's back.
+var realGit string
+
 // writeShim puts a git first on PATH that appends its arguments to $WK_GIT_LOG, when that is
-// set, and then execs the real git. The arguments are tab-separated, so the empty old value
-// of a creation shows as two tabs.
+// set, and then runs the real git. The arguments are tab-separated, so the empty old value
+// of a creation shows as two tabs. After a write-tree it runs $WK_GIT_AFTER_WRITE_TREE, when
+// set, unlogged: the one seam a test has between Sync's tree and its CAS.
 func writeShim(dir string) error {
 	real, err := exec.LookPath("git")
 	if err != nil {
 		return err
 	}
+	realGit = real
 	script := "#!/bin/bash\n" +
 		"[ -z \"$WK_GIT_LOG\" ] || { printf '%s\\t' \"$@\" >>\"$WK_GIT_LOG\"; printf '\\n' >>\"$WK_GIT_LOG\"; }\n" +
-		"exec '" + real + "' \"$@\"\n"
+		"'" + real + "' \"$@\"\n" +
+		"status=$?\n" +
+		"case \" $* \" in *' write-tree '*) [ -z \"$WK_GIT_AFTER_WRITE_TREE\" ] || env -u WK_GIT_LOG -u WK_GIT_AFTER_WRITE_TREE sh -c \"$WK_GIT_AFTER_WRITE_TREE\" >/dev/null 2>&1 ;; esac\n" +
+		"exit $status\n"
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		return err
 	}
@@ -118,7 +126,7 @@ func (r repo) treeWith(t *testing.T, rel, content string) string {
 func (r repo) land(t *testing.T, tip, tree, message string) string {
 	t.Helper()
 	var commit string
-	logged(t, "land", func() {
+	logged(t, "Land", func() {
 		result, conflicts, err := Predict(r.Repo, r.c0, tip, tree)
 		if err != nil || len(conflicts) > 0 {
 			t.Fatalf("Predict = %q, %v, %v", result, conflicts, err)
@@ -376,6 +384,45 @@ func TestSyncRefusesABranchWithCommits(t *testing.T) {
 	}
 }
 
+func TestSyncRefusesThePrimary(t *testing.T) {
+	r := newRepo(t)
+	first := r.landed(t, "first\n")
+	r.Write(t, "web/page.ts", "export const page = 2;\n")
+	var err error
+	logged(t, "Sync-primary", func() { _, err = Sync(r.Repo, r.c0, first) })
+	if err == nil || !strings.Contains(err.Error(), r.Repo) {
+		t.Fatalf("err = %v, want a refusal naming %s", err, r.Repo)
+	}
+	if got := r.Git(t, "rev-parse", "refs/heads/main"); got != r.c0 {
+		t.Fatalf("main = %s, want %s unchanged", got, r.c0)
+	}
+	if got := r.Git(t, "status", "--porcelain"); got != " M web/page.ts" {
+		t.Fatalf("status:\n%s", got)
+	}
+}
+
+func TestSyncSaysWhatAMovedBranchLeft(t *testing.T) {
+	r := newRepo(t)
+	first := r.landed(t, "first\n")
+	ws := r.worktree(t, "wk/4")
+	write(t, ws, "web/page.ts", "export const page = 2;\n")
+	// Another process moves the branch after Sync built its tree and before its CAS.
+	other := r.Git(t, "commit-tree", r.treeWith(t, "notes.txt", "other\n"), "-p", r.c0, "-m", "other")
+	t.Setenv("WK_GIT_AFTER_WRITE_TREE", realGit+" -C "+ws+" update-ref refs/heads/wk/4 "+other+" "+r.c0)
+	var err error
+	logged(t, "Sync-moved", func() { _, err = Sync(ws, r.c0, first) })
+	if err == nil || !strings.Contains(err.Error(), "run wk sync again") || !strings.Contains(err.Error(), r.c0) {
+		t.Fatalf("err = %v, want the state it left and what to do", err)
+	}
+	if got := testrepo.Git(t, ws, "rev-parse", "refs/heads/wk/4"); got != other {
+		t.Fatalf("branch = %s, want %s, where the other process put it", got, other)
+	}
+	if got := read(t, ws, "README.md"); got != "first\n" {
+		t.Fatalf("README.md = %q, want the merge the error names", got)
+	}
+	noLeftoverIndex(t, ws)
+}
+
 func noLeftoverIndex(t *testing.T, ws string) {
 	t.Helper()
 	entries, err := os.ReadDir(testrepo.Git(t, ws, "rev-parse", "--absolute-git-dir"))
@@ -461,10 +508,37 @@ func TestPushToABareRemote(t *testing.T) {
 	}
 }
 
-// TestShimLog reads every call the tests above made through the package: the only ref writes
-// are the CAS on the landing ref and the branch move in Sync, each with its old value;
-// commit-tree is given exactly a predicted tree; main is named only by FastForward and Push.
-// It runs last, in source order.
+// readOnly is every git call the package may make in any section. merge-tree writes objects
+// and never a ref; symbolic-ref and worktree are read-only in the forms allowed below.
+var readOnly = map[string]bool{"rev-parse": true, "merge-base": true, "merge-tree": true, "diff": true, "ls-files": true}
+
+// writes is every writing call a section may make; anything else that writes fails the test.
+var writes = map[string][]string{
+	"Land":        {"commit-tree", "update-ref"},
+	"Ensure":      {"update-ref"},
+	"Sync":        {"read-tree", "add", "write-tree", "update-ref", "reset"},
+	"FastForward": {"merge"},
+	"Push":        {"push"},
+}
+
+// mayRun says whether a section may make this call: a read, or one of its own writes.
+func mayRun(section, cmd string, rest []string) bool {
+	switch {
+	case readOnly[cmd]:
+		return true
+	case cmd == "symbolic-ref":
+		return len(rest) > 0 && rest[len(rest)-1] == "HEAD" // a write names a target after HEAD
+	case cmd == "worktree":
+		return len(rest) > 0 && rest[0] == "list"
+	}
+	prefix, _, _ := strings.Cut(section, "-")
+	return slices.Contains(writes[prefix], cmd)
+}
+
+// TestShimLog reads every call the tests above made through the package: each section makes
+// only reads and its own writes; the only ref writes are the CAS on the landing ref and the
+// branch move in Sync, each with its old value; commit-tree is given exactly a predicted tree;
+// main is named only by FastForward and Push. It runs last, in source order.
 func TestShimLog(t *testing.T) {
 	data, err := os.ReadFile(shimLog)
 	if err != nil {
@@ -482,6 +556,9 @@ func TestShimLog(t *testing.T) {
 		}
 		args := strings.Split(strings.TrimSuffix(line, "\t"), "\t")
 		cmd, rest := subcommand(args)
+		if !mayRun(section, cmd, rest) {
+			t.Errorf("%s runs %q, which it may not", section, args)
+		}
 		switch cmd {
 		case "update-ref":
 			updates++
@@ -492,6 +569,9 @@ func TestShimLog(t *testing.T) {
 			inSync := strings.HasPrefix(section, "Sync") && strings.HasPrefix(rest[0], "refs/heads/wk/")
 			if rest[0] != ref && !inSync {
 				t.Errorf("%s: update-ref %q, want the landing ref or Sync's branch", section, rest)
+			}
+			if rest[0] == "refs/heads/main" {
+				t.Errorf("%s: update-ref writes main", section)
 			}
 		case "commit-tree":
 			commits++
