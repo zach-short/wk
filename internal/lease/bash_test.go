@@ -2,6 +2,7 @@ package lease
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -213,7 +214,7 @@ func TestWriteTargets(t *testing.T) {
 		{"rule 6: cd then git pull", `cd web && git pull`, []string{"/w", "/w/web"}},
 		{"rule 6: git --work-tree", `git --work-tree=/r/b checkout main`, []string{"."}},
 		{"rule 6: GIT_WORK_TREE", `GIT_WORK_TREE=/r/b git checkout main`, []string{"."}},
-		{"rule 6: git -c alias with a shell command", `git -c alias.x='!rm web/x.ts' x`, []string{"web/x.ts"}},
+		{"rule 6: git -c alias with a shell command", `git -c alias.x='!rm web/x.ts' x`, []string{alias("x")}},
 		{"rule 6: git -c that runs nothing", `git -c color.ui=false status`, nil},
 
 		// Rule 7: the audits' gaps inside the safe set.
@@ -263,7 +264,99 @@ func TestWriteTargets(t *testing.T) {
 		{"hunt 2: cd -P", `cd -P web && rm x.ts`, []string{"/w/x.ts", "/w/web/x.ts"}},
 		{"hunt 2: cd +1 in zsh", `cd +1; rm x`, []string{"/w/x", "x"}},
 		{"hunt 2: cp to the working directory", `cp -r /tmp/web .`, []string{"/w"}},
-		{"hunt 2: git -c alias run from no directory", `git -c alias.x='!rm /r/b/web/x.ts' x`, []string{"/r/b/web/x.ts"}},
+		{"hunt 2: git -c alias run from no directory", `git -c alias.x='!rm /r/b/web/x.ts' x`, []string{alias("x")}},
+
+		// Audit 5: git spellings the walk did not read (B12, B13).
+		{"audit 5: git rm --pathspec-from-file= after a write of the list", `echo web/page.ts > l && git rm --pathspec-from-file=l`, []string{"/w/l", fromList("--pathspec-from-file=l")}},
+		{"audit 5: git rm --pathspec-from-file=- from a pipe", `echo web/page.ts | git rm --pathspec-from-file=-`, []string{fromList("--pathspec-from-file=-")}},
+		{"audit 5: git rm --pathspec-from-file=list.txt", `git rm --pathspec-from-file=list.txt`, []string{fromList("--pathspec-from-file=list.txt")}},
+		{"audit 5: git rm --pathspec-from-file list.txt", `git rm --pathspec-from-file list.txt`, []string{fromList("--pathspec-from-file")}},
+		{"audit 5: git add --pathspec-from-file", `git add --pathspec-from-file=l`, []string{fromList("--pathspec-from-file=l")}},
+		{"audit 5: git checkout --pathspec-from-file", `git checkout --pathspec-from-file=l`, []string{fromList("--pathspec-from-file=l")}},
+		{"audit 5: the other verbs that take --pathspec-from-file", `git restore --pathspec-from-file=l; git reset --pathspec-from-file=l; git stash push --pathspec-from-file=l; git commit --pathspec-from-file=l`, []string{fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l"), fromList("--pathspec-from-file=l")}},
+		{"audit 5: --pathspec-from-file abbreviated as git allows", `git rm --pathspec-fr=l; git rm --pathspec-from l`, []string{fromList("--pathspec-fr=l"), fromList("--pathspec-from")}},
+		{"audit 5: --pathspec-from-file after -- is a path", `git rm -- --pathspec-from-file=l`, []string{"/w/--pathspec-from-file=l"}},
+		{"audit 5: git -c alias.x=rm", `git -c alias.x=rm x web/page.ts`, []string{alias("x")}},
+		{"audit 5: git -c alias.x=mv", `git -c alias.x=mv x -f a b`, []string{alias("x")}},
+		{"audit 5: git -c alias.x=checkout", `git -c alias.x=checkout x -- web/page.ts`, []string{alias("x")}},
+		{"audit 5: git -c alias.x=!rm", `git -c 'alias.x=!rm' x`, []string{alias("x")}},
+		{"audit 5: git reads an alias key in any case", `git -c ALIAS.Y=rm Y web/page.ts`, []string{alias("Y")}},
+		{"audit 5: a stored alias is not a verb the walk reads", `git x web/page.ts`, []string{verb("x")}},
+		{"audit 5: an alias from --config-env is not a verb the walk reads", `git --config-env=alias.y=X y web/page.ts`, []string{gitConfig("--config-env=alias.y=X"), verb("y")}},
+		{"audit 5: an unknown verb after -C", `git -C sub x web/page.ts`, []string{verb("x")}},
+		{"audit 5: read-only verbs stay allowed", `git status; git log --oneline -5; git diff; git fetch`, nil},
+		{"audit 5: add, commit and push stay allowed", `git add -A && git commit -m msg && git push`, nil},
+		{"audit 5: read forms of branch, tag, remote, reflog and config", `git branch feature; git branch -a; git tag v1; git remote -v; git remote show origin; git reflog; git config --get user.name; git config -l; git -c core.pager=less log`, nil},
+		{"audit 5: branch -D and branch --del", `git branch -D old; git branch --del old`, []string{verb("branch"), verb("branch")}},
+		{"audit 5: tag -d, remote add, reflog expire", `git tag -d v1; git remote add o u; git reflog expire --all`, []string{verb("tag"), verb("remote"), verb("reflog")}},
+		{"audit 5: a config that stores an alias", `git config alias.x rm`, []string{verb("config")}},
+
+		// Row 14 audit 1: git writes through options, transports and the environment.
+		{"F1: a config value then -l is a write", `git config core.fsmonitor 'rm web/page.ts' -l && git status`, []string{verb("config")}},
+		{"F1: a config value then --get is a write", `git config --global core.fsmonitor 'touch p' --get`, []string{verb("config")}},
+		{"F1: a config value then --list is a write", `git config diff.external x --list && git diff HEAD~1`, []string{verb("config")}},
+		{"F1: config reads stay allowed", `git config --get user.name; git config -l; git config --list; git config user.name; git config -f c.cfg --get x; git config get user.name`, nil},
+		{"F1: config --unset and --edit are writes", `git config --unset user.name; git config -e`, []string{verb("config"), verb("config")}},
+		{"F2: diff --output", `git diff --output=web/page.ts`, []string{"/w/web/page.ts"}},
+		{"F2: log --output", `git log --output=web/page.ts`, []string{"/w/web/page.ts"}},
+		{"F2: show --output", `git show --output=web/page.ts`, []string{"/w/web/page.ts"}},
+		{"F2: shortlog --output", `git shortlog --output=web/page.ts HEAD`, []string{"/w/web/page.ts"}},
+		{"F2: rev-list --output", `git rev-list --output=web/page.ts HEAD`, []string{"/w/web/page.ts"}},
+		{"F2: blame --output", `git blame --output=web/page.ts go.mod`, []string{"/w/web/page.ts"}},
+		{"F2: stash show --output", `git stash show --output=web/page.ts`, []string{"/w/web/page.ts"}},
+		{"F2: stash list --output", `git stash list --output=web/page.ts`, []string{"/w/web/page.ts"}},
+		{"F2: --output in the next word, after -C", `git log --output web/page.ts; git -C sub diff --output=x.ts`, []string{"/w/web/page.ts", "/w/sub/x.ts"}},
+		{"F2: --output after -- is a path", `git log -- --output=x`, nil},
+		{"F3: reset --har", `git reset --har`, []string{"/w"}},
+		{"F3: reset --kee", `git reset --kee HEAD~1`, []string{"/w"}},
+		{"F3: reset --merg", `git reset --merg HEAD~1`, []string{"/w"}},
+		{"F3: checkout -b then --forc", `git checkout -b nb1 --forc`, []string{"/w"}},
+		{"F3: checkout --forc then -b", `git checkout --forc -b nb1`, []string{"/w"}},
+		{"F3: reset --mixed and --soft stay index writes", `git reset --mixed HEAD~1; git reset --soft HEAD~1`, nil},
+		{"F4: grep -O attached", `git grep -Ovim x`, []string{grepPager("-Ovim")}},
+		{"F4: grep -O and a word", `git grep -O vim x`, []string{grepPager("-O")}},
+		{"F4: grep --open-files-in-pager=", `git grep --open-files-in-pager=vim x`, []string{grepPager("--open-files-in-pager=vim")}},
+		{"F4: grep --open-files-in-pager and a word", `git grep --open-files-in-pager vim x`, []string{grepPager("--open-files-in-pager")}},
+		{"F5: fetch --upload-pack", `git fetch --upload-pack='touch web/page.ts' .`, []string{transport("--upload-pack=touch web/page.ts")}},
+		{"F5: push --receive-pack", `git push --receive-pack=x . HEAD`, []string{transport("--receive-pack=x")}},
+		{"F5: push --exec", `git push --exec=x .`, []string{transport("--exec=x")}},
+		{"F5: ls-remote --upload-pack and a word", `git ls-remote --upload-pack x .`, []string{transport("--upload-pack")}},
+		{"F5: an ext:: URL", `git -c protocol.ext.allow=always fetch 'ext::sh -c x'`, []string{gitConfig("-c protocol.ext.allow=always"), transport("ext::sh -c x")}},
+		{"F5: GIT_SSH_COMMAND", `GIT_SSH_COMMAND=x git fetch ssh://h/r`, []string{variable("GIT_SSH_COMMAND")}},
+		{"F5: GIT_EXTERNAL_DIFF", `GIT_EXTERNAL_DIFF=x git diff`, []string{variable("GIT_EXTERNAL_DIFF")}},
+		{"F5: GIT_CONFIG_COUNT", `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=x git status`, []string{variable("GIT_CONFIG_COUNT")}},
+		{"F5: an exported GIT_ variable", `export GIT_SSH_COMMAND=x; git fetch`, []string{variable("GIT_SSH_COMMAND")}},
+		{"F6: worktree add", `git worktree add docs/x`, []string{"/w/docs/x"}},
+		{"F6: worktree add -b", `git worktree add -b nb web/x`, []string{"/w/web/x"}},
+		{"F6: worktree add --detach", `git worktree add --detach web/x HEAD`, []string{"/w/web/x"}},
+		{"F6: worktree list, prune, lock and unlock read", `git worktree list; git worktree prune; git worktree lock x; git worktree unlock x`, nil},
+		{"F7: --config-env=", `git --config-env=diff.external=X diff HEAD~1`, []string{gitConfig("--config-env=diff.external=X")}},
+		{"F7: --config-env and a word", `git --config-env core.fsmonitor=X status`, []string{gitConfig("--config-env core.fsmonitor=X")}},
+		{"F7: core.fsmonitor is still walked as a command", `git -c core.fsmonitor='rm web/page.ts' status`, []string{"web/page.ts"}},
+		{"N1: read-only verbs", `git merge-tree --write-tree a b; git show-ref; git diff-tree HEAD; git check-ignore x; git show-branch; git range-diff a b c; git whatchanged; git var -l; git count-objects; git ls-remote origin`, nil},
+		{"N1: submodule status and symbolic-ref reads", `git submodule status; git submodule; git symbolic-ref HEAD; git symbolic-ref --short HEAD`, nil},
+		{"N1: symbolic-ref with two operands or -d", `git symbolic-ref HEAD refs/heads/x; git symbolic-ref -d HEAD`, []string{verb("symbolic-ref"), verb("symbolic-ref")}},
+		{"N2: git mv has no --pathspec-from-file", `git mv --pathspec-from-file=l`, nil},
+
+		// Row 14 audit 2: an option's value is never an option, and ext:: in a -c value.
+		{"B1: --comment takes -l as its value", `git config --comment -l core.fsmonitor 'rm web/page.ts'`, []string{verb("config")}},
+		{"B1: --comment takes --list as its value", `git config --comment --list core.fsmonitor x`, []string{verb("config")}},
+		{"B1: --comment takes --get as its value", `git config --comment --get diff.external x`, []string{verb("config")}},
+		{"B1: --global then --comment -l", `git config --global --comment -l core.fsmonitor x`, []string{verb("config")}},
+		{"B1: -f with an attached value", `git config -f.git/logs/../config core.fsmonitor x`, []string{verb("config")}},
+		{"B1: -f takes -l as its value", `git config -f -l x.y z`, []string{verb("config")}},
+		{"B1: --file takes --get as its value", `git config --file --get x.y z`, []string{verb("config")}},
+		{"B1: -fl is -f with the value l", `git config -fl x.y z`, []string{verb("config")}},
+		{"B1: --comment=-l, the control", `git config --comment=-l core.fsmonitor x`, []string{verb("config")}},
+		{"B2: protocol.allow and an ext:: remote URL", `git -c protocol.allow=always -c 'remote.o.url=ext::sh -c touch% PROOF1' fetch o`, []string{gitConfig("-c protocol.allow=always"), gitConfig("-c remote.o.url=ext::sh -c touch% PROOF1")}},
+		{"B2: an ext:: insteadOf key", `git -c 'url.ext::sh -c touch% PROOF2 #.insteadOf=foo:' fetch foo:x`, []string{gitConfig("-c url.ext::sh -c touch% PROOF2 #.insteadOf=foo:")}},
+		{"B2: protocol.allow and an ext:: URL operand", `git -c protocol.allow=always fetch 'ext::sh -c x'`, []string{gitConfig("-c protocol.allow=always"), transport("ext::sh -c x")}},
+		{"B2: an ext:: insteadOf for https", `git -c url.ext::sh.insteadOf=https:// fetch https://x`, []string{gitConfig("-c url.ext::sh.insteadOf=https://")}},
+		{"B3: --reason abbreviated to --reas", `git worktree add --lock --reas r docs/x`, []string{"/w/docs/x"}},
+		{"B3: --reason abbreviated to --reaso", `git worktree add --lock --reaso r docs/x`, []string{"/w/docs/x"}},
+		{"N-a: checkout -qf -b", `git checkout -qf -b x`, []string{"/w"}},
+		{"N-a: checkout -fq -b", `git checkout -fq -b x`, []string{"/w"}},
+		{"N-a: checkout -bfeat is a branch named feat", `git checkout -bfeat`, nil},
 
 		// Rule 8: reads stay allowed.
 		{"rule 8: ls -la", `ls -la docs`, nil},
@@ -283,9 +376,56 @@ func refused(c string) string { return unreadablePrefix + c + ">" }
 
 func pathspec(p string) string { return pathspecPrefix + p + ">" }
 
+func fromList(o string) string { return fromFilePrefix + o + ">" }
+
+func alias(n string) string { return aliasPrefix + n + ">" }
+
+func verb(s string) string { return gitVerbPrefix + s + ">" }
+
+func gitConfig(s string) string { return gitConfigPrefix + s + ">" }
+
+func variable(s string) string { return gitVariablePrefix + s + ">" }
+
+func grepPager(s string) string { return grepPrefix + s + ">" }
+
+func transport(s string) string { return transportPrefix + s + ">" }
+
+func TestWriteTargetsGitProgramKeys(t *testing.T) {
+	for _, kv := range []string{
+		"include.path=/tmp/c", "includeIf.gitdir:/r/.path=/tmp/c", "core.hooksPath=/tmp/h",
+		"core.sshCommand=x", "protocol.ext.allow=always", "core.editor=x", "sequence.editor=x",
+		"diff.external=x", "merge.tool=x", "mergetool.x.cmd=y", "difftool.x.cmd=y",
+		"filter.x.smudge=y", "credential.helper=x", "Core.HooksPath=/tmp/h", "protocol.allow=always",
+		"protocol.ext.allow=always", "credential.https://h.helper=x", "remote.o.uploadpack=x", "gpg.ssh.program=x",
+	} {
+		got := WriteTargets("/w", "git -c "+kv+" status")
+		if want := []string{gitConfig("-c " + kv)}; !slices.Equal(got, want) {
+			t.Errorf("git -c %s: got %q, want %q", kv, got, want)
+		}
+	}
+}
+
 func TestWriteTargetsWithoutCwd(t *testing.T) {
 	got := WriteTargets("", `touch a /abs/b`)
 	if want := []string{"a", "/abs/b"}; !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRefusalNamesWhatItCouldNotRead(t *testing.T) {
+	for target, want := range map[string]string{
+		fromList("--pathspec-from-file=l"): "with `--pathspec-from-file=l` git reads the paths from a file or standard input",
+		alias("x"):                         "`x` is a git alias, which the lease walk does not read; run the git verb directly",
+		verb("x"):                          "`git x` is not a git verb the lease walk reads",
+		gitConfig("-c core.hooksPath=h"):   "`-c core.hooksPath=h` is config that names a program or a file",
+		variable("GIT_SSH_COMMAND"):        "`GIT_SSH_COMMAND` is set beside git, and a GIT_ variable can carry a command or config",
+		grepPager("-Ovim"):                 "with `-Ovim` git grep runs a command on the matched files",
+		transport("--upload-pack=x"):       "with `--upload-pack=x` git runs a command to reach the other repository",
+		pathspec("out/../a"):               "so `out/../a` cannot be placed",
+		refused("$"):                       "the command holds `$`",
+	} {
+		if got, ok := refusal(target); !ok || !strings.Contains(got, want) {
+			t.Errorf("refusal(%q) = %q, %v; want it to hold %q", target, got, ok, want)
+		}
 	}
 }
