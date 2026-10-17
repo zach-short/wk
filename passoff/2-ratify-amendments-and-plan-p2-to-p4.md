@@ -1,5 +1,7 @@
 # 2. Ratify the P1 amendments and write the plan for P2 to P4
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED).*
 
 **Model: Fable 5.1. Lane A. Waits on nothing.**

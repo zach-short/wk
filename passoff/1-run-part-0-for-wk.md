@@ -1,5 +1,7 @@
 # 1. Run Part 0 for wk: fill CLAUDE.md and the ledger's environment
 
+> **Claimed `IN FLIGHT` 2026-10-16.**
+
 *Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED).*
 
 **Model: Opus 5.5. Lane B. Waits on nothing.**
