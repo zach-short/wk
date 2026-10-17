@@ -24,4 +24,14 @@ Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go te
 Ask before building: nothing; every call is in the plan (PD-6 to PD-8). Only a fact that section 0 of the plan finds moved.
 Not in scope, whoever asks: the batch gate, the trial workspace, the automatic fast-forward (P4); any change inside `internal/changeset` or `internal/landing` beyond a finding of step 9 (fixed here and named); folding `/land-worktrees`.
 
-Hand back: the gate output, the proof, the As built note, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
+Hand back: the gate output, the proof, the As built note, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. Commit on your own worktree branch only; the lead merges, pushes and removes the worktree after the audit. No `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Owner amendments, 2026-10-16
+
+From the owner's research review of 2026-10-16, applied by the autopilot run before this row launched. They bind the build; where they differ from the steps above, they win.
+
+- Held until the daemon-or-files question is decided by the owner's rule (see row 3's amendments: `docs/incomplete/integration/KILL-TEST.md`, files unless the file store shows more lost or stale leases, or more manual recovery steps, than the daemon). If the rule picks files, the landing loop is a detached run-to-completion worker started by `wk submit` and by the launchd timer, not a goroutine of the daemon; the plan's P3 section is changed before this row launches.
+- Journal the landing commit hash before the compare-and-swap, and treat a merge result equal to the tip's tree as already landed, so a crash cannot write a duplicate commit.
+- After a changeset lands, gc treats the workspace as absorbed when its working tree, written through a private index, equals the landed tree.
+- Give `wk sync` a path for a branch that carries commits (PD-7 refuses it today), and list at submit time what `add -A` will include.
+- A changeset carries a reference to its review, and `landing.require_review` refuses to land without one. Default (owner's choice): off, so D20 stands.

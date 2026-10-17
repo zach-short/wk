@@ -1,0 +1,5 @@
+# Row 2, audit round 2 (Fable 5.1, agent af6ec44a34d13f89c), arrived 2026-10-16 21:23 EDT
+
+Verdict: non-blocking findings (3, wording). Reproduced: ff main (7275a2c), ff ap/row-2 refused (base moved), merged with `git merge --no-edit ap/row-2` as directed (merge commit c1a9afd in the auditor's worktree, no conflict). Diffstat main...HEAD 13 files +465/-29 matches; name-only exactly the 13 allowed files; fix commit 9ea0524 names only them, no trailer. Gate exit 0 (internal/wk 39.6 s, 0 issues).
+All 18 fix items verified with file and line (listed in the agent's report). Full diff d51f151..9ea0524 and prompts 3 to 12 read: no em dash, no contraction, headings in order, each prompt stands alone, shared names agree.
+F1: prompt 10 (line 5, 14) and plan (148, 211) say row 10 copies row 9's private-index lines, but row 10 now builds beside row 9; point at prompt 9 step 1's sequence instead. F2: plan 211 says 9, 10, 11 import only gitx and testrepo; 11 imports neither. F3 (pre-existing): relative words at plan lines 44 and 93.

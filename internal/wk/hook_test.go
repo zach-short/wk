@@ -144,3 +144,28 @@ func TestHookRefusesBadInput(t *testing.T) {
 		t.Fatalf("bad input left directories: %v", entries)
 	}
 }
+
+// A reused worktree has a session in it again, so the stop marker a SubagentStop left there
+// must go, or gc would give the live worktree a stopped subagent's short window (F2, 2026-10-16).
+func TestHookReuseClearsTheStopMarker(t *testing.T) {
+	f := testrepo.New(t)
+	name := "agent-" + agentID
+	first, err := WorktreeCreate(f.Home, hookInput(t, name, f.Repo), &bytes.Buffer{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markStopped(t, f, first)
+	marker := stoppedMarker(t, first)
+	read(t, marker)
+
+	again, err := WorktreeCreate(f.Home, hookInput(t, name, f.Repo), &bytes.Buffer{}, nil)
+	if err != nil || again != first {
+		t.Fatalf("second call = %q, %v; want the same %q", again, err, first)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("the stop marker survived the reuse (stat err %v)", err)
+	}
+	if log := hookLog(t, f); !strings.Contains(log, "reused "+first) {
+		t.Fatalf("hook.log:\n%s", log)
+	}
+}

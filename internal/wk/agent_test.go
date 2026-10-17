@@ -186,3 +186,25 @@ func TestWorktreeRemoveRefusals(t *testing.T) {
 	}
 	read(t, filepath.Join(e.TemplateDir(), "README.md"))
 }
+
+// A stopped subagent on a detached HEAD has no branch to keep its commits, so the stopped
+// exception does not apply: gc keeps the worktree until main holds the commit (F1, 2026-10-16).
+func TestGCKeepsAStoppedDetachedSubagentWorktreeWithUnlandedCommits(t *testing.T) {
+	f := testrepo.New(t)
+	dir := filepath.Join(f.Repo, ".claude/worktrees", "agent-"+agentID)
+	f.Git(t, "worktree", "add", "--quiet", "--detach", dir, "main")
+	writeIn(t, dir, "web/agent.ts", "export const done = 1;\n")
+	commitIn(t, dir, "agent work on a detached head")
+	markStopped(t, f, dir)
+
+	e := openAt(t, f, 16*time.Minute)
+	expect(t, e, dir, Kept, "its detached HEAD has commits main does not hold")
+	apply(t, e)
+	assertStays(t, dir)
+
+	f.Git(t, "merge", "--ff-only", testrepo.Git(t, dir, "rev-parse", "HEAD"))
+	j := expect(t, openAt(t, f, 16*time.Minute), dir, Removable, "detached HEAD is an ancestor of main")
+	if j.DeleteBranch {
+		t.Fatal("a detached HEAD has no branch to delete")
+	}
+}
