@@ -1,13 +1,24 @@
-# 5. Build P4, one gate run per batch, with failure attribution
+# 5. Build P4, one gate run per batch: integrate the trial, the batch loop, attribution and the fast-forward of `main`
 
-*Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED).*
+*Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED). Prompt filled 2026-10-16 by row 2 from `docs/incomplete/landing-layer/PLAN-P2-P4.md` section 4.*
 
-**Model: Opus 5.5. Lane A. Waits on 4.**
+**Model: Opus 5.5. Lane A. Waits on 4; 11 and 12 (the P4 siblings).**
 
-Build phase P4 of the landing layer as `docs/incomplete/landing-layer/PLAN-P2-P4.md` describes it. Item 2 writes that plan and replaces this prompt with the full one. If the plan does not exist, or this prompt still says so, stop and report: the row is not ready.
+You are the integration row of P4 of the landing layer. Read, in this order: `docs/incomplete/landing-layer/PLAN-P2-P4.md` sections 0, 1 and 4 (binding), `DESIGN.md` D14, D16, D20, D26, options S to V and section 6, the close-outs of rows 11 and 12 in `passoff/11-*.md` and `12-*.md`, `internal/gate` and `internal/batch` as `main` holds them, `internal/wk/landing.go` (P3's loop, which this row changes), `internal/wk/new.go` `create` and `internal/wk/gc.go` (the trial marker, PD-9), `internal/slot` (row 200; PD-10), `internal/config/config.go` and `cmd/wk/main.go`.
 
-Model: Opus 5.5, with a review. The design is `docs/incomplete/landing-layer/DESIGN.md` (sections 3, 4 and 8 for P4).
+Do these, in order:
+1. `internal/config/config.go`: `landing.ff_main` and the `[gates]` keys of the plan (`trial_dir`, `batch_max`, `batch_idle_seconds`, `min_free_mb`, `fresh_caches`, `[[gates.run]]` with `name`, `dir`, `run`, `needs_env`) with the defaults and validation (`trial_dir` relative; `batch_max` at least 1; a run with an empty `run` is an error). Additive.
+2. `internal/wk/trial.go`: the trial workspace at `gates.trial_dir`, detached, made by `Env.create` and marked `land-worktrees-trial` (PD-9) so gc skips it; `read-tree -u --reset <tree>` into it under `~/.wk/<repo>/trial.lock`, held from the read to the last gate (section 6).
+3. `internal/wk/gatekeeper.go` and `internal/wk/landing.go`: move the land step behind the gate (PD-6): the loop now forms a batch by `batch.Pick`, predicts each changeset on top of the previous prediction, runs `gate.Run` in the trial on the final tree with `gates.env`, fresh caches and `gate.WaitForMemory` before each gate, through `wk run --slot` where row 200's matcher recognises the command (PD-10); on green lands the batch in order by `landing.Land` (one CAS each), then `landing.FastForward` with `landing.ff_main` and `landing.Push` with `landing.push`; on red, `batch.Blame` over `diff-tree --name-only <base> <tree>` per changeset, `failed` for a unique match and re-gate the rest, else `batch.Shrink` and re-gate (T3, T1). With no `[[gates.run]]`, land onto the ref and never fast-forward (PD-11).
+4. `internal/wk/status.go`: `gated`, `failed` with gate and reason, `landed`, the batch in flight, and why `main` did not move.
+5. `README.md`: a section on the batch gate, the trial, attribution, and that P4 is only cheaper if sessions stop running the gates themselves (option V).
+6. `GOTOOLCHAIN=local go install ./cmd/wk` before any new key; then the `[gates]` section for `~/.wk/wk.toml` (the four wk gates, `enabled` landing) and for `~/.wk/ezhomesteading.toml` (the `CLAUDE.md` gates minus the DB suites, `needs_env = ["EZH_TEST_DB"]` on `sqlgate` and the DB suites, `landing.enabled` left as it is).
+7. The live proof of the plan, section 4 "Done when": the throwaway repository with three gates and a local bare remote, the memory samples, the `skip` gate, and two real changesets of this repository batched, gated once in the trial, landed, fast-forwarded and pushed by the daemon. Record it under "As built, P4" in `PLAN-P2-P4.md`.
+8. Review: spawn one Opus 5.5 subagent in its own worktree with the diff applied there, briefed to read `internal/wk/gatekeeper.go` and `landing.go` for any path where a batch lands without a green gate, where a `skip` counts as green, where the trial is gated mid-read, or where the wrong changeset is blamed; it edits nothing and returns findings with file and line. Check its diffstat. Record each finding's outcome.
 
-Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'`, plus the "Done when" proof of P4 in `DESIGN.md` section 8.
+Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'`, plus the "Done when" of P4 in `PLAN-P2-P4.md` section 4.
 
-Hand back: the gate output and the proof, recorded under the phase in the plan, and one log line. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
+Ask before building: nothing; every call is in the plan (PD-6, PD-9 to PD-11). Only a fact that section 0 of the plan finds moved.
+Not in scope, whoever asks: `gates.parallel_tsc` and `gates.next_build_concurrency` (row 200's slots); a disk report in `wk status`; any change inside `internal/gate` or `internal/batch` beyond a finding of step 8 (fixed here and named); folding `/land-worktrees`.
+
+Hand back: the gate output, the proof, the As built note, and a `## Close-out, <date>` section in this file. Git: Claude may run any git command, including `git add`, `git commit`, `git merge` and `git push`. Work in your own worktree branch. When the gates pass, commit naming the exact files, merge the branch into `main`, push, and remove the worktree. No `Co-Authored-By:` trailer and no "Generated with" line.
