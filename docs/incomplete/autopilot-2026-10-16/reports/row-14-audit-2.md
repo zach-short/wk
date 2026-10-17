@@ -1,6 +1,6 @@
 # Row 14 audit 2 (fix round 1), Opus 5.5, agent ae25226e2a80508f4
 
-Launched 2026-10-17 11:18 EDT, returned 2026-10-17 11:36 EDT. Detached worktree `.claude/worktrees/ap-row-14-audit-2` at `ef61fe5`. Scoped verdict: regressions and holes in the fix block; older gaps are findings.
+Launched 2026-10-17 11:18 EDT, returned 2026-10-17 11:29 EDT. Detached worktree `.claude/worktrees/ap-row-14-audit-2` at `ef61fe5`. Scoped verdict: regressions and holes in the fix block; older gaps are findings.
 
 ## Verdict: blocking findings (three holes in the fix)
 
