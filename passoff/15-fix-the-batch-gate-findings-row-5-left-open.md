@@ -1,5 +1,7 @@
 # 15. Fix the batch gate findings row 5 left open
 
+> **Claimed `IN FLIGHT` 2026-10-17.**
+
 *Opened 2026-10-17, from the open findings of row 5's sign-off (P4, the batch gate, landed on `main` at 8bea094): N2, N3 and N4 of audit 1, N-a and N-c of audit 2, audit 3's observation on the landing log, and the "Left owed" list of row 5's close-out. Sources: `docs/incomplete/autopilot-2026-10-16/reports/row-5-audit-1.md`, `row-5-audit-2.md`, `row-5-audit-3.md`, and the archived item file `~/Projects/archive/wk/passoff/5-build-p4-one-gate-run-per-batch.md` (close-out, "Left owed", fix rounds 1 and 2, sign-off).*
 
 **Model: Opus 5.5. Lane A. Waits on nothing (row 5 landed). Work in your own worktree. Files it owns: `internal/config/config.go`, `internal/config/gates_test.go`, `internal/wk/trial.go`, `internal/wk/gatestart.go`, `internal/wk/gateplan.go`, `internal/wk/gatekeeper_test.go`, `internal/gate/run.go`, `internal/gate/run_test.go`, `internal/gate/paths.go`, `internal/gate/paths_test.go`, `README.md`.**
