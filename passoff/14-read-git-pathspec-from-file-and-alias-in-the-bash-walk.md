@@ -71,3 +71,31 @@ The corrected reason for `add`, `commit` and `push`: they write the index, objec
 Two 9c7cec3 rows changed their expected result, each forced by a finding: the `--pathspec-from-file` row for the other verbs no longer holds `git mv` (N2), and `git --config-env=alias.y=X y web/page.ts` now gives the config refusal before the verb refusal (F7). Both are still denied where git would act.
 
 What is left: a `core.pager` or `core.fsmonitor` value that names a script is walked as a command whose verb the walk does not know, so it passes, as before this row; hooks in the repository; git versions other than 2.49.0; the live hook through a built binary.
+
+### Fix round 2, 2026-10-17
+
+From row 14 audit 2 (`docs/incomplete/autopilot-2026-10-16/reports/row-14-audit-2.md`). Only `internal/lease/bash.go` and `internal/lease/bash_test.go` changed, plus this section, after a merge of main (59aa77f). `bash.go` is 1210 lines, down from 1222 after fix round 1 (1068 after the first commit, 967 on main before the row).
+
+The splitter. `valueOptions` holds a git verb's options that take a value: short letters and long names, with `stop` for a verb whose options end at its first operand. Its `split` returns the options and the operands as git's option parser reads them. A short letter that takes a value ends its cluster and takes the rest of it, or the next word when it is last (`-f.git/x` and `-fl` are `-f` with a value; `-qf` is two flags). A long name matches whole or abbreviated, as git allows (`--reas` for `--reason`), and takes the next word when no `=` joins it. A value never reaches either list: the option keeps its cluster up to its letter (`-f`), or gets its value joined by `=` (`--file=v`). After `--` every word is an operand. Three tables use it: `configValues` (`-f`, `-t`, `--file`, `--blob`, `--type`, `--default`, `--comment`, stopping at the first operand), `worktreeValues` (`-b`, `-B`, `--reason`) and `checkoutValues` (`-b`, `-B`, `--orphan`, `--conflict`). `configReads`, `worktreePath`, `outputs` and `checkoutWrites` now call it, and their four hand loops are gone. The lists of value-taking options come from `git config --get -h`, `git worktree add -h` and `git checkout -h` on git 2.49.0.
+
+What changed, by finding:
+
+- B1. `configReads` reads the options `split` returns, so an option's value is never an option. `--comment -l`, `--comment --list`, `--comment --get`, `--global --comment -l`, `-f.git/logs/../config`, `-f -l x.y z`, `--file --get x.y z` and `-fl x.y z` followed by a key and a value are refused as a config write, as is the control `--comment=-l`.
+- B2. `protocol.allow` and `protocol.*.allow` are program keys (the second covers `protocol.ext.allow`), and a `-c` whose key or value holds `ext::` is refused for any key. That covers `remote.o.url=ext::...` and `url.ext::....insteadOf=...`. `programKeys` is now one anchored regular expression over the same keys, which replaces the list and its matcher.
+- B3. `worktreePath` takes the operand after `add` from `split`, so `--reas r` and `--reaso r` are `--reason` with its value, and the write is placed at `docs/x`.
+- N-a. `checkoutWrites` is `split` and two `hasOption` calls: a `-f` alone or in a cluster (`-qf`, `-fq`) or `--force` whole or abbreviated is a tree write. `-bfeat` is still a new branch named `feat`.
+
+Corrected statements:
+
+- F1: legacy `git config` reads options only before its first operand, and the value of `-f`, `-t`, `--file`, `--blob`, `--type`, `--default` or `--comment`, attached or in the next word, is never read as an option. It reads with `get` or `list`, a get or list option, or exactly one key and no writing option.
+- F5: on the transport verbs, `--upload-pack`, `--receive-pack` and `--exec` in any spelling, and an argument that starts with `ext::` or holds `=ext::`, are refused. Any `-c` whose key or value holds `ext::`, and `-c protocol.allow` or `protocol.<name>.allow`, are refused before the verb.
+- F6: `git worktree add` writes the first operand after `add`, as git's option parser reads it, with the values of `-b`, `-B` and `--reason` (whole or abbreviated) consumed.
+- N1 (fix round 1): `git var -l` passes; `git var GIT_EDITOR` is refused by the `GIT_` rule (N-b below).
+
+Every ef61fe5 row passes unchanged. 18 new walk rows and 5 more keys in `TestWriteTargetsGitProgramKeys` all pass.
+
+Open, as the lead asked:
+
+- N-b. The `GIT_` rule reads the whole command text, so it over-refuses `git var GIT_EDITOR`, `git log --grep=GIT_X`, `echo GIT_X; git status` and `git status # GIT_X`. It never allows a write.
+- N-c. `EDITOR='rm web/page.ts' git commit` passes the walk; with `GIT_EDITOR` unset git runs the editor. The agent environment sets `GIT_EDITOR=true`, and `unset GIT_EDITOR` is refused, so it is inert here; `env -i EDITOR=...` is not verified.
+- N-d. A value that names a script (`-c core.fsmonitor=./hook.sh`, `-c core.pager=./script.sh`, `-c core.alternateRefsCommand=x`, `-c uploadpack.packObjectsHook=x`, `HOME=/tmp/h git status` with a planted config, `git --exec-path=/tmp/e fetch .`) passes, as scripts do everywhere in the walk.

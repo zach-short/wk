@@ -338,6 +338,26 @@ func TestWriteTargets(t *testing.T) {
 		{"N1: symbolic-ref with two operands or -d", `git symbolic-ref HEAD refs/heads/x; git symbolic-ref -d HEAD`, []string{verb("symbolic-ref"), verb("symbolic-ref")}},
 		{"N2: git mv has no --pathspec-from-file", `git mv --pathspec-from-file=l`, nil},
 
+		// Row 14 audit 2: an option's value is never an option, and ext:: in a -c value.
+		{"B1: --comment takes -l as its value", `git config --comment -l core.fsmonitor 'rm web/page.ts'`, []string{verb("config")}},
+		{"B1: --comment takes --list as its value", `git config --comment --list core.fsmonitor x`, []string{verb("config")}},
+		{"B1: --comment takes --get as its value", `git config --comment --get diff.external x`, []string{verb("config")}},
+		{"B1: --global then --comment -l", `git config --global --comment -l core.fsmonitor x`, []string{verb("config")}},
+		{"B1: -f with an attached value", `git config -f.git/logs/../config core.fsmonitor x`, []string{verb("config")}},
+		{"B1: -f takes -l as its value", `git config -f -l x.y z`, []string{verb("config")}},
+		{"B1: --file takes --get as its value", `git config --file --get x.y z`, []string{verb("config")}},
+		{"B1: -fl is -f with the value l", `git config -fl x.y z`, []string{verb("config")}},
+		{"B1: --comment=-l, the control", `git config --comment=-l core.fsmonitor x`, []string{verb("config")}},
+		{"B2: protocol.allow and an ext:: remote URL", `git -c protocol.allow=always -c 'remote.o.url=ext::sh -c touch% PROOF1' fetch o`, []string{gitConfig("-c protocol.allow=always"), gitConfig("-c remote.o.url=ext::sh -c touch% PROOF1")}},
+		{"B2: an ext:: insteadOf key", `git -c 'url.ext::sh -c touch% PROOF2 #.insteadOf=foo:' fetch foo:x`, []string{gitConfig("-c url.ext::sh -c touch% PROOF2 #.insteadOf=foo:")}},
+		{"B2: protocol.allow and an ext:: URL operand", `git -c protocol.allow=always fetch 'ext::sh -c x'`, []string{gitConfig("-c protocol.allow=always"), transport("ext::sh -c x")}},
+		{"B2: an ext:: insteadOf for https", `git -c url.ext::sh.insteadOf=https:// fetch https://x`, []string{gitConfig("-c url.ext::sh.insteadOf=https://")}},
+		{"B3: --reason abbreviated to --reas", `git worktree add --lock --reas r docs/x`, []string{"/w/docs/x"}},
+		{"B3: --reason abbreviated to --reaso", `git worktree add --lock --reaso r docs/x`, []string{"/w/docs/x"}},
+		{"N-a: checkout -qf -b", `git checkout -qf -b x`, []string{"/w"}},
+		{"N-a: checkout -fq -b", `git checkout -fq -b x`, []string{"/w"}},
+		{"N-a: checkout -bfeat is a branch named feat", `git checkout -bfeat`, nil},
+
 		// Rule 8: reads stay allowed.
 		{"rule 8: ls -la", `ls -la docs`, nil},
 		{"rule 8: cat", `cat web/x.ts`, nil},
@@ -375,7 +395,8 @@ func TestWriteTargetsGitProgramKeys(t *testing.T) {
 		"include.path=/tmp/c", "includeIf.gitdir:/r/.path=/tmp/c", "core.hooksPath=/tmp/h",
 		"core.sshCommand=x", "protocol.ext.allow=always", "core.editor=x", "sequence.editor=x",
 		"diff.external=x", "merge.tool=x", "mergetool.x.cmd=y", "difftool.x.cmd=y",
-		"filter.x.smudge=y", "credential.helper=x", "Core.HooksPath=/tmp/h",
+		"filter.x.smudge=y", "credential.helper=x", "Core.HooksPath=/tmp/h", "protocol.allow=always",
+		"protocol.ext.allow=always", "credential.https://h.helper=x", "remote.o.uploadpack=x", "gpg.ssh.program=x",
 	} {
 		got := WriteTargets("/w", "git -c "+kv+" status")
 		if want := []string{gitConfig("-c " + kv)}; !slices.Equal(got, want) {
