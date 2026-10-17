@@ -88,6 +88,12 @@ func printGateRun(out io.Writer, l gateLog) {
 	case "":
 		return
 	case "gating":
+		// A gates.json from a binary before fix round 1 has no pid: the worker is unknown, so it is
+		// read as neither stale nor a claim about a process (fix round 2, N-b).
+		if l.PID <= 0 {
+			_, _ = fmt.Fprintf(out, "batch in flight: %s, gating tree %s since %s, worker unknown\n", strings.Join(l.Batch, " "), shortHash(l.Tree), l.At.Format(time.RFC3339))
+			return
+		}
 		if !processAlive(l.PID) {
 			_, _ = fmt.Fprintf(out, "stale gate run: %s, gating tree %s since %s, by worker %d, which has stopped; the next worker gates the batch again\n", strings.Join(l.Batch, " "), shortHash(l.Tree), l.At.Format(time.RFC3339), l.PID)
 			return

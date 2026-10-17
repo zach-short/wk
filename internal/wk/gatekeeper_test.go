@@ -388,12 +388,17 @@ func TestSlottedGateWithAMissingCommandBlamesNothing(t *testing.T) {
 	}
 }
 
-// Fix round 1, B1: wk run exits 127 or 126 for a command it cannot find or run; through the
-// slot that is a start error too, and the changeset stays submitted. Exit 1 is still a fail.
+// Fix round 1, B1, and fix round 2: wk run exits 127 or 126 for a command it cannot find or
+// run, and 75 when slots.max_wait_seconds ran out; through the slot each is a start error, and
+// the changeset stays submitted. Exit 1 is still a fail.
 func TestSlottedGateExit127IsAStartError(t *testing.T) {
 	for _, tc := range []struct {
 		exe, state string
-	}{{"exit 127", changeset.Submitted}, {"exit 126", changeset.Submitted}, {"exit 1", changeset.Failed}} {
+	}{
+		{"exit 127", changeset.Submitted}, {"exit 126", changeset.Submitted},
+		{"echo 'wk run: gave up after 1s waiting for a check place (slots.max_wait_seconds)' >&2; exit 75", changeset.Submitted},
+		{"exit 1", changeset.Failed},
+	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
 		err := e.LandLoop(io.Discard)
 		if (tc.state == changeset.Submitted) != (err != nil && strings.Contains(err.Error(), "could not run")) {
@@ -430,7 +435,8 @@ func TestGatedRecordEqualToTheTipIsNotTakenAsLanded(t *testing.T) {
 	}
 }
 
-// Fix round 1, N1: a gating record left by a stopped worker reads as stale, not in flight.
+// Fix round 1, N1: a gating record left by a stopped worker reads as stale, not in flight; one
+// with no pid, from an older binary, reads as in flight by an unknown worker (fix round 2, N-b).
 func TestStatusSaysAStoppedWorkersBatchIsStale(t *testing.T) {
 	_, e, _, _ := gateFixture(t, "1")
 	dead := exec.Command("true")
@@ -440,7 +446,11 @@ func TestStatusSaysAStoppedWorkersBatchIsStale(t *testing.T) {
 	for _, tc := range []struct {
 		pid  int
 		want string
-	}{{dead.Process.Pid, "stale gate run: abc, gating"}, {os.Getpid(), "batch in flight: abc, gating"}} {
+	}{
+		{dead.Process.Pid, "stale gate run: abc, gating"},
+		{os.Getpid(), "batch in flight: abc, gating"},
+		{0, "batch in flight: abc, gating tree 0123456789ab since 0001-01-01T00:00:00Z, worker unknown"},
+	} {
 		e.noteGates(func(l *gateLog) {
 			l.PID, l.Batch, l.State, l.Tree = tc.pid, []string{"abc"}, "gating", "0123456789abcdef"
 		})

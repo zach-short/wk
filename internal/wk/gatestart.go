@@ -47,17 +47,20 @@ func (s gateSpec) canStart(root string, env map[string]string) error {
 	return fmt.Errorf("gate %s: %s is not on the gate's PATH (%s), so the gate cannot start", s.g.Name, s.argv0, path)
 }
 
-// wrapperFailed turns exit status 126 or 127 of a slotted gate into a start error: wk run exits
-// so for a command it cannot run or find (internal/slot, exitNotExecutable and exitNotFound), as
-// /bin/sh does. A slotted command that exits 126 or 127 by itself is then a start error too,
-// which stops the pass and blames nobody. Exit 2, wk run's usage error, is left a fail, because
-// tsc and many other gates exit 2 for a red tree.
+// wrapperFailed turns the three exit statuses wk run uses when the gate's command never ran
+// into a start error (internal/slot/run.go): 75, exitTempFail, when slots.max_wait_seconds ran
+// out before a place was free; 126, exitNotExecutable, and 127, exitNotFound, for a command it
+// cannot run or find, as /bin/sh does too. A slotted command that exits 75, 126 or 127 by itself
+// is then a start error too, which stops the pass and blames nobody. Exit 2, wk run's usage
+// error, is left a fail, because tsc and many other gates exit 2 for a red tree.
 func (s gateSpec) wrapperFailed(r gate.Result) error {
-	if !s.slotted || r.Status != gate.Fail || (r.Reason != "exit status 126" && r.Reason != "exit status 127") {
+	if !s.slotted || r.Status != gate.Fail || !notRun[r.Reason] {
 		return nil
 	}
 	return fmt.Errorf("gate %s: %s through wk run --slot, which means its command could not run: %s", s.g.Name, r.Reason, strings.TrimSpace(lastLine(r.Output)))
 }
+
+var notRun = map[string]bool{"exit status 75": true, "exit status 126": true, "exit status 127": true}
 
 func skips(g gate.Gate) bool {
 	for _, v := range g.NeedsEnv {
