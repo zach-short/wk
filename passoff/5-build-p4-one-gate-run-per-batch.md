@@ -1,5 +1,7 @@
 # 5. Build P4, one gate run per batch: integrate the trial, the batch loop, attribution and the fast-forward of `main`
 
+> **Claimed `IN FLIGHT` 2026-10-17.**
+
 *Opened 2026-10-16, when the landing-layer work moved here from `~/Projects/ezhomesteading` (its board row 196, now SUPERSEDED). Prompt filled 2026-10-16 by row 2 from `docs/incomplete/landing-layer/PLAN-P2-P4.md` section 4.*
 
 **Model: Opus 5.5. Lane A. Waits on 4; 11 and 12 (the P4 siblings).**
