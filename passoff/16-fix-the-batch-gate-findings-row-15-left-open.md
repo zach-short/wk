@@ -82,3 +82,77 @@ Done when:
 - The gate above exits 0 in your worktree.
 
 Hand back the gate output, the diffstat, each new test with its result, the review's findings and their outcomes, and the close-out section in this file. After the lead lands this row, `GOTOOLCHAIN=local go install ./cmd/wk` from `main` puts the new binary where the worker runs it. Commit on your worktree branch only, with no `Co-Authored-By:` trailer and no "Generated with" line.
+
+## Close-out, 2026-10-17
+
+Builder: Opus 5.5, one agent, in `.claude/worktrees/dl-row-16-build` on `dl/row-16-build`, from `main` at 73ee1e0 (`git merge --ff-only main` said "Already up to date" before each gate). Build commit d8a7089; the review fixes and this section are in the commit after it. Files changed: `internal/wk/gatestart.go`, `internal/wk/trial.go`, `internal/wk/gatekeeper_test.go`, `README.md`. `internal/wk/new.go` is unchanged, because step 2's default was taken.
+
+### What changed, by step
+
+1. F1. `neverRan` calls `stillWaiting` for a timeout: a start error only when the output has a `wk run: waiting for a ` line and no line `wk run` writes before it runs the command after a wait (`waitEnded`: `wk run: took a ` or `wk run: running unslotted: `). `waited` is gone. `wrapperFailed` gives the still-waiting case its own wording: `gate <name>: timed out after <n>s while still waiting for a place through wk run --slot, so its command never ran; the next worker gates the batch again`. The other start errors keep their one sentence. The doc comment bullet and README line 277 say both cases. `TestSlottedGateTimeoutWhileWaitingIsAStartError` keeps its still-waiting row (now checking the new wording) and its never-waited row; the took-a row moved to `TestSlottedGateTimeoutAfterTakingAPlaceIsAFail`, which also has a `running unslotted` row.
+2. F2, the default. `makeTrial` calls `failedTrialCreate` when `Env.create` fails: with nothing at the path it removes `trial.making` and returns create's error, as before; with the directory there it keeps the record and wraps create's error: `...; but <state>/trial.making names it as an unfinished trial, so the next worker (the landing timer starts one every minute) removes it with git worktree remove --force and makes it again: copy anything you need out of it first`. create's own "left for inspection" clause stays in the message, because `new.go` is not changed (see review N1). The README's trial paragraph says so. Test: `TestTrialCreateFailureSaysTheNextWorkerMakesItAgain`. The fixture failure is a `template.copy_files` entry: `secret.env` is a file while `RefreshTemplate` makes the template, then is replaced by a directory, so the template is fresh and the copy in `createCold` (after `worktree add`) fails with "is a directory". A failing `post_clone` was not cheap: `postClone` skips the commands when the trial's commit is the template's. A copy entry that is a directory from the start fails in the template refresh, before `worktree add`, which was the first try.
+3. F4. `ensureTrial` hands a directory the record names to `finishInterruptedTrial` (record removal when marked, else removal and a new make). `makeTrial` calls `markTrial` for the marker and `failedTrialCreate` for step 2. `refreshDeps` reads where the dependencies stand through `readDeps` (replacing `depsMadeAt`, and returning a `trialDeps{record, made, want}`), runs the commands through `remakeDeps` (`unknown`, `gate.Run`, the blob only on a pass), and leaves the red-or-start-error choice to `postCloneFailed`. The order of every operation is unchanged: base commit, record, create, marker, record removal; record read (or HEAD's blob), the tree's blob, the line, `unknown`, the run, the blob. One return value differs: `ensureTrial` now returns the trial's path, not `""`, with the error from a refused removal; its only caller, `withTrial`, reads the error first and drops the path. The six trial tests and every other `internal/wk` test pass with no edit to their bodies.
+
+### Line counts (whole function, signature to closing brace)
+
+| Function | Before | After |
+|---|---|---|
+| `refreshDeps` | 31 | 16 |
+| `ensureTrial` | 18 | 11 |
+| `makeTrial` | 25 | 16 |
+| `depsMadeAt`, now `readDeps` | 12 | 16 |
+| `finishInterruptedTrial` (new) | | 9 |
+| `markTrial` (new) | | 7 |
+| `failedTrialCreate` (new) | | 7 |
+| `remakeDeps` (new) | | 13 |
+| `postCloneFailed` (new) | | 6 |
+
+### What is now fixed
+
+Row 15's audit F1, F2 and F4, and review N1 to N4 below.
+
+### Questions answered
+
+- Does a `wk run` line other than `took a` mean the command ran after a wait? Yes: `running unslotted: <reason>` when `tryAdmit` fails mid-wait (`internal/slot/run.go`, `wait` and `queueUp`); the command then runs unslotted. It is counted with `took a` (build-level call below).
+- Does the landing log always show how long the wait took? No. `gate.Run` echoes only the last 20 lines of a failed gate's output (`internal/gate/run.go` line 29), so a command that prints 20 lines or more after `took a` pushes it out of the log, and the failed record's reason is only `timed out after <n>s`. The brief's "the landing log already echoes the gate's output, `took a` included" holds only for short output. The README says so. Putting the wait in the reason needs `gateplan.go` or `internal/gate`, both out of scope.
+
+### Build-level calls, each with its reversal
+
+- A timeout after a long wait followed by a command that needs more than the time left is a `fail` (the brief's call). Bisection gates again, usually without a wait, so only a batch of one is failed by it. Reversal: keep the start error when the `took a` duration is most of the limit, with a threshold. I saw no reason to want it on 2026-10-17: no live gate sets `timeout_seconds`, and wk has no slots file.
+- `running unslotted:` after a wait line counts as the end of the wait, so a timeout after it is a `fail`. Reason: the command ran. Reversal: drop it from `waitEnded`; the case is then a start error that stops the queue though the command ran.
+- `stillWaiting` asks for the presence of the lines, not their order, as the brief says. A `took a` or `running unslotted:` line anywhere makes the timeout a fail. Reversal: read the last wait line only.
+- Step 2's default: the record stays when the create fails after the directory exists. Reversal, as the brief names it: remove the record; "left for inspection" is then true, and the next worker refuses the unmarked directory until a person removes it. See review N2 for a reason to weigh it.
+- The F2 test breaks the copy after the template is made, not `post_clone` (step 2 above).
+
+### Tests, each with whether it fails with its fix turned off
+
+Each fix was turned off alone, the test run, and the file restored (`scratchpad/row-16/fixoff.py`; output in `fixoff.out` at d8a7089 and `fixoff2.out` on the final tree, the same result both times):
+
+- `TestSlottedGateTimeoutAfterTakingAPlaceIsAFail`: fails with the old `waited` (`waiting for a` or `took a`): the loop returns the start error on the `took a` row. Fails too with `running unslotted:` dropped from `waitEnded`, on its second row.
+- `TestSlottedGateTimeoutWhileWaitingIsAStartError`: passes with its still-waiting and never-waited rows; fails with the old one-sentence wording.
+- `TestTrialCreateFailureSaysTheNextWorkerMakesItAgain`: fails with create's error returned unwrapped (the wording check).
+- Step 3 is a refactor and has no fix to turn off. Its proof is the six trial tests (`TestTrialRefusesAnUnmarkedDirectory`, `TestTrialInterruptedBeforeItsMarkerIsMadeAgain`, `TestTrialIntentNeverTakesABranch`, `TestTrialRunsPostCloneWhenTheBatchChangesRefreshOn`, `TestTrialPostCloneFailureBlamesTheLockfileChange`, `TestTrialPostCloneFailureWithoutALockfileChangeBlamesNothing`), step 2's test and every other `internal/wk` test passing with their bodies unedited.
+
+### Review
+
+One Opus 5.5 reviewer in the detached worktree `.claude/worktrees/dl-row-16-review` at d8a7089, told to edit nothing. `git status --porcelain` printed nothing and `git diff --stat d8a7089` was empty afterwards; the worktree was removed with `git worktree remove`. It found nothing blocking, confirmed the order of operations and the return values, and turned F1's and F2's fixes off in a `git archive` copy in the scratchpad (both new tests failed). Findings and outcomes:
+
+- N1: the wrapped error still holds create's "left for inspection", and two comments said it no longer did. Fixed: the comments on `failedTrialCreate` and the test say the error adds what happens after create's clause. Removing the clause needs a typed error from `create` in `new.go`, out of scope unless the reversal is taken; left as is.
+- N2: "copy anything you need out of it first" gives a person about a minute, because the landing timer's `StartInterval` is 60. Fixed: the error and the README say the timer starts the next worker every minute. Also noted: a create that fails every time (a broken `copy_files` or `post_clone`) remakes the trial every minute, as before this row. A reason to weigh step 2's reversal; not taken, because the default lets a passing failure (a full disk, a network blip) clear without a person.
+- N3: only `took a` gives the wait's length; the README implied any wait line did. Fixed in the README.
+- N4: "gave up on the wait" could be read as exit 75's "gave up after". Fixed: "the wait itself failed and `wk run` ran the command unslotted" in the README, the doc comment and the test comment.
+- N5: a directory that appears at `trial_dir` between `ensureTrial`'s `Lstat` and `create`'s makes `create` fail with "already exists"; the record is kept and names a directory that is not the trial, and the next worker removes it if it is a detached worktree of this repository. The window is one `git` call and one file write, and the base had the same hole; only the new sentence is new. Not fixed: the fix the reviewer names (a sentinel error from `create`'s check) touches `new.go`. Left owed.
+- N6: a long wait then a hang fails a batch of one with only `timed out after <n>s` as its reason. The brief's ratified trade-off; no change. See "Questions answered" for the 20-line log tail.
+
+### Left owed
+
+- Review N5 (the "already exists" race keeps the record), small, needs `new.go`.
+- The wait's length in a failed record's reason, for output longer than 20 lines (needs `gateplan.go` or `internal/gate`).
+- Unchanged from the brief: F3 (no timeout on `post_clone` in the trial), row 15's review N3 (signals to a worker while a timed gate runs) and N4 (a changeset that breaks a gate's own script is a start error), all owner calls.
+
+### Gate
+
+`GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'` in the worktree:
+
+- 2026-10-17 16:53:27 to 16:55:26 EDT at d8a7089 (the README's two wording edits after the start went into the same commit): exit 0, every package `ok` (`internal/wk` 108.8 s), `0 issues.`, 118 s, load 7.84 at the start and 5.80 at the end.
+- 2026-10-17 17:03:24 to 17:05:29 EDT on the final tree (review fixes): exit 0, every package `ok` (`internal/wk` 115.8 s, `internal/slot` 6.0 s, `internal/gate` 5.4 s), `0 issues.`, 125 s, load 4.42 at the start and 4.78 at the end.

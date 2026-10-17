@@ -100,14 +100,15 @@ func markTrial(dir string) error {
 // failedTrialCreate is makeTrial's error when Env.create fails. With nothing at dir, the record
 // is removed, so it cannot outlive this pass and later name a directory someone else puts there.
 // With dir there, the record stays, because dir is the unfinished trial it exists for and the
-// next worker removes it and makes it again without a person; create's "left for inspection",
-// true for wk new, is not true here, so the error says what happens instead (row 15's audit F2).
+// next worker removes it and makes it again without a person. create's own error still ends
+// "left for inspection", which is true for wk new, so the trial's error adds what happens here
+// instead (row 15's audit F2).
 func (e *Env) failedTrialCreate(dir string, err error) error {
 	if _, lerr := os.Lstat(dir); lerr != nil {
 		_ = os.Remove(e.trialIntent())
 		return err
 	}
-	return fmt.Errorf("%w; but %s names it as an unfinished trial, so the next worker removes it with git worktree remove --force and makes it again: copy anything you need out of it first", err, e.trialIntent())
+	return fmt.Errorf("%w; but %s names it as an unfinished trial, so the next worker (the landing timer starts one every minute) removes it with git worktree remove --force and makes it again: copy anything you need out of it first", err, e.trialIntent())
 }
 
 // trialIntent is ~/.wk/<repo>/trial.making. Only a holder of trial.lock writes or reads it.

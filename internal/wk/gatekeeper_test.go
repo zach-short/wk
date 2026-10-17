@@ -487,8 +487,8 @@ func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
 	}
 }
 
-// Row 15's audit F1: once wk run has taken the place, or has given up on the wait and run the
-// command unslotted, the command ran, so a timeout is the tree's: a fail, blamed like any red
+// Row 15's audit F1: once wk run has taken the place, or the wait itself failed and wk run ran
+// the command unslotted, the command ran, so a timeout is the tree's: a fail, blamed like any red
 // gate, and the landing log keeps wk run's line about the wait.
 func TestSlottedGateTimeoutAfterTakingAPlaceIsAFail(t *testing.T) {
 	const wait = "echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; "
@@ -592,9 +592,9 @@ func TestTrialIntentNeverTakesABranch(t *testing.T) {
 
 // Row 15's audit F2: a trial create that fails after worktree add (here a template.copy_files
 // entry that became a directory after the template was made, which copy cannot read) keeps
-// trial.making, and its error says the next worker removes the unfinished trial, not that it is
-// left for inspection. Once the copy can succeed, the next loop makes the trial again, marks it
-// and gates the batch.
+// trial.making, and its error adds, after create's own "left for inspection", that the next
+// worker removes the unfinished trial. Once the copy can succeed, the next loop makes the trial
+// again, marks it and gates the batch.
 func TestTrialCreateFailureSaysTheNextWorkerMakesItAgain(t *testing.T) {
 	_, e, ws, _ := gateFixture(t, "1", "a")
 	secret := e.inPrimary("secret.env")
@@ -614,7 +614,7 @@ func TestTrialCreateFailureSaysTheNextWorkerMakesItAgain(t *testing.T) {
 	writeIn(t, ws["a"], "web/a.ts", "export const a = 1;\n")
 	id := submit(t, e, ws["a"], "a", "")
 	err := e.LandLoop(io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "the next worker removes it with git worktree remove --force and makes it again") {
+	if err == nil || !strings.Contains(err.Error(), "names it as an unfinished trial, so the next worker (the landing timer starts one every minute) removes it with git worktree remove --force and makes it again") {
 		t.Fatalf("loop = %v; want the error to say the next worker removes the trial", err)
 	}
 	mustState(t, e, id, changeset.Submitted)

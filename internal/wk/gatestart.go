@@ -63,9 +63,9 @@ func (s gateSpec) canStart(root string, env map[string]string) error {
 //     blamed like any red gate (row 5's N-a).
 //   - A timeout while wk run was still waiting for a place: the wait counts against
 //     timeout_seconds, and the command never ran, so the time went to another workspace's run.
-//     The next worker gates the batch again. Once wk run has the place (or gave up on the wait
-//     and ran the command unslotted), the command ran, and a timeout is a fail like any hang
-//     (row 15's audit F1).
+//     The next worker gates the batch again. Once wk run has the place (or the wait itself
+//     failed and wk run ran the command unslotted), the command ran, and a timeout is a fail
+//     like any hang (row 15's audit F1).
 //
 // Exit 2, wk run's usage error, is left a fail, because tsc and many other gates exit 2 for a
 // red tree.
