@@ -2,7 +2,7 @@
 
 *Opened 2026-10-16 by row 2, as a P3 sibling of row 4 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 3).*
 
-**Model: Fable 5.1. Lane A. Waits on 3.**
+**Model: Fable 5.1. Lane G. Waits on 2** (this package imports only `internal/gitx` and `internal/testrepo` and copies row 9's private-index lines, so it starts with the P2 siblings).
 
 **Model: Fable 5.1** (Deep tier): this package writes refs, and a wrong tree on the landing ref compiles, passes every gate and is wrong. If you are not on Fable 5.1, stop and say so.
 

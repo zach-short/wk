@@ -2,7 +2,7 @@
 
 *Opened 2026-10-16 by row 2, as a P4 sibling of row 5 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 4).*
 
-**Model: Opus 5.5. Lane A. Waits on 4.**
+**Model: Opus 5.5. Lane I. Waits on 9** (this package imports `internal/changeset` for the `Record` type, row 9's deliverable, and nothing else from P2 to P4).
 
 You are building one package of P4 of the landing layer, `wk`. Read first: `PLAN-P2-P4.md` section 4, the row 12 line of its sub-row table (binding), `DESIGN.md` D16 and options T and U, `docs/conventions-go.md`, and `internal/changeset/queue.go` on `main` for the `Record` type and the state names (you may import `internal/changeset` for the type; you change nothing there). You own only `internal/batch/`; row 5 wires it. Nothing in your package runs git or imports `internal/wk`, `internal/config`, `internal/daemon`, `internal/landing` or `internal/gate`.
 

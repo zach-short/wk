@@ -2,7 +2,7 @@
 
 *Opened 2026-10-16 by row 2, as a P3 sibling of row 4 (`docs/incomplete/landing-layer/PLAN-P2-P4.md` section 3).*
 
-**Model: Fable 5.1. Lane A. Waits on 3.**
+**Model: Fable 5.1. Lane F. Waits on 2** (this package imports only `internal/gitx` and `internal/testrepo`, nothing from P2, so it starts with the P2 siblings).
 
 **Model: Fable 5.1** (Deep tier): the tree this package writes is what lands, and a tree that silently leaves out an untracked file or takes in an ignored one passes every gate. If you are not on Fable 5.1, stop and say so.
 
@@ -10,7 +10,7 @@ You are building one package of P3 of the landing layer, `wk`. Read first: `PLAN
 
 Do these, in order:
 1. `internal/changeset/tree.go`: `Tree(workspace string) (tree string, err error)`: with `GIT_INDEX_FILE` set to a temporary file beside the workspace's git directory, `read-tree HEAD`, `add -A`, `write-tree`; the temporary index is removed on every path, and the workspace's own index is never opened for writing. `Base(workspace, tip string) (base string, err error)`: `merge-base HEAD <tip>`, an error naming both when there is none (PD-7). `Head(workspace) (commit, branch string, err error)`.
-2. `internal/changeset/queue.go`: `Record{ID, State, Tree, Base, Message, Row, Workspace, Commit string, Paths []string, Gate, Reason string, At time.Time}`; states `submitted`, `refused`, `landed`, `gated`, `failed` as constants; `Queue{Path string}` with `Append(Record) error` (one JSON line, `O_APPEND`, fsync) and `Load() ([]Record, error)` folded to the last line per id in first-seen order, a corrupt line an error naming its number; `NewID(tree, base string, at time.Time) string`, the first 12 hex of the SHA-1 of the three joined by newlines.
+2. `internal/changeset/queue.go`: `Record{ID, State, Tree, Base, Message, Row, Workspace, Commit string, Paths []string, Gate, Reason string, At time.Time}`; states `submitted`, `refused`, `landed`, `gated`, `failed` as constants; `Queue{Path string}` with `Append(Record) error` (one JSON line, `O_APPEND`, fsync) and `Load() ([]Record, error)` folded to the last line per id in first-seen order, a corrupt line an error naming its number; `NewID(tree, base string, at time.Time) string`, the first 12 hex of the SHA-1 of the three joined by newlines (PD-13).
 3. `internal/changeset/changeset_test.go` in a `testrepo` fixture: an untracked non-ignored file is in the tree (`ls-tree -r`), an ignored file is not, a modified tracked file carries its new blob, a deleted tracked file is absent; the workspace's `.git/index` (or the worktree's private index) is byte-identical before and after `Tree`; no temporary index remains; `Base` on a branch with its own commits returns the merge base and on an unrelated history returns an error; `Load` folds three lines of one id to the last; a corrupt line names its number.
 
 Gate: `GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'`; the package tests above green.
