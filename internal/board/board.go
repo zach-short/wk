@@ -47,30 +47,43 @@ func tableCells(line string) ([]string, bool) {
 // holds "..", or holds whitespace, and every run of text outside backticks
 // that is more than punctuation and whitespace, each as written.
 func Parse(cell string) (paths, unread []string) {
+	p := parsed{seen: map[string]bool{}}
 	parts := strings.Split(cell, "`")
-	seen := map[string]bool{}
 	for i, part := range parts {
-		inToken := i%2 == 1 && i < len(parts)-1
-		if !inToken {
-			if i%2 == 1 {
-				part = "`" + part // an unclosed backtick: show it as written
-			}
-			if hasWords(part) {
-				unread = append(unread, strings.TrimSpace(part))
-			}
-			continue
-		}
-		p, ok := classify(part)
 		switch {
-		case part == "":
-		case !ok:
-			unread = append(unread, part)
-		case !seen[p]:
-			seen[p] = true
-			paths = append(paths, p)
+		case i%2 == 0:
+			p.text(part)
+		case i == len(parts)-1:
+			p.text("`" + part) // an unclosed backtick: show it as written
+		default:
+			p.token(part)
 		}
 	}
-	return paths, unread
+	return p.paths, p.unread
+}
+
+// parsed collects what Parse has read so far.
+type parsed struct {
+	paths, unread []string
+	seen          map[string]bool
+}
+
+func (p *parsed) text(s string) {
+	if hasWords(s) {
+		p.unread = append(p.unread, strings.TrimSpace(s))
+	}
+}
+
+func (p *parsed) token(tok string) {
+	read, ok := classify(tok)
+	switch {
+	case tok == "":
+	case !ok:
+		p.unread = append(p.unread, tok)
+	case !p.seen[read]:
+		p.seen[read] = true
+		p.paths = append(p.paths, read)
+	}
 }
 
 // hasWords reports whether s holds a rune that is neither punctuation nor
@@ -91,30 +104,39 @@ func classify(tok string) (string, bool) {
 		strings.Contains(tok, "..") || strings.IndexFunc(tok, unicode.IsSpace) >= 0 {
 		return tok, false
 	}
-	for _, suffix := range []string{"/**/*", "/**", "/"} {
-		if strings.HasSuffix(tok, suffix) {
-			return dirPrefix(strings.TrimSuffix(tok, suffix))
-		}
-	}
-	if isGlob(tok) {
-		return tok, true
+	if base, ok := trimDir(tok); ok {
+		return dirPrefix(base)
 	}
 	return cleaned(tok)
+}
+
+// trimDir strips every trailing "/", "/**" and "/**/*" from tok and reports
+// whether it stripped one, so "dir/", "dir/**", "dir/**/" and "dir/**/*" all
+// name the directory "dir".
+func trimDir(tok string) (string, bool) {
+	for _, suffix := range []string{"/**/*", "/**", "/"} {
+		if strings.HasSuffix(tok, suffix) {
+			base, _ := trimDir(strings.TrimSuffix(tok, suffix))
+			return base, true
+		}
+	}
+	return tok, false
 }
 
 // dirPrefix returns base as a directory prefix with one trailing "/". A base
 // that is itself a glob cannot be a literal prefix, so it becomes the glob of
 // every file below it, for Expand.
 func dirPrefix(base string) (string, bool) {
-	if isGlob(base) {
-		return base + "/**/*", true
-	}
 	p, ok := cleaned(base)
+	if isGlob(p) {
+		return p + "/**/*", ok
+	}
 	return p + "/", ok
 }
 
-// cleaned returns tok in clean form. A token that cleans to the repository
-// root would lease everything or nothing, so it is not read.
+// cleaned returns tok in clean form; path.Clean keeps "*", "?" and "[", so a
+// glob is cleaned like a path. A token that cleans to the repository root
+// would lease everything or nothing, so it is not read.
 func cleaned(tok string) (string, bool) {
 	p := path.Clean(tok)
 	return p, p != "."
@@ -149,7 +171,7 @@ func mark(pattern string, files []string, hit []bool) bool {
 	if strings.HasSuffix(pattern, "/") {
 		pattern += "**/*"
 	}
-	segs := strings.Split(pattern, "/")
+	segs := strings.Split(path.Clean(pattern), "/")
 	found := false
 	for i, f := range files {
 		if matchSegments(segs, strings.Split(f, "/")) {
@@ -165,12 +187,7 @@ func mark(pattern string, files []string, hit []bool) bool {
 func matchSegments(pat, name []string) bool {
 	for len(pat) > 0 {
 		if pat[0] == "**" {
-			for i := 0; i <= len(name); i++ {
-				if matchSegments(pat[1:], name[i:]) {
-					return true
-				}
-			}
-			return false
+			return matchAnyDepth(pat[1:], name)
 		}
 		if len(name) == 0 {
 			return false
@@ -181,4 +198,15 @@ func matchSegments(pat, name []string) bool {
 		pat, name = pat[1:], name[1:]
 	}
 	return len(name) == 0
+}
+
+// matchAnyDepth matches rest against name after skipping any number of
+// leading segments, which is what a "**" segment means.
+func matchAnyDepth(rest, name []string) bool {
+	for i := 0; i <= len(name); i++ {
+		if matchSegments(rest, name[i:]) {
+			return true
+		}
+	}
+	return false
 }

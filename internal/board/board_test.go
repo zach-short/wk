@@ -118,10 +118,11 @@ func TestParseTokenForms(t *testing.T) {
 		cell          string
 		paths, unread []string
 	}{
-		{"`a/`; `b/**`; `c/**/*`; `d//`", []string{"a/", "b/", "c/", "d/"}, nil},
+		{"`a/`; `b/**`; `c/**/*`; `d//`; `e/**/`; `f/**/**`", []string{"a/", "b/", "c/", "d/", "e/", "f/"}, nil},
+		{"`./src/*.ts`, `src//*.ts`, `./x?.go`", []string{"src/*.ts", "x?.go"}, nil},
 		{"`./e.go`, `f/./g.go`, `a/` again `a/`", []string{"e.go", "f/g.go", "a/"}, []string{"again"}},
 		{"`src/**/*.ts`, `x?.go`, `[ab].go`", []string{"src/**/*.ts", "x?.go", "[ab].go"}, nil},
-		{"`web/*/`, `web/*/**`, `web/*/**/*`", []string{"web/*/**/*"}, nil},
+		{"`web/*/`, `web/*/**`, `web/*/**/*`, `./web/*/**/`", []string{"web/*/**/*"}, nil},
 		{"`/etc/hosts` `~/x` `a/../b` `..` `go test ./...` `./` `.`", nil, []string{"/etc/hosts", "~/x", "a/../b", "..", "go test ./...", "./", "."}},
 		{"`a.go` → `b.go`", []string{"a.go", "b.go"}, []string{"→"}},
 		{"`a.go`; `b.go", []string{"a.go"}, []string{"`b.go"}},
@@ -165,6 +166,20 @@ func TestExpand(t *testing.T) {
 	}
 	if want := []string{"missing/**/*.go", "GetChat", "[bad"}; !slices.Equal(unmatched, want) {
 		t.Errorf("unmatched = %q, want %q", unmatched, want)
+	}
+}
+
+func TestExpandCleanedGlobs(t *testing.T) {
+	globs, _ := Parse("`./src/*.ts`; `./nowhere/*.go`")
+	matched, unmatched := Expand(globs, []string{"src/a.ts", "src/lib/b.ts"})
+	if want := []string{"src/a.ts"}; !slices.Equal(matched, want) {
+		t.Errorf("matched = %q, want %q", matched, want)
+	}
+	if want := []string{"nowhere/*.go"}; !slices.Equal(unmatched, want) {
+		t.Errorf("unmatched = %q, want %q", unmatched, want)
+	}
+	if matched, _ := Expand([]string{"./src/*.ts"}, []string{"src/a.ts"}); len(matched) != 1 {
+		t.Errorf("Expand of an uncleaned glob matched %q, want src/a.ts", matched)
 	}
 }
 
