@@ -419,3 +419,32 @@ func TestRunLeavesAnIgnoredSignalIgnored(t *testing.T) {
 		t.Fatalf("under nohup: exit %d, %v; want 7, SIGHUP still ignored for the command", code, err)
 	}
 }
+
+// Row 16's A2: with SayStartEnv set, wk run writes "starting <command>" just before the command
+// starts, after a free place and after a fail-open alike, and the command never sees the
+// variable, so a wk run inside it stays quiet.
+func TestRunSaysStartWhenAsked(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, machine string
+		lines         int
+	}{
+		{"a free place", "[slots]\nmax_wait_seconds = 5\n\n[slots.heavy]\ncapacity = 1\n", 1},
+		{"no machine file", "", 2},
+	} {
+		f := newFixture(t, tc.machine)
+		seen := f.path("seen")
+		dir := t.TempDir()
+		out, errOut := createFile(t, filepath.Join(dir, "stdout")), createFile(t, filepath.Join(dir, "stderr"))
+		opts := f.spec("heavy").options(nil, out, errOut)
+		opts.Env = append(os.Environ(), SayStartEnv+"=1")
+		code := Run(opts, []string{"sh", "-c", `printf %s "${WK_RUN_SAY_START-unset}" > "$1"; exit 3`, "sh", seen})
+		lines := strings.Split(strings.TrimSuffix(readFile(t, errOut.Name()), "\n"), "\n")
+		if code != 3 || len(lines) != tc.lines || !strings.HasPrefix(lines[len(lines)-1], "wk run: starting sh -c ") {
+			t.Errorf("%s: exit %d, stderr %q; want 3 and the start line last", tc.name, code, lines)
+		}
+		if got := readFile(t, seen); got != "unset" {
+			t.Errorf("%s: the command saw %s=%q; want it unset", tc.name, SayStartEnv, got)
+		}
+	}
+}

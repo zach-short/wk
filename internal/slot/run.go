@@ -39,7 +39,13 @@ const (
 	exitNotExecutable = 126
 	exitNotFound      = 127
 	heldEnv           = "WK_SLOT_HELD"
-	defaultPath       = "/usr/bin:/bin"
+	// SayStartEnv, set to any value, makes wk run write "starting <command>" just before the
+	// command starts, on every path that starts it. The landing worker sets it on a slotted gate,
+	// because a gate's own output can print any line wk run writes, but cannot remove one: a
+	// timeout without the line is a command that never ran (row 16's A2). The command never sees
+	// it, so a wk run inside the command stays quiet (SB-10).
+	SayStartEnv = "WK_RUN_SAY_START"
+	defaultPath = "/usr/bin:/bin"
 )
 
 type runner struct {
@@ -52,6 +58,7 @@ type runner struct {
 	held      *place
 	waited    time.Duration
 	memWarned bool
+	sayStart  bool
 }
 
 // Run executes argv under a place of opts.Class and returns the exit status for os.Exit.
@@ -73,6 +80,9 @@ func Run(opts RunOptions, argv []string) int {
 	if code, ended := r.admit(sigs); ended {
 		return code
 	}
+	if r.sayStart {
+		r.say("starting %s", formatCommand(r.argv))
+	}
 	return r.finish(r.runChild(path, sigs))
 }
 
@@ -84,6 +94,9 @@ func newRunner(opts RunOptions, argv []string) *runner {
 	if r.env == nil {
 		r.env = os.Environ()
 	}
+	v, _ := envValue(r.env, SayStartEnv)
+	r.sayStart = v != ""
+	r.env = slices.DeleteFunc(slices.Clone(r.env), func(kv string) bool { return strings.HasPrefix(kv, SayStartEnv+"=") })
 	if abs, err := filepath.Abs(r.dir); err == nil {
 		r.dir = abs
 	}

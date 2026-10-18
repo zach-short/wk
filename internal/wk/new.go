@@ -18,6 +18,10 @@ import (
 
 var rowPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 
+// errExists is create's refusal of a dir that is already there. create made nothing then, so
+// the trial can tell a directory it never touched from one its own create left (row 16's A1).
+var errExists = errors.New("already exists")
+
 // maxRefreshes bounds how often one `wk new` refreshes a template that goes stale again while
 // it waits, so a base branch whose lockfile moves every minute cannot hold it forever.
 const maxRefreshes = 2
@@ -60,7 +64,7 @@ func (e *Env) New(row string, c Checkout) (string, error) {
 // template. Either way the pool is topped up afterwards, in the background.
 func (e *Env) create(dir, branch, commit string, sparse bool) (string, error) {
 	if _, err := os.Lstat(dir); err == nil {
-		return "", fmt.Errorf("%s already exists", dir)
+		return "", fmt.Errorf("%s %w", dir, errExists)
 	}
 	if branch != "" && gitx.BranchExists(e.Repo.Primary, branch) {
 		return "", fmt.Errorf("branch %s already exists", branch)

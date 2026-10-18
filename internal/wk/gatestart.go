@@ -61,11 +61,12 @@ func (s gateSpec) canStart(root string, env map[string]string) error {
 //     as it gives up: "gave up after" for 75, one naming the command for 126 and 127. A slotted
 //     command that exits 75, 126 or 127 itself writes its own output, so it stays a fail and is
 //     blamed like any red gate (row 5's N-a).
-//   - A timeout while wk run was still waiting for a place: the wait counts against
-//     timeout_seconds, and the command never ran, so the time went to another workspace's run.
-//     The next worker gates the batch again. Once wk run has the place (or the wait itself
-//     failed and wk run ran the command unslotted), the command ran, and a timeout is a fail
-//     like any hang (row 15's audit F1).
+//   - A timeout before wk run started the command, while it waited for a place: the wait
+//     counts against timeout_seconds, and the time went to another workspace's run. The next
+//     worker gates the batch again. runGate sets slot.SayStartEnv, so wk run writes "starting
+//     <command>" on every path that starts it; a command can print any line of wk run's, but
+//     cannot remove that one, so a timeout after it is a fail like any hang (row 15's audit F1,
+//     row 16's A2).
 //
 // Exit 2, wk run's usage error, is left a fail, because tsc and many other gates exit 2 for a
 // red tree.
@@ -87,7 +88,7 @@ const wkRun = "wk run: "
 
 func (s gateSpec) neverRan(reason string, lines []string) bool {
 	if timedOut(reason) {
-		return stillWaiting(lines)
+		return !slices.ContainsFunc(lines, started)
 	}
 	if !slices.ContainsFunc(lines, func(l string) bool { return s.givesUp(reason, l) }) {
 		return false
@@ -115,20 +116,9 @@ func (s gateSpec) givesUp(reason, l string) bool {
 
 func timedOut(reason string) bool { return strings.HasPrefix(reason, "timed out after ") }
 
-// stillWaiting is whether wk run was still waiting for a place when the gate's time ran out: it
-// wrote the line it writes as a wait starts, and neither line it writes before it runs the
-// command after a wait.
-func stillWaiting(lines []string) bool {
-	return slices.ContainsFunc(lines, waitStarted) && !slices.ContainsFunc(lines, waitEnded)
-}
-
-func waitStarted(l string) bool { return strings.HasPrefix(l, wkRun+"waiting for a ") }
-
-// waitEnded is "took a <class> place after <duration>", written once the place is taken, or
-// "running unslotted: ...", written when the wait itself fails; the command runs after either.
-func waitEnded(l string) bool {
-	return strings.HasPrefix(l, wkRun+"took a ") || strings.HasPrefix(l, wkRun+"running unslotted: ")
-}
+// started is the line wk run writes just before it starts the command, when slot.SayStartEnv
+// is set.
+func started(l string) bool { return strings.HasPrefix(l, wkRun+"starting ") }
 
 // shellLine is the line /bin/sh prints when it cannot run the wk binary the gate is routed
 // through ("/bin/sh: <wk>: No such file or directory", or dash's "/bin/sh: 1: <wk>: not

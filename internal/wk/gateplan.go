@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -226,6 +227,13 @@ func (e *Env) runGates(root string, out io.Writer) (verdict, error) {
 // result: a start error is logged as the start error with the output's tail, never as the
 // `fail, exit status 75` line gate.Run would have written first.
 func runGate(root string, s gateSpec, env map[string]string, out io.Writer) (gate.Result, error) {
+	if s.slotted {
+		env = maps.Clone(env)
+		if env == nil {
+			env = map[string]string{}
+		}
+		env[slot.SayStartEnv] = "1"
+	}
 	var held bytes.Buffer
 	rs, err := gate.Run(root, []gate.Gate{s.g}, env, nil, &held)
 	if err != nil {
@@ -240,7 +248,23 @@ func runGate(root string, s gateSpec, env map[string]string, out io.Writer) (gat
 		return gate.Result{}, err
 	}
 	_, _ = io.Copy(out, &held)
-	return rs[0], nil
+	return withWait(s, rs[0]), nil
+}
+
+// withWait adds wk run's "took a <class> place after <duration>" to a slotted gate's timeout
+// reason, so a failed record says how much of the time the wait took even when the command's
+// own output pushed the line out of the log's last 20 lines (row 16's left owed).
+func withWait(s gateSpec, r gate.Result) gate.Result {
+	if !s.slotted || !timedOut(r.Reason) {
+		return r
+	}
+	for _, l := range nonEmptyLines(r.Output) {
+		if strings.HasPrefix(l, wkRun+"took a ") {
+			r.Reason += " (wk run " + strings.TrimPrefix(l, wkRun) + ")"
+			break
+		}
+	}
+	return r
 }
 
 // failedPaths is gate.Paths over the gate's own directory with that directory joined back on,

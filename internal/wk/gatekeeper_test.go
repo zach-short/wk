@@ -466,13 +466,21 @@ func TestSlottedStartErrorIsNotLoggedAsAFail(t *testing.T) {
 	}
 }
 
+// sayStart is the fake wk run's "starting" line, written only when the worker set
+// slot.SayStartEnv for it, as the real one does.
+const sayStart = `[ -n "$WK_RUN_SAY_START" ] && echo 'wk run: starting true' >&2; `
+
 // A slotted gate still waiting for its place when its time ran out lost the time to another
 // workspace's run, and its command never ran: a start error with its own wording (row 15's
-// review B2 and audit F1). One that never waited and runs out of time is a fail like any timeout.
+// review B2 and audit F1), as is one that timed out before wk run said anything. One that
+// never waited and runs out of time is a fail like any timeout, even when its command prints
+// wk run's waiting line itself (row 16's A2).
 func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
 	for _, tc := range []struct{ exe, state string }{
 		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Submitted},
-		{"echo 'checking' >&2; sleep 60", changeset.Failed},
+		{"sleep 60", changeset.Submitted},
+		{sayStart + "echo 'checking' >&2; sleep 60", changeset.Failed},
+		{sayStart + "echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Failed},
 	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
 		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
@@ -489,19 +497,29 @@ func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
 
 // Row 15's audit F1: once wk run has taken the place, or the wait itself failed and wk run ran
 // the command unslotted, the command ran, so a timeout is the tree's: a fail, blamed like any red
-// gate, and the landing log keeps wk run's line about the wait.
+// gate, and the landing log keeps wk run's line about the wait. The failed record's reason says
+// how long the wait took, even when the command's output pushes that line out of the log's last
+// 20 lines (row 16's left owed).
 func TestSlottedGateTimeoutAfterTakingAPlaceIsAFail(t *testing.T) {
 	const wait = "echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; "
-	for _, ended := range []string{"wk run: took a check place after 1s", "wk run: running unslotted: lock /x/check-0.lock: input/output error"} {
-		e, id := slotFixture(t, "true", wait+"echo '"+ended+"' >&2; echo 'checking' >&2; sleep 60", "true")
+	const long = "i=0; while [ $i -lt 30 ]; do echo \"checking $i\" >&2; i=$((i+1)); done; "
+	for _, tc := range []struct{ ended, output, reason string }{
+		{"wk run: took a check place after 1s", "echo 'checking' >&2; ", "timed out after 1s (wk run took a check place after 1s)"},
+		{"wk run: took a check place after 1s", long, "timed out after 1s (wk run took a check place after 1s)"},
+		{"wk run: running unslotted: lock /x/check-0.lock: input/output error", "echo 'checking' >&2; ", "timed out after 1s"},
+	} {
+		e, id := slotFixture(t, "true", wait+"echo '"+tc.ended+"' >&2; "+sayStart+tc.output+"sleep 60", "true")
 		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
 		var out bytes.Buffer
 		if err := e.LandLoop(&out); err != nil {
-			t.Fatalf("%s: loop = %v; want the changeset failed", ended, err)
+			t.Fatalf("%s: loop = %v; want the changeset failed", tc.ended, err)
 		}
 		r := mustState(t, e, id, changeset.Failed)
-		if r.Gate != "types" || !strings.Contains(r.Reason, "timed out after 1s") || !strings.Contains(out.String(), ended) {
-			t.Errorf("%s: failed record = %+v; want gate types timed out, with the line in the log:\n%s", ended, r, out.String())
+		if r.Gate != "types" || !strings.HasPrefix(r.Reason, tc.reason+"; ") {
+			t.Errorf("%s: failed record = %+v; want gate types, reason %q", tc.ended, r, tc.reason)
+		}
+		if tc.output != long && !strings.Contains(out.String(), tc.ended) {
+			t.Errorf("%s: the landing log lost wk run's line:\n%s", tc.ended, out.String())
 		}
 	}
 }
@@ -631,6 +649,30 @@ func TestTrialCreateFailureSaysTheNextWorkerMakesItAgain(t *testing.T) {
 	mustState(t, e, id, changeset.Landed)
 	if err := checkTrialMarker(e.TrialDir()); err != nil || exists(e.trialIntent()) {
 		t.Fatalf("marker check %v, trial.making there %v; want the trial marked and the record gone", err, exists(e.trialIntent()))
+	}
+}
+
+// Row 16's A1: a directory that appears at gates.trial_dir after ensureTrial's Lstat (here
+// made before makeTrial is called directly, the same window) makes create refuse it. create
+// made nothing, so trial.making goes, the directory is left as it is, and the next worker
+// refuses it as unmarked instead of removing it.
+func TestTrialDirThatAppearsBeforeTheCreateIsNotTaken(t *testing.T) {
+	f, e, _, _ := gateFixture(t, "1")
+	f.Git(t, "worktree", "add", "--quiet", "--detach", e.TrialDir(), "main")
+	keep := filepath.Join(e.TrialDir(), "theirs.txt")
+	if err := os.WriteFile(keep, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := e.makeTrial(e.TrialDir())
+	if err == nil || !strings.Contains(err.Error(), "already exists: it appeared after the worker looked, so it is not the trial") || strings.Contains(err.Error(), "unfinished trial") {
+		t.Fatalf("makeTrial = %v; want the refusal without the promise of a removal", err)
+	}
+	if exists(e.trialIntent()) || !exists(keep) {
+		t.Fatalf("trial.making there %v, their file there %v; want the record gone and the directory kept", exists(e.trialIntent()), exists(keep))
+	}
+	err = e.withTrial(gitOut(t, f.Repo, "rev-parse", "main^{tree}"), func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "without the wk-trial marker") || !exists(keep) {
+		t.Fatalf("withTrial = %v; want the unmarked refusal, with the directory kept", err)
 	}
 }
 

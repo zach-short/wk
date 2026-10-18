@@ -102,8 +102,14 @@ func markTrial(dir string) error {
 // With dir there, the record stays, because dir is the unfinished trial it exists for and the
 // next worker removes it and makes it again without a person. create's own error still ends
 // "left for inspection", which is true for wk new, so the trial's error adds what happens here
-// instead (row 15's audit F2).
+// instead (row 15's audit F2). A dir that create found already there appeared after
+// ensureTrial looked: create made nothing, so it is someone else's, and the record goes too, so
+// the next worker refuses it as an unmarked directory instead of removing it (row 16's A1).
 func (e *Env) failedTrialCreate(dir string, err error) error {
+	if errors.Is(err, errExists) {
+		_ = os.Remove(e.trialIntent())
+		return fmt.Errorf("%w: it appeared after the worker looked, so it is not the trial; move it, and the next worker makes the trial there", err)
+	}
 	if _, lerr := os.Lstat(dir); lerr != nil {
 		_ = os.Remove(e.trialIntent())
 		return err
