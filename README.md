@@ -4,6 +4,12 @@ wk makes warm git workspaces for parallel agents. A workspace is a git worktree 
 
 wk is the first phase (P1) of a planned layer over git in four phases: cheap workspaces, path leases, landing changes on the server side, and one gate run per batch. Only P1 is built. The design and the build plan live in the ezhomesteading repository, under `docs/incomplete/landing-layer/`.
 
+![The wk hive: one hexagon per worktree, colored by verdict](docs/images/wk-hive.png)
+
+The hive is the page `wk viz` serves. Each hexagon is one worktree, and the center is the base branch. The [hive section](#see-the-hive) explains each state.
+
+What changed recently: the hive page has a plain legend and no top bar, and it can remove one dead worktree at a time. `wk setup --yes` writes a repository's config with no terminal, for an agent.
+
 ## Requirements
 
 wk needs Go 1.24 or later to build and git to run. `wk new` needs macOS on APFS, because the copy-on-write step uses `clonefile(2)`. On any other system the clone step fails with an error that says so, since a byte copy of `node_modules` would cost the disk that wk exists to save. The `gc schedule` command writes a launchd agent, so it is macOS only as well. `wk gc` finds busy worktrees with `lsof`.
@@ -297,6 +303,12 @@ This is only cheaper if sessions stop running the gates themselves. The worker c
 
 `wk gc` prints one line for every worktree except the main checkout, with a verdict and every reason behind it. It changes nothing. `wk gc --apply` removes the worktrees judged removable.
 
+```bash
+wk gc
+```
+
+![Output of wk gc: one line per worktree with its verdict](docs/images/wk-gc.png)
+
 A worktree is removable only when all of these hold: it is not locked; no process has its working directory inside it; nothing in it has changed for `gc.quiet_minutes` (60 by default); every commit on it is already in the base branch, either as an ancestor or because merging it would change nothing; and it has no changed paths. A kept worktree lists every test it failed, not only the first. The other verdicts are `kept, run /land-worktrees` for a worktree whose commits the base holds but whose tree has changes, `skip` for a template, a pool slot or a land-worktrees trial, and `prunable` for an entry whose directory is gone. The `/land-worktrees` skill is outside this repository.
 
 Subagent worktrees, named `agent-a` and 16 hex digits as Claude Code names them, follow two other windows. One that carries the stop marker is removable when it is clean and has been quiet for `gc.stopped_quiet_minutes` (15), whether or not the base holds its commits, because its branch stays. One without the marker waits `gc.unmarked_agent_quiet_hours` (24), because a running subagent leaves no process in its worktree between tool calls.
@@ -314,7 +326,24 @@ wk gc schedule uninstall
 
 ## See the hive
 
-`wk hive` draws every worktree as a cell in the terminal, colored by verdict, and reads the verdicts again every 3 seconds. The arrow keys select a cell and `q` quits. `wk viz` serves the same view as a web page on `127.0.0.1:8787`, or on the address given with `--addr host:port`, and reads the live verdicts on every load. The terminal view only reads. The web page can remove one dead worktree at a time, with a confirm step: a worktree that gc judges removable, or one whose folder is gone (pruned). It judges the worktree again before it acts, never forces, and answers only to requests from this machine.
+`wk hive` draws every worktree as a cell in the terminal, colored by verdict, and reads the verdicts again every 3 seconds. The arrow keys select a cell and `q` quits. `wk viz` serves the same view as a web page on `127.0.0.1:8787`, or on the address given with `--addr host:port`. The page reads the live verdicts on load and again every 5 seconds. The terminal view only reads. The web page can remove one dead worktree at a time, with a confirm step: a worktree that gc judges removable, or one whose folder is gone (pruned). It judges the worktree again before it acts, never forces, and answers only to requests from this machine.
+
+```bash
+wk viz
+```
+
+The hive has one hexagon per worktree, with the base branch at the center. A bee in each hexagon shows the state, and its movement and color say the same thing:
+
+| State | Verdict | Meaning |
+|---|---|---|
+| working now | `kept` with a live session | A session or a recent edit is using it. Leave it alone. |
+| kept | `kept` | It has work, or it was made recently. wk keeps it. |
+| run /land-worktrees | `kept, run /land-worktrees` | Its commits already reached main, but it has changes to sort. Run `/land-worktrees`. |
+| removable | `removable` | Its work is on main, and it is clean and idle. Safe to remove. |
+| skipped | `skip` | The wk template. wk never removes it. |
+| prunable | `prunable` | Git still lists it, but its folder is gone. Clearing the entry is safe. |
+
+Select a hexagon to see why it has its state. A removable or prunable worktree has a button that removes it, or clears a pruned entry. The button runs the same check as `wk gc --apply`, for that one worktree only.
 
 ## Configuration
 
