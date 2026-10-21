@@ -81,12 +81,15 @@ type Hook struct {
 
 // GC holds gc's windows. A subagent worktree with a stop marker needs only StoppedQuietMinutes
 // of quiet; one without a marker needs UnmarkedAgentQuietHours, because a running subagent
-// leaves no process inside its worktree between tool calls.
+// leaves no process inside its worktree between tool calls. BranchPatterns are path.Match globs
+// naming more branches whose orphans gc may delete, beside hook.branch and workspace.branch; a
+// renamed subagent branch such as row-65-build needs one, and none is the default.
 type GC struct {
-	QuietMinutes            int `toml:"quiet_minutes"`
-	StoppedQuietMinutes     int `toml:"stopped_quiet_minutes"`
-	UnmarkedAgentQuietHours int `toml:"unmarked_agent_quiet_hours"`
-	ApplyIntervalMinutes    int `toml:"apply_interval_minutes"`
+	QuietMinutes            int      `toml:"quiet_minutes"`
+	StoppedQuietMinutes     int      `toml:"stopped_quiet_minutes"`
+	UnmarkedAgentQuietHours int      `toml:"unmarked_agent_quiet_hours"`
+	ApplyIntervalMinutes    int      `toml:"apply_interval_minutes"`
+	BranchPatterns          []string `toml:"branch_patterns"`
 }
 
 // New holds MaxParallel, the number of workspaces that clone and check out at once; the rest
@@ -176,7 +179,7 @@ func Defaults() Config {
 			Dir:    ".claude/worktrees/" + NamePlaceholder,
 			Branch: "worktree-" + NamePlaceholder,
 		},
-		GC:      GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60},
+		GC:      GC{QuietMinutes: 60, StoppedQuietMinutes: 15, UnmarkedAgentQuietHours: 24, ApplyIntervalMinutes: 60, BranchPatterns: []string{}},
 		New:     New{MaxParallel: 2, MaxSecondsCold: 10, MaxMBPerWorkspace: 120, BurstSize: 10, BurstMaxSeconds: 60},
 		Pool:    Pool{Dir: ".claude/worktrees/wk-pool-" + SlotPlaceholder},
 		Leases:  Leases{Board: "PASSOFF.md", SingleWriter: []string{}, BashGuard: true},
@@ -263,6 +266,9 @@ func (c Config) validate() error {
 	if err := c.Leases.validate(); err != nil {
 		return err
 	}
+	if err := c.GC.validate(); err != nil {
+		return err
+	}
 	if err := c.Landing.validate(); err != nil {
 		return err
 	}
@@ -317,6 +323,17 @@ func (l Leases) validate() error {
 		base := strings.TrimSuffix(p, "/")
 		if err := checkRelative(p); err != nil || base == "" || base == "." || path.Clean(base) != base {
 			return fmt.Errorf("leases.single_writer[%d]: %q is not a clean path relative to the main checkout", i, p)
+		}
+	}
+	return nil
+}
+
+// validate refuses an empty or malformed branch pattern, because gc would otherwise match nothing
+// with it and say nothing.
+func (g GC) validate() error {
+	for i, p := range g.BranchPatterns {
+		if _, err := path.Match(p, ""); p == "" || err != nil {
+			return fmt.Errorf("gc.branch_patterns[%d]: %q is not a branch name glob", i, p)
 		}
 	}
 	return nil

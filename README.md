@@ -8,7 +8,7 @@ wk is the first phase (P1) of a planned layer over git in four phases: cheap wor
 
 The hive is the page `wk viz` serves. Each hexagon is one worktree, and the center is the base branch. The [hive section](#see-the-hive) explains each state.
 
-What changed recently: the hive page has a plain legend and no top bar, and it can remove one dead worktree at a time. `wk setup --yes` writes a repository's config with no terminal, for an agent.
+What changed recently: the hive page has a plain legend and no top bar, and it can remove one dead worktree at a time. `wk setup --yes` writes a repository's config with no terminal, for an agent. `wk gc` also deletes an orphan branch once the base holds it (see [Remove finished workspaces](#remove-finished-workspaces)).
 
 ## Requirements
 
@@ -311,9 +311,13 @@ wk gc
 
 A worktree is removable only when all of these hold: it is not locked; no process has its working directory inside it; nothing in it has changed for `gc.quiet_minutes` (60 by default); every commit on it is already in the base branch, either as an ancestor or because merging it would change nothing; and it has no changed paths. A kept worktree lists every test it failed, not only the first. The other verdicts are `kept, run /land-worktrees` for a worktree whose commits the base holds but whose tree has changes, `skip` for a template, a pool slot or a land-worktrees trial, and `prunable` for an entry whose directory is gone. The `/land-worktrees` skill is outside this repository.
 
-Subagent worktrees, named `agent-a` and 16 hex digits as Claude Code names them, follow two other windows. One that carries the stop marker is removable when it is clean and has been quiet for `gc.stopped_quiet_minutes` (15), whether or not the base holds its commits, because its branch stays. One without the marker waits `gc.unmarked_agent_quiet_hours` (24), because a running subagent leaves no process in its worktree between tool calls.
+Subagent worktrees, named `agent-a` and 16 hex digits as Claude Code names them, follow two other windows. One that carries the stop marker is removable when it is clean and has been quiet for `gc.stopped_quiet_minutes` (15), whether or not the base holds its commits, because its branch stays. A later pass deletes that branch once the base holds it. One without the marker waits `gc.unmarked_agent_quiet_hours` (24), because a running subagent leaves no process in its worktree between tool calls.
 
 `--apply` judges each candidate again at the moment of removal, because a session may have moved in since the pass began. It runs `git worktree remove` without `--force`, so git refuses a worktree with tracked changes or untracked files as a second guard. It deletes the branch with the worktree only when the branch is an ancestor of the base. A branch that landed by squash merge or cherry-pick is kept.
+
+After the worktrees, gc judges every orphan branch: a local branch that no worktree has checked out and whose name gc owns. gc owns a name that `hook.branch` gives (`worktree-{name}`), a name that `workspace.branch` gives with a number for the row (`wk/{row}`), and a name that a `gc.branch_patterns` glob matches. It never judges the base branch, the branch of `landing.ref`, or a branch that any worktree has checked out, locked worktrees, the template and pool slots included. An orphan is removable when it is an ancestor of the base and its ref has not moved for `gc.quiet_minutes`, because a pool claim writes its branch a moment before the slot checks it out. A kept orphan line gives the number of commits the base does not hold. The dry run prints one line for each orphan, under the worktree lines, and prints nothing when there is none. `--apply` judges each removable orphan again and deletes it with `git branch -d`, never `-D`, so git's refusal is a second guard. Git reads "merged" against the main checkout's HEAD, so it refuses every deletion while the main checkout has another branch than the base checked out; gc then prints the branch as kept.
+
+A subagent that renames its branch, as `/delegate` does with names such as `row-65-build`, leaves a name no template gives. Add a glob for it to `gc.branch_patterns`, such as `["row-*"]`, to let gc delete those branches once they land. The default is no pattern, because gc should not delete a branch the owner made by hand.
 
 `wk gc --json` prints the same verdicts as one JSON document for other tools.
 
@@ -398,6 +402,7 @@ quiet_minutes = 60
 stopped_quiet_minutes = 15
 unmarked_agent_quiet_hours = 24
 apply_interval_minutes = 60
+branch_patterns = []               # globs for more orphan branches gc may delete, such as "row-*"
 
 [new]
 max_parallel = 2
@@ -422,7 +427,7 @@ require_review = false             # refuse to land a changeset submitted withou
 ff_main = true                     # fast-forward main after a green batch; needs [[gates.run]]
 ```
 
-Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands, `[gates.env]` and the `[[gates.run]]` entry, are the defaults. `gates.trial_dir` must be a relative path other than the main checkout itself, `gates.batch_max` at least 1, and each `[[gates.run]]` needs a `name` no other gate has, a non-empty `run`, `needs_env` entries that are variable names, and a `timeout_seconds` that is not negative. `wk config show` prints the effective config as TOML, with the file it read and whether that file was found. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
+Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` paths `{name}`, and `pool.dir` `{slot}`. The values shown, except `refresh_on`, `copy_files`, the commands, `[gates.env]` and the `[[gates.run]]` entry, are the defaults. `gates.trial_dir` must be a relative path other than the main checkout itself, `gates.batch_max` at least 1, and each `[[gates.run]]` needs a `name` no other gate has, a non-empty `run`, `needs_env` entries that are variable names, and a `timeout_seconds` that is not negative. `wk config show` prints the effective config as TOML, with the file it read and whether that file was found. Each `gc.branch_patterns` entry must be a non-empty glob that `path.Match` accepts, where `*` does not match `/`. The `gc` windows, the interval and `new.max_parallel` must be at least 1, because a quiet window of zero could let `wk gc` remove a worktree that a session made a second ago. The `[new]` table also holds four proof thresholds that wk never enforces: `max_seconds_cold`, `max_mb_per_workspace`, `burst_size` and `burst_max_seconds`.
 
 ## Disk use
 

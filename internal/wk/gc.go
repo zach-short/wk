@@ -84,8 +84,8 @@ func (e *Env) takeSurvey() (survey, error) {
 	}, nil
 }
 
-// GC judges every worktree but the main checkout and prints one line for each. It changes
-// nothing.
+// GC judges every worktree but the main checkout and prints one line for each, then one line
+// for each orphan branch gc owns (gc_branches.go). It changes nothing.
 func (e *Env) GC(out io.Writer) error {
 	judgments, err := e.judgeAll()
 	if err != nil {
@@ -99,7 +99,7 @@ func (e *Env) GC(out io.Writer) error {
 		e.printJudgment(out, j.Verdict, j)
 	}
 	_, _ = fmt.Fprintf(out, "%d of %d removable; dry run, nothing removed (wk gc --apply removes them)\n", removable, len(judgments))
-	return nil
+	return e.gcBranches(out)
 }
 
 func (e *Env) judgeAll() ([]Judgment, error) {
@@ -298,7 +298,8 @@ func lastActivity(wt string, dirty []string) (time.Time, error) {
 	return newest, nil
 }
 
-// GCApply removes every worktree gc judges removable, judging each again from a fresh survey
+// GCApply removes every worktree gc judges removable, then deletes every orphan branch it
+// judges removable (applyBranches), judging each again from a fresh survey
 // at the moment of removal, because a session may have moved into it since the pass began. It
 // takes the template lock only around `git worktree prune`, the one step that must not race a
 // `wk new` between `worktree add` and its clones; holding it for the whole pass would make
@@ -335,6 +336,11 @@ func (e *Env) GCApply(out io.Writer) error {
 		}
 	}
 	_, _ = fmt.Fprintf(out, "%d of %d removed\n", removed, len(judgments))
+	// After the worktrees, so a branch whose worktree this pass removed is judged as the orphan
+	// it now is.
+	if err := e.applyBranches(out); err != nil {
+		failures = append(failures, err)
+	}
 	return errors.Join(failures...)
 }
 

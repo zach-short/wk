@@ -322,6 +322,9 @@ func TestGCPrunesAnEntryWhoseDirectoryIsGone(t *testing.T) {
 	f := testrepo.New(t)
 	e := idle(t, f)
 	dir := addWorktree(t, f, "vanished")
+	// Unlanded work, so the branch pass keeps the orphan too and only prune is under test.
+	writeIn(t, dir, "work.txt", "unlanded\n")
+	commitIn(t, dir, "unlanded work")
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

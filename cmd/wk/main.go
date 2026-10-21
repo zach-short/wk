@@ -63,8 +63,9 @@ $WK_HOME/<repo>.toml, where WK_HOME defaults to ~/.wk. wk new prints the workspa
 path on stdout and everything else on stderr. Without a flag it follows workspace.sparse;
 --sparse and --full override it.
 
-wk gc lists every worktree with its verdict and changes nothing; --apply removes the removable
-ones; --json prints the same verdicts as one JSON document for tools.
+wk gc lists every worktree with its verdict, then every orphan branch gc owns, and changes
+nothing; --apply removes the removable worktrees and deletes the removable branches; --json
+prints the worktree verdicts as one JSON document for tools.
 wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
 gc.apply_interval_minutes; uninstall unloads and deletes it.
 
