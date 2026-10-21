@@ -202,6 +202,10 @@ For these, end with the exact command and what should appear, and let the owner 
 `main` changes nothing that runs until someone runs `go install ./cmd/wk`. On 2026-10-16 the
 installed `~/go/bin/wk` was built from `30989b5` with a dirty tree (`go version -m
 ~/go/bin/wk`).
+(Superseded 2026-10-21: `~/go/bin/wk` is deleted. The installed wk is the Homebrew release at
+`/opt/homebrew/bin/wk`, and every project's hooks and gc agent run `/opt/homebrew/opt/wk/bin/wk`.
+A tag ships; `brew upgrade wk` installs it. Do not `go install` it again: `~/go/bin` comes first
+on `PATH` and would hide the release.)
 
 ## Where work is written down
 
@@ -219,6 +223,8 @@ Claude may run `git add`, `git commit` and `git push`. Add no `Co-Authored-By:` 
   (`/Users/zachshort/Projects/ezhomesteading/.claude/settings.local.json`) and its launchd
   agent `com.github.zach-short.wk.gc.ezhomesteading` run `/Users/zachshort/go/bin/wk`, so an
   install changes them at once.
+  (Superseded 2026-10-21: the hooks and agents of every wk project run
+  `/opt/homebrew/opt/wk/bin/wk`. Do not run `go install ./cmd/wk` at all; tag a release.)
 - Point a test or a manual `wk gc --apply` at a real repository to check a change. Use
   `internal/testrepo` fixtures.
 - Add a byte-copy fallback for non-APFS systems. The refusal is the design
