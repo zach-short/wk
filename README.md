@@ -22,7 +22,25 @@ With Homebrew:
 brew install zach-short/tap/wk
 ```
 
-The formula builds wk from the tagged source, so Homebrew installs Go for the build. When wk writes its hooks or its launchd agent, it records Homebrew's stable link, `$(brew --prefix)/opt/wk/bin/wk`, and not the versioned path under `Cellar`, so `brew upgrade wk` keeps them working. `wk version` prints the installed release.
+The formula downloads a prebuilt binary for the Mac's chip (arm64 or amd64) from the GitHub release, so it needs no Go. `wk version` prints the installed release. To move to a newer release:
+
+```bash
+brew update && brew upgrade wk
+```
+
+When wk writes its hooks or its launchd agent, it records Homebrew's stable link, `$(brew --prefix)/opt/wk/bin/wk`, and not the versioned path under `Cellar`. An upgrade moves that link to the new version, so every repository's hooks and gc agent run the new release at once, with no reinstall. Run `wk hooks install` again in a repository only when a release changes which hooks or permission rules wk writes. It is safe at any time, and it reports "unchanged" when nothing differs.
+
+If wk was installed with `go install` before, remove `~/go/bin/wk` after the Homebrew install. `~/go/bin` usually comes before the Homebrew directory on `PATH`, so the old binary hides the release (Homebrew warns that it is shadowed). Then run `wk hooks install` and `wk gc schedule install` in each repository that uses wk, so that the hooks and the agent point at the Homebrew link. Until then they call the deleted binary and every worktree request fails. This loop does it for every repository with a config in `~/.wk`, when each lives at `~/Projects/<repo>`:
+
+```bash
+for f in ~/.wk/*.toml; do r=$(basename "$f" .toml); case "$r" in *.slots|machine) continue;; esac; echo "== $r"; (cd ~/Projects/"$r" && wk hooks install && wk gc schedule install); done
+```
+
+This check prints nothing when no hook or agent still names the old path:
+
+```bash
+grep -l "go/bin/wk" ~/Projects/*/.claude/settings.local.json ~/Library/LaunchAgents/com.github.zach-short.wk.gc.*.plist
+```
 
 From source:
 
@@ -32,7 +50,7 @@ cd wk
 go install ./cmd/wk
 ```
 
-`go install github.com/zach-short/wk/cmd/wk@latest` does the same without a checkout. The scheduled cleanup and the Claude Code hooks run the installed binary at its absolute path, so install it this way and not with `go run`, and reinstall from the branch whose hooks are installed: a binary built from an older commit has no `hook` command, and every worktree request then fails.
+`go install github.com/zach-short/wk/cmd/wk@latest` does the same without a checkout. Use one install method, not both: a source build in `~/go/bin` hides a Homebrew install on `PATH`, and `wk version` prints `dev` for it. The scheduled cleanup and the Claude Code hooks run the installed binary at its absolute path, so install it this way and not with `go run`, and reinstall from the branch whose hooks are installed: a binary built from an older commit has no `hook` command, and every worktree request then fails.
 
 ## Set up a repository
 
@@ -179,7 +197,7 @@ Two limits are known. A rule that starts with `VAR=value` words, such as `Bash(G
 
 ### Install order
 
-Once the `PreToolUse` hook is installed, `~/go/bin/wk` must always be built from a commit that has `wk run` and `wk hook pre-tool-use`. A binary from an older commit has neither: the `|| true` keeps every `Bash` call running, but nothing is slotted, every `Bash` call still starts one wk process, and any command that calls `wk run` itself fails with exit 2. So the order is: install the binary, write the two config files, then run `wk hooks install`, which reads the slots file to write the twins. In ezhomesteading the binary with this feature is installed by board row 214, not by the commit that adds it.
+Once the `PreToolUse` hook is installed, the installed wk must always be built from a commit that has `wk run` and `wk hook pre-tool-use`. A binary from an older commit has neither: the `|| true` keeps every `Bash` call running, but nothing is slotted, every `Bash` call still starts one wk process, and any command that calls `wk run` itself fails with exit 2. So the order is: install or upgrade the binary, write the two config files, then run `wk hooks install`, which reads the slots file to write the twins. In ezhomesteading the binary with this feature is installed by board row 214, not by the commit that adds it.
 
 ## Path leases
 
@@ -257,7 +275,7 @@ The worker also runs on a timer, so a changeset submitted while no worker could 
 	<string>com.github.zach-short.wk.landing.REPO</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/USER/go/bin/wk</string>
+		<string>/opt/homebrew/opt/wk/bin/wk</string>
 		<string>--repo</string>
 		<string>/Users/USER/Projects/REPO</string>
 		<string>land</string>
@@ -451,6 +469,32 @@ go test ./...
 ```
 
 The tests build throwaway git repositories, stub launchd, never fork a pool fill or write a real settings file, and run their refusal cases from an empty directory, so no test touches a real repository or loads an agent into your session.
+
+## Release
+
+A release is a tag on `main`. Run the gates first, because the release workflow runs none of them and nothing else checks a push:
+
+```bash
+GOTOOLCHAIN=local sh -c 'test -z "$(gofmt -l cmd internal)" && go vet ./... && go test -race -count=1 ./... && golangci-lint run ./...'
+```
+
+Then tag and push. The version is the tag without its `v`:
+
+```bash
+git tag -a v0.1.3 -m "wk v0.1.3" && git push origin v0.1.3
+```
+
+The tag starts `.github/workflows/release.yml`, which takes about a minute. It builds the darwin arm64 and amd64 binaries with the version set through `-ldflags "-X main.version=<version>"`, publishes them and a `checksums.txt` as the tag's GitHub release, and writes `Formula/wk.rb` in [zach-short/homebrew-tap](https://github.com/zach-short/homebrew-tap) with the new URLs and SHA-256 sums. It pushes to the tap with a write deploy key of that repository, kept in this repository as the `TAP_DEPLOY_KEY` secret. Watch the run and read the formula it wrote:
+
+```bash
+gh run list -R zach-short/wk -L 1
+```
+
+```bash
+gh api repos/zach-short/homebrew-tap/contents/Formula/wk.rb -q .content | base64 -d
+```
+
+Users then get the release with `brew update && brew upgrade wk`. A failed run leaves the tap at the last release. Fix the cause, delete the release and the tag (`gh release delete v0.1.3 --cleanup-tag`), and push the tag again.
 
 ## Provenance
 
