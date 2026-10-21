@@ -1,0 +1,82 @@
+# On a v* tag: build the darwin binaries, publish them as the tag's release, and write the new
+# formula to zach-short/homebrew-tap. TAP_DEPLOY_KEY is a write deploy key of the tap.
+# This workflow runs no gate; the gates in CLAUDE.md run by hand before the tag.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for a in arm64 amd64; do
+            mkdir -p "out/$a"
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$a" go build -trimpath \
+              -ldflags "-s -w -X main.version=$v" -o "out/$a/wk" ./cmd/wk
+            tar -czf "wk_${v}_darwin_$a.tar.gz" -C "out/$a" wk
+          done
+          sha256sum wk_*.tar.gz > checksums.txt
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "wk $GITHUB_REF_NAME" --generate-notes \
+            wk_*.tar.gz checksums.txt
+
+      - name: Update the tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          arm=$(sha256sum "wk_${v}_darwin_arm64.tar.gz" | cut -d' ' -f1)
+          amd=$(sha256sum "wk_${v}_darwin_amd64.tar.gz" | cut -d' ' -f1)
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:zach-short/homebrew-tap.git tap
+          base="https://github.com/zach-short/wk/releases/download/$GITHUB_REF_NAME"
+          cat > tap/Formula/wk.rb <<RUBY
+          class Wk < Formula
+            desc "Warm git worktrees for parallel agents, and cleanup of finished ones"
+            homepage "https://github.com/zach-short/wk"
+            version "$v"
+
+            depends_on :macos
+
+            on_arm do
+              url "$base/wk_${v}_darwin_arm64.tar.gz"
+              sha256 "$arm"
+            end
+            on_intel do
+              url "$base/wk_${v}_darwin_amd64.tar.gz"
+              sha256 "$amd"
+            end
+
+            def install
+              bin.install "wk"
+            end
+
+            test do
+              assert_match "wk #{version}", shell_output("#{bin}/wk version")
+            end
+          end
+          RUBY
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "wk $v"
+          git push

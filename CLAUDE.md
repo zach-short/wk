@@ -62,6 +62,9 @@ other three, no test was checked on 2026-10-16, so read the cited code before yo
   (`internal/clone/clone_other.go`). `gc schedule` writes a launchd agent, and `wk gc` reads
   `lsof` (`README.md:9`, `internal/procs/procs.go:31`).
 - No CI: there is no `.github/` directory (`ls .github`, 2026-10-16).
+  (Superseded 2026-10-21: `.github/workflows/release.yml` runs on a `v*` tag only. It builds the
+  darwin binaries, publishes the release and writes `Formula/wk.rb` in `zach-short/homebrew-tap`
+  with the `TAP_DEPLOY_KEY` secret. It runs no gate, so still no CI checks a push.)
 
 ## Architecture
 
@@ -193,7 +196,9 @@ browser. A real launchd load, a real Claude Code hook call and a `df` disk measu
 owner's machine and a live repository; the tests stub launchd and use throwaway repositories.
 For these, end with the exact command and what should appear, and let the owner run it.
 
-**Merged is not shipped.** There are no tags (`git tag`, 2026-10-16) and no CI. A merge to
+**Merged is not shipped.** There are no tags (`git tag`, 2026-10-16) and no CI.
+(Superseded 2026-10-21: to release, run the gates, then `git tag -a vX.Y.Z -m "wk vX.Y.Z"` and
+`git push origin vX.Y.Z`; the release workflow updates the Homebrew tap.) A merge to
 `main` changes nothing that runs until someone runs `go install ./cmd/wk`. On 2026-10-16 the
 installed `~/go/bin/wk` was built from `30989b5` with a dirty tree (`go version -m
 ~/go/bin/wk`).
