@@ -25,6 +25,21 @@ func TransientBinary(exe string) bool {
 	return strings.Contains(exe, string(filepath.Separator)+"go-build")
 }
 
+// StablePath maps a Homebrew keg path, <prefix>/Cellar/<formula>/<version>/<rest>, to the
+// formula's opt link, <prefix>/opt/<formula>/<rest>, which brew upgrade moves to the new version.
+// The keg path is deleted by the next upgrade's cleanup, so hooks and the launchd agent written
+// with it would stop running. Any other path is returned unchanged.
+func StablePath(exe string) string {
+	parts := strings.Split(exe, string(filepath.Separator))
+	for i := len(parts) - 4; i >= 1; i-- {
+		if parts[i] == "Cellar" {
+			opt := append(append(slices.Clone(parts[:i]), "opt", parts[i+1]), parts[i+3:]...)
+			return strings.Join(opt, string(filepath.Separator))
+		}
+	}
+	return exe
+}
+
 func checkInstalled(exe string) error {
 	if !filepath.IsAbs(exe) {
 		return fmt.Errorf("%q is relative; wk installs only the wk binary's absolute path", exe)

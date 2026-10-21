@@ -135,3 +135,17 @@ func TestHooksInstallRefusesABrokenSourceAndWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+func TestStablePathMapsAHomebrewKegToItsOptLink(t *testing.T) {
+	for in, want := range map[string]string{
+		"/opt/homebrew/Cellar/wk/0.1.0/bin/wk": "/opt/homebrew/opt/wk/bin/wk",
+		"/usr/local/Cellar/wk/0.1.0_1/bin/wk":  "/usr/local/opt/wk/bin/wk",
+		"/Users/me/go/bin/wk":                  "/Users/me/go/bin/wk",
+		"/Users/me/Cellar/bin/wk":              "/Users/me/Cellar/bin/wk",
+		"/opt/homebrew/opt/wk/bin/wk":          "/opt/homebrew/opt/wk/bin/wk",
+	} {
+		if got := StablePath(in); got != want {
+			t.Errorf("StablePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

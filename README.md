@@ -16,6 +16,16 @@ wk needs Go 1.24 or later to build and git to run. `wk new` needs macOS on APFS,
 
 ## Install
 
+With Homebrew:
+
+```bash
+brew install zach-short/tap/wk
+```
+
+The formula builds wk from the tagged source, so Homebrew installs Go for the build. When wk writes its hooks or its launchd agent, it records Homebrew's stable link, `$(brew --prefix)/opt/wk/bin/wk`, and not the versioned path under `Cellar`, so `brew upgrade wk` keeps them working. `wk version` prints the installed release.
+
+From source:
+
 ```bash
 git clone https://github.com/zach-short/wk.git
 cd wk

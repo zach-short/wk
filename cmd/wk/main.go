@@ -28,6 +28,7 @@ import (
 )
 
 const usage = `usage:
+  wk version
   wk [--repo <absolute dir>]
   wk [--repo <absolute dir>] setup --yes [--print]
   wk [--repo <absolute dir>] template refresh
@@ -127,6 +128,9 @@ wk slots lists each class's places, waiters and last runs, and the last day of m
 errors.log; --json prints the same as one JSON document.
 `
 
+// version is set at release time with -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 const (
 	exitOK    = 0
 	exitError = 1
@@ -138,6 +142,10 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "version" || args[0] == "--version") {
+		_, _ = fmt.Fprintln(stdout, "wk", version)
+		return exitOK
+	}
 	if rest := skipRepoFlag(args); len(rest) > 0 && (rest[0] == "run" || isPreToolUse(rest)) {
 		return runInFront(rest, stdout, stderr)
 	}
@@ -575,7 +583,11 @@ func installedExe() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(exe)
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", err
+	}
+	return wk.StablePath(exe), nil
 }
 
 // launchd is swapped by the self-test, so no test loads an agent into the owner's session.
