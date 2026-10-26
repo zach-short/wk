@@ -217,8 +217,9 @@ func (w *matchWalk) subst(c *syntax.CmdSubst) {
 // changes the captured text (row 22 audits B2 and A): |&, &> and &>> anywhere, even to a file;
 // any dup of fd 2 (>& or <&) to anything but a plain `-`, so 2>&3 after 3>&1 and 2>&1- count;
 // any fd-2 redirect whose target is not plain literal text, such as 2>&"1" or 2> >(cat), or is
-// under /dev/stdout or /dev/fd; and an exec that dups any fd, which lasts for the commands after
-// it. 2>/dev/null and 2>&- stay out of the capture.
+// under /dev/stdout or /dev/fd once the path is cleaned; >&word with no fd number whose word is
+// not an fd, which bash reads as &>word; and an exec that dups any fd, which lasts for the
+// commands after it. 2>/dev/null, 2>&-, >&1 and >&2 stay out of the capture.
 func matchCapturesStderr(c *syntax.CmdSubst) bool {
 	found := false
 	syntax.Walk(c, func(n syntax.Node) bool {
@@ -239,6 +240,12 @@ func matchStderrToStdout(r *syntax.Redirect) bool {
 	if r.Op == syntax.RdrAll || r.Op == syntax.AppAll {
 		return true
 	}
+	if r.N == nil && r.Op == syntax.DplOut && r.Word != nil {
+		// Bash reads >&word with no fd number as &>word unless word is digits or `-` (row 22
+		// audit 3): >&/dev/stdout sends stderr into the capture as &>/dev/stdout does.
+		target, plain := matchLiteral(r.Word)
+		return !plain || !matchFDWord(target)
+	}
 	if r.N == nil || r.N.Value != "2" || r.Word == nil {
 		return false
 	}
@@ -249,7 +256,26 @@ func matchStderrToStdout(r *syntax.Redirect) bool {
 	case r.Op == syntax.DplOut || r.Op == syntax.DplIn:
 		return target != "-"
 	}
+	target = path.Clean(target)
 	return target == "/dev/stdout" || strings.HasPrefix(target, "/dev/fd/")
+}
+
+// matchFDWord is true for the word of a dup that names a file descriptor: `-`, or digits with
+// an optional trailing `-` that moves the fd (>&2-).
+func matchFDWord(word string) bool {
+	if word == "-" {
+		return true
+	}
+	digits := strings.TrimSuffix(word, "-")
+	if digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func matchExecDups(s *syntax.Stmt) bool {

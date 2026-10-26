@@ -69,6 +69,16 @@ var matchTestWrapperRewrites = []matchTestCase{
 	{"2>&1 on the outer statement, not in the capture", `OUT=$(go test ./...) 2>&1`,
 		`OUT=$(/x/wk run --slot check -- go test ./...) 2>&1`, nil},
 
+	// Row 22 audit 3: >&word with no fd number dups stdout only when word is an fd.
+	{">&1 with no fd number dups stdout to itself", `v=$(go test ./... >&1)`,
+		`v=$(/x/wk run --slot check -- go test ./... >&1)`, nil},
+	{">&2 with no fd number sends stdout to stderr", `v=$(go test ./... >&2)`,
+		`v=$(/x/wk run --slot check -- go test ./... >&2)`, nil},
+	{">&2- moves stderr onto stdout's fd and closes 2", `v=$(go test ./... >&2-)`,
+		`v=$(/x/wk run --slot check -- go test ./... >&2-)`, nil},
+	{"stderr to /dev/null spelled with a dot", `v=$(go test ./... 2>/dev/./null)`,
+		`v=$(/x/wk run --slot check -- go test ./... 2>/dev/./null)`, nil},
+
 	// sh -c: the whole call is wrapped, so one place holds every gate its string runs. Only when
 	// the string is plain text, parses, and every spelling in it has one class.
 	{"sh -c", `sh -c 'cd web && bun run build'`,
@@ -140,6 +150,27 @@ var matchTestWrapperUntouched = []matchTestCase{
 	{"stderr into a process substitution", `v=$(go test ./... 2> >(cat))`, `v=$(go test ./... 2> >(cat))`,
 		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
 	{"stderr into tee", `v=$(go test ./... 2> >(tee err.log))`, `v=$(go test ./... 2> >(tee err.log))`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+
+	// Row 22 audit 3: bash reads >&word with no fd number as &>word when word is not an fd, and
+	// a target spelled with // or /./ is the same file.
+	{">&/dev/stdout with no fd number", `v=$(go test ./... >&/dev/stdout)`, `v=$(go test ./... >&/dev/stdout)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{">&/dev/fd/1 with no fd number", `v=$(go test ./... >&/dev/fd/1)`, `v=$(go test ./... >&/dev/fd/1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{">&/dev/stderr counts as &> to anything does", `v=$(go test ./... >&/dev/stderr)`, `v=$(go test ./... >&/dev/stderr)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{">& to a word that is not plain text", `v=$(go test ./... >&"$out")`, `v=$(go test ./... >&"$out")`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{">&/dev/stdout in backticks", "v=`go test ./... >&/dev/stdout`", "v=`go test ./... >&/dev/stdout`",
+		[]Missed{{"go test ./...", "inside backticks that capture stderr"}}},
+	{"&>> in $( )", `v=$(go test ./... &>>/dev/stdout)`, `v=$(go test ./... &>>/dev/stdout)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"2>//dev/stdout", `v=$(go test ./... 2>//dev/stdout)`, `v=$(go test ./... 2>//dev/stdout)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"2>/dev/./stdout", `v=$(go test ./... 2>/dev/./stdout)`, `v=$(go test ./... 2>/dev/./stdout)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"2>/dev//fd/1", `v=$(go test ./... 2>/dev//fd/1)`, `v=$(go test ./... 2>/dev//fd/1)`,
 		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
 	{"<( ) stays", `diff <(bun run lint) lint.txt`, `diff <(bun run lint) lint.txt`,
 		[]Missed{{"bun run lint", "inside a process substitution"}}},
