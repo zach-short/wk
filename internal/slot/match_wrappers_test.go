@@ -37,7 +37,9 @@ var matchTestWrapperRewrites = []matchTestCase{
 		`CI=1 env -u X /x/wk run --slot check -- go test ./...`, nil},
 
 	// $( ) and backticks: the insertion sits at the start of the substituted command. wk run
-	// writes only to stderr, so what the substitution captures does not change.
+	// writes its waiting, place and trim lines to stderr and nothing to stdout, so the captured
+	// text is the same while stderr stays out of the capture; a substitution that sends stderr
+	// into it is a miss (matchTestWrapperUntouched).
 	{"$( )", `echo $(bun run build)`,
 		`echo $(/x/wk run --slot heavy --trim web/.next/cache -- bun run build)`, nil},
 	{"backticks", "echo `bun run test`",
@@ -60,6 +62,10 @@ var matchTestWrapperRewrites = []matchTestCase{
 		`/x/wk run --slot check -- go test $(go list ./... | grep -v vendor)`, nil},
 	{"env and time inside $( )", `n=$(time env -u X go test ./... | wc -l)`,
 		`n=$(time env -u X /x/wk run --slot check -- go test ./... | wc -l)`, nil},
+	{"$( ) with stderr sent elsewhere", `echo "$(go test ./... 2>/dev/null)"`,
+		`echo "$(/x/wk run --slot check -- go test ./... 2>/dev/null)"`, nil},
+	{"2>&1 on the outer statement, not in the capture", `OUT=$(go test ./...) 2>&1`,
+		`OUT=$(/x/wk run --slot check -- go test ./...) 2>&1`, nil},
 
 	// sh -c: the whole call is wrapped, so one place holds every gate its string runs. Only when
 	// the string is plain text, parses, and every spelling in it has one class.
@@ -94,6 +100,26 @@ var matchTestWrapperUntouched = []matchTestCase{
 	{"env with a quoted spelling", `env -u X "go" test ./...`, `env -u X "go" test ./...`,
 		[]Missed{{`env -u X "go" test ./...`, "quoted spelling"}}},
 	{"env alone", `env | grep GO`, `env | grep GO`, nil},
+	{"env PATH= would change the PATH wk run sees", `env PATH=/usr/bin go test ./...`, `env PATH=/usr/bin go test ./...`,
+		[]Missed{{"env PATH=/usr/bin go test ./...", "after the wrapper env"}}},
+	{"env -u PATH", `env -u PATH go test ./...`, `env -u PATH go test ./...`,
+		[]Missed{{"env -u PATH go test ./...", "after the wrapper env"}}},
+
+	// Row 22 audit B2: wk run's stderr lines would enter a capture that takes stderr.
+	{"2>&1 on each command in $( )", `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`, `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"2>&1 in backticks", "echo `go test ./... 2>&1`", "echo `go test ./... 2>&1`",
+		[]Missed{{"go test ./...", "inside backticks that capture stderr"}}},
+	{"a clean check on captured stderr", `[ -z "$(bun run lint 2>&1)" ] && echo clean`, `[ -z "$(bun run lint 2>&1)" ] && echo clean`,
+		[]Missed{{"bun run lint", "inside $( ) that captures stderr"}}},
+	{"2>&1 on a block in $( )", `x=$({ go test ./...; } 2>&1)`, `x=$({ go test ./...; } 2>&1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"|& in $( )", `x=$(go test ./... |& tail -3)`, `x=$(go test ./... |& tail -3)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"&> in $( )", `x=$(go test ./... &>/dev/stdout)`, `x=$(go test ./... &>/dev/stdout)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"an outer capture of stderr reaches an inner $( )", `x=$(echo $(go test ./...) 2>&1)`, `x=$(echo $(go test ./...) 2>&1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
 	{"<( ) stays", `diff <(bun run lint) lint.txt`, `diff <(bun run lint) lint.txt`,
 		[]Missed{{"bun run lint", "inside a process substitution"}}},
 	{"$( ) in a function body", `f() { echo $(go test ./...); }; f`, `f() { echo $(go test ./...); }; f`,

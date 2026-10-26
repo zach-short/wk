@@ -50,8 +50,9 @@ func (w *matchWalk) spelledAt(args []*syntax.Word) (matchGate, string, bool) {
 // env reads every word before it the same way on macOS and in GNU coreutils. The insertion goes
 // there, not before env, so wk run sees the environment the gate sees and runs.log names the
 // gate. That is safe only while env leaves wk run's own environment alone, so it refuses -i and
-// every other option, and any HOME or WK_ variable: wk finds its slots through HOME and WK_HOME,
-// and a nested run reads WK_SLOT_HELD.
+// every other option, and any HOME, PATH or WK_ variable: wk finds its slots through HOME and
+// WK_HOME, wk run finds the gate's program and its own helpers through PATH, and a nested run
+// reads WK_SLOT_HELD.
 func matchEnvGate(args []*syntax.Word) (int, bool) {
 	if len(args) < 2 || path.Base(args[0].Lit()) != "env" {
 		return 0, false
@@ -102,7 +103,7 @@ func matchEnvOptions(args []*syntax.Word, i int) (int, bool) {
 var matchEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func matchEnvNameFree(name string) bool {
-	return matchEnvName.MatchString(name) && name != "HOME" && !strings.HasPrefix(name, "WK_")
+	return matchEnvName.MatchString(name) && name != "HOME" && name != "PATH" && !strings.HasPrefix(name, "WK_")
 }
 
 // matchAssignName reads NAME from a NAME=value word whose name is plain text; the value may be

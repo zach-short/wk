@@ -73,8 +73,11 @@ type matchWalk struct {
 	// backquotes counts the backtick substitutions around the walk. Inside one the shell reads a
 	// backslash, a backtick and a dollar sign once more before it parses the command.
 	backquotes int
-	inserts    []matchInsert
-	missed     []Missed
+	// stderrCaptured is the miss reason while the walk is inside a substitution that captures
+	// stderr, and "" otherwise.
+	stderrCaptured string
+	inserts        []matchInsert
+	missed         []Missed
 }
 
 func (w *matchWalk) stmts(list []*syntax.Stmt) {
@@ -171,9 +174,11 @@ func (w *matchWalk) call(c *syntax.CallExpr) {
 
 // words looks inside the words of a non-statement part, where a command can only sit in a
 // substitution. A command substitution holds statements of its own, so they are walked as
-// statements: the insertion lands at the start of a command inside it, and wk run writes only to
-// stderr, so the text the substitution captures does not change. A process substitution stays a
-// miss: its command runs beside the outer one, and wk does not follow what waits for it.
+// statements: the insertion lands at the start of a command inside it. wk run writes nothing to
+// stdout, but it writes its waiting, place and trim lines to stderr, so the captured text stays
+// the same only while stderr stays out of the capture; subst makes every gate in a substitution
+// that sends stderr into it a miss. A process substitution stays a miss: its command runs
+// beside the outer one, and wk does not follow what waits for it.
 func (w *matchWalk) words(n syntax.Node) {
 	syntax.Walk(n, func(n syntax.Node) bool {
 		switch n := n.(type) {
@@ -188,12 +193,52 @@ func (w *matchWalk) words(n syntax.Node) {
 	})
 }
 
+// subst walks a substitution's statements. One that sends stderr into its capture anywhere
+// inside (row 22 audit B2: `[ -z "$(bun run lint 2>&1)" ]` would see wk run's lines and turn
+// red) holds every gate in it, nested substitutions included, as a miss.
 func (w *matchWalk) subst(c *syntax.CmdSubst) {
 	if c.Backquotes {
 		w.backquotes++
 		defer func() { w.backquotes-- }()
 	}
+	outer := w.stderrCaptured
+	defer func() { w.stderrCaptured = outer }()
+	if outer == "" && matchCapturesStderr(c) {
+		w.stderrCaptured = "inside $( ) that captures stderr"
+		if c.Backquotes {
+			w.stderrCaptured = "inside backticks that capture stderr"
+		}
+	}
 	w.stmts(c.Stmts)
+}
+
+// matchCapturesStderr is true when a command inside c may write its stderr where c's stdout
+// goes: 2>&1, &>, &>>, 2>/dev/stdout or |&. It errs toward true: &> to a file also counts.
+func matchCapturesStderr(c *syntax.CmdSubst) bool {
+	found := false
+	syntax.Walk(c, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.Redirect:
+			found = found || matchStderrToStdout(n)
+		case *syntax.BinaryCmd:
+			found = found || n.Op == syntax.PipeAll
+		}
+		return !found
+	})
+	return found
+}
+
+func matchStderrToStdout(r *syntax.Redirect) bool {
+	switch r.Op {
+	case syntax.RdrAll, syntax.AppAll:
+		return true
+	case syntax.DplOut:
+		return r.N != nil && r.N.Value == "2" && r.Word.Lit() == "1"
+	case syntax.RdrOut, syntax.AppOut, syntax.ClbOut:
+		target := r.Word.Lit()
+		return r.N != nil && r.N.Value == "2" && (target == "/dev/stdout" || target == "/dev/fd/1")
+	}
+	return false
 }
 
 // missAll records every spelling under n with the reason of the outermost place that kept it
@@ -413,6 +458,10 @@ func (w *matchWalk) insert(c *syntax.CallExpr, g matchGate) {
 	prefix, ok := matchPrefix(w.exe, g.entry)
 	if !ok {
 		w.miss(c, "the wk path or the entry cannot be quoted")
+		return
+	}
+	if w.stderrCaptured != "" {
+		w.miss(c, w.stderrCaptured)
 		return
 	}
 	if w.backquotes > 0 && strings.ContainsAny(prefix, "\\`$") {
