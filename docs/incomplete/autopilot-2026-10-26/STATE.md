@@ -30,7 +30,7 @@ Not run: no `docs/audit-lanes.md`.
 
 - 20 | Opus 5.5 | DONE - 2026-10-26 | built in this session | wk-20 | wk/20 | landed d271a4e, released v0.1.6.
 - 21 | Opus 5.5 | DONE - 2026-10-26 | builder a542831c0a9a9ea05; auditors a821c190ac054016f, aca78c0ca20b5736e, a0f0da29ad81d9fb0 (row-21-audit-3, worktree /Users/zachshort/Projects/wk/.claude/worktrees/agent-a0f0da29ad81d9fb0) | /Users/zachshort/Projects/wk/.claude/worktrees/agent-a542831c0a9a9ea05 | worktree-agent-a542831c0a9a9ea05 | landed c0449b2 on main (ff from d271a4e, base unmoved), pushed 2026-10-26 03:07 EDT | patch none | relays 0 | reviews 3, fix rounds 2 | verdict 3 clean. Worktrees left to wk gc (wk rule: no hand removal).
-- 22 | Opus 5.5 | HELD | builder a386db652fd7aa7e4; auditors a7af5c86d9a41e402, ad8c293214ee32be8, a36774a7f36d47608 (row-22-audit-3, worktree /Users/zachshort/Projects/wk/.claude/worktrees/agent-a36774a7f36d47608) | /Users/zachshort/Projects/wk/.claude/worktrees/agent-a386db652fd7aa7e4 | worktree-agent-a386db652fd7aa7e4 | commits 43eaf1e f89c427 33d65e1 8d5cfd6 6c2bc1c 43a52fd 2c7432f, not merged | patch none | relays 0 | reviews 3, fix rounds 2 | verdict 3 blocking (>&/dev/stdout with no fd number); held 2026-10-26 03:15 EDT
+- 22 | Opus 5.5 | DONE 505528c, 2026-10-26 12:02 EDT (hold lifted by owner 11:47 EDT; builder pass 4 af9919727a06b6561 row-22-build-4, worktree .claude/worktrees/wk-22; audits 4 blocking, 5 clean a82eac2b6a6fd7926) | was HELD | builder a386db652fd7aa7e4; auditors a7af5c86d9a41e402, ad8c293214ee32be8, a36774a7f36d47608 (row-22-audit-3, worktree /Users/zachshort/Projects/wk/.claude/worktrees/agent-a36774a7f36d47608) | /Users/zachshort/Projects/wk/.claude/worktrees/agent-a386db652fd7aa7e4 | worktree-agent-a386db652fd7aa7e4 | commits 43eaf1e f89c427 33d65e1 8d5cfd6 6c2bc1c 43a52fd 2c7432f, not merged | patch none | relays 0 | reviews 3, fix rounds 2 | verdict 3 blocking (>&/dev/stdout with no fd number); held 2026-10-26 03:15 EDT
 - 23 | Opus 5.5 | DONE - 2026-10-26 | builder 1 a76d36991e8808f83 (stopped, no commit), builder 2 a0bc3c6ff2eab3424, auditor a232e77d5f9cf7553 (row-23-audit, worktree /Users/zachshort/Projects/wk/.claude/worktrees/agent-a232e77d5f9cf7553), decider a41e298ba76341991 | /Users/zachshort/Projects/wk/.claude/worktrees/agent-a0bc3c6ff2eab3424 | row-23-build-2 | landed 547b0f6 on main (ff from c0449b2, base unmoved), pushed 2026-10-26 07:00 EDT | patch none | relays 0 | reviews 1 | verdict clean. Worktrees left to wk gc.
 
 ## Waits elsewhere
@@ -204,3 +204,24 @@ Empty. Row 19 left out. Follow-up to write after row 22 lands: the hook writes t
 ## Held
 
 - Row 22: blocking finding after two fix rounds. The note is in passoff/22-find-and-fix-the-hook-deadline-misses-and-route.md ("Held, 2026-10-26"). The owner lifts the hold.
+
+### Row 22, builder pass 4 (af9919727a06b6561), 2026-10-26 11:52 EDT
+- First send stopped at setup: the brief's ff-only merge of the held branch could not work from a main-based worktree (brief error). Resent with a plain merge. The agent's first worktree was removed by gc while clean; it rebuilt in `.claude/worktrees/wk-22` via `wk new 22` and switched to `row-22-build-4`.
+- Merge 43cffb2 (held branch into main b0a1368), no conflicts. Fix 2942187: internal/slot/match.go +30 -2, internal/slot/match_wrappers_test.go +31. Branch diffstat vs main: 10 files, +1046 -64.
+- Gates green: gofmt, vet, go test -race (internal/wk 82.3 s, first run), golangci-lint 0 issues. status clean.
+- Judgment calls: `>&/dev/stderr` counts as a capture (reversal: exempt cleaned /dev/stderr, /dev/fd/2 in the no-fd branch); tests in match_wrappers_test.go beside the B2/A cases (reversal: move to match_test.go).
+- Not verified: no real bash comparison. Non-blocking items of the held note stay open; `command exec` is now cheap.
+
+### Row 22, audit 4 (a4a9191f18d0f6b40, branch row-22-audit-4), 2026-10-26 12:05 EDT
+- Reproduced 2942187 by ff; diffstat 10 files +1046 -64 matches. Gates green (internal/wk 54.7 s, lint 0 issues). status clean.
+- Audit 3 item fixed (39 bash forms tried against /bin/bash 3.2.57 and mvdan/sh). Merge 43cffb2 clean; nothing lost from 547b0f6 or 2c7432f.
+- BLOCKING B1: match.go:249 compares fd as a string, so `02>&1`, `002>&1`, `02>/dev/stdout` are rewritten while bash puts stderr in the capture (zsh does not). Fix: numeric compare.
+- Non-blocking: N1 `>&/dev/stderr`, `>&/dev/null` count as a capture (accepted); N2 held-note items unchanged; N3 test placement right.
+- Routed to the builder as fix round 1 after the lift, 2026-10-26 12:05 EDT.
+
+### Row 22, builder fix round 1 after lift, 2026-10-26 11:59 EDT
+- 505528c: match.go +9 -1 (matchFDIs, numeric fd compare), match_wrappers_test.go +14. Gates green (internal/wk 51.5 s). status clean. 3 new cases fail on old code.
+
+### Row 22, audit 5 (a82eac2b6a6fd7926), 2026-10-26 12:02 EDT
+- Clean. Reproduced 505528c; diffstat 10 files +1068 -64. Gates green (internal/wk 48.6 s, lint 0 issues). Numeric fd rule checked in every capture path; bash 3.2.57 experiments agree; overflow fds are rejected by bash, so no capture is missed.
+- Landed: main b0a1368..505528c fast-forward, pushed 12:02 EDT. Board DONE, log line written.

@@ -50,3 +50,7 @@ Each is in `STATE.md` under **Judgment calls** with its reversal: row 21's attri
 ## 9. Worktrees
 
 None removed by hand. wk's hourly `gc` removes a worktree that is clean, quiet and merged. Row 22's builder worktree and its three audit worktrees hold unmerged commits and stay.
+
+## 10. After the run, 2026-10-26
+
+The owner tagged v0.1.7 on 547b0f6, and `brew upgrade` installed wk 0.1.7 at 11:45 EDT. At 11:47 EDT the owner lifted row 22's hold. One builder pass merged the held branch into `main` with no conflict and fixed the audit 3 item (2942187). Audit 4 found one more blocking form, a leading-zero fd such as `02>&1` that bash reads as fd 2, and one fix round closed it (505528c). Audit 5 was clean, with every gate green. Row 22 landed on `main` at 505528c by fast-forward and was pushed at 12:02 EDT. It is unreleased until the owner tags v0.1.8.
