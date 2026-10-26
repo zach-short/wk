@@ -188,13 +188,24 @@ func warmLine(line string) (at time.Time, name string, sec float64, ok bool) {
 func (s Stats) Text() string {
 	var b strings.Builder
 	b.WriteString(s.Slots.Text())
-	b.WriteString("\nwarm creates in hook.log (unattributed: another create was open at the same time, or the log names neither source):\n")
+	b.WriteString("\nwarm creates in hook.log. Unattributed creates came from the pool or the template, but the log\n" +
+		"cannot separate them: another create was open at the same time, or the log has neither source\n" +
+		"line or both. So a low pool or template count does not mean few such creates happened.\n")
 	if len(s.Warm) == 0 {
 		b.WriteString("  none\n")
 	}
 	for _, w := range s.Warm {
 		fmt.Fprintf(&b, "  %s\n    pool:         %s\n    template:     %s\n    unattributed: %s\n",
-			w.Repo, w.Pool.Text(), w.Template.Text(), w.Unattributed.Text())
+			w.Repo, w.attributed(w.Pool), w.attributed(w.Template), w.Unattributed.Text())
 	}
 	return b.String()
+}
+
+// attributed says "none attributed" instead of "none" when some creates are unattributed, since
+// any of them may have come from this source.
+func (w WarmStats) attributed(d slot.Distribution) string {
+	if d.Count == 0 && w.Unattributed.Count > 0 {
+		return "none attributed"
+	}
+	return d.Text()
 }
