@@ -164,6 +164,11 @@ func (w *matchWalk) call(c *syntax.CallExpr) {
 	}
 	g, reason := w.gate(c)
 	switch {
+	case reason != "" && w.stderrCaptured != "":
+		// Row 28, from the row 27 audit N4: inside a substitution that captures stderr no gate
+		// is rewritten whatever else holds it back, so that reason is logged, and wk stats counts
+		// `x=$(timeout 300 sh -c 'go test' 2>&1)` under the capture, not under timeout.
+		w.miss(c, w.stderrCaptured)
 	case reason != "":
 		w.miss(c, reason)
 	case g.word == nil:
@@ -353,6 +358,8 @@ func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 // `<shell> -c` call or an eval, so `timeout 300 sh -c 'go test'` is logged with
 // matchTimeoutReason; and a quoted wrapper word, `"/usr/bin/time" -p go test`, is logged as a
 // quoted spelling, the reason a quoted gate word gets, since matchWrapped reads plain words only.
+// Row 28: a wrapper name spelled as a relative path (./time, bin/env) is logged with
+// matchRelativeWrapperReason, since matchWrapped reads a bare name or an absolute path only.
 var matchWrappers = map[string]bool{
 	"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "xargs": true,
 	"timeout": true, "gtimeout": true, "time": true, "gtime": true,
@@ -376,17 +383,54 @@ func (w *matchWalk) wrapperReason(c *syntax.CallExpr) (string, bool) {
 }
 
 // runsGateAt is true when the words of c from i on spell a gate, or are a `<shell> -c` call or
-// an eval whose words mention one.
+// an eval whose string runs one. The string is parsed and walked as a line of its own, so a gate
+// counts only where Rewrite would find it: as a command's first words, behind a wrapper, or in a
+// nested string (row 28, from the row 27 audit N3: `timeout 30 sh -c 'echo go test'` runs no
+// gate). Where the string is not plain text or does not parse, its text is searched as before,
+// which errs toward logging.
 func (w *matchWalk) runsGateAt(c *syntax.CallExpr, i int) bool {
-	if _, _, found := w.lookup(c.Args[i:]); found {
+	args := c.Args[i:]
+	if _, _, found := w.lookup(args); found {
 		return true
 	}
-	_, nested := matchNestedShell(c.Args[i:])
-	return nested && matchMentions(w.text(c.Args[i+1].Pos(), c.End()), w.spellings)
+	if _, nested := matchNestedShell(args); !nested {
+		return false
+	}
+	if text, plain := matchNestedText(args); plain {
+		if file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), ""); err == nil {
+			inner := matchWalk{src: text, exe: w.exe, spellings: w.spellings}
+			inner.stmts(file.Stmts)
+			return len(inner.inserts) > 0 || len(inner.missed) > 0
+		}
+	}
+	return matchMentions(w.text(args[1].Pos(), c.End()), w.spellings)
+}
+
+// matchNestedText is the text a `<shell> -c` call or an eval runs, when every word of it is
+// plain text: the string after -c, or eval's words joined by spaces, as eval joins them.
+func matchNestedText(args []*syntax.Word) (string, bool) {
+	if path.Base(args[0].Lit()) == "eval" {
+		words := make([]string, 0, len(args)-1)
+		for _, a := range args[1:] {
+			text, plain := matchPlainText(a)
+			if !plain {
+				return "", false
+			}
+			words = append(words, text)
+		}
+		return strings.Join(words, " "), true
+	}
+	name, at, reason := matchShellString(args)
+	if name == "" || reason != "" {
+		return "", false
+	}
+	return matchPlainText(args[at])
 }
 
 // matchWrapperMiss gives timeout's reason first, wherever it sits before the gate, so a gate
-// behind timeout is always counted as one.
+// behind timeout is always counted as one; ./timeout counts too. Then a quoted first word, then
+// a wrapper name spelled as a relative path anywhere before the gate (row 28), which
+// matchWrapped does not read.
 func matchWrapperMiss(name string, before []*syntax.Word) string {
 	for _, word := range before {
 		v, _ := matchUnquoted(word)
@@ -396,6 +440,15 @@ func matchWrapperMiss(name string, before []*syntax.Word) string {
 	}
 	if _, literal := matchLiteral(before[0]); !literal {
 		return "quoted spelling"
+	}
+	for _, word := range before {
+		if _, isAssign := matchAssignName(word); isAssign {
+			continue
+		}
+		lit := word.Lit()
+		if _, relative := matchWrapperName(lit); relative && matchWrappers[path.Base(lit)] {
+			return matchRelativeWrapperReason
+		}
 	}
 	return "after the wrapper " + name
 }

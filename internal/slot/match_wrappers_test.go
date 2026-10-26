@@ -65,7 +65,7 @@ var matchTestWrapperRewrites = []matchTestCase{
 
 	// Row 27: a time option's argument is read when the shell passes it on as one word whatever
 	// the variables and files hold; an env value stays one word unless an unquoted expansion
-	// splits it. A wrapper is known by its last path element (row 25 audit N3, left as it is).
+	// splits it.
 	{"-o with a quoted file name", `/usr/bin/time -o "t 1.txt" go test ./...`,
 		`/usr/bin/time -o "t 1.txt" /x/wk run --slot check -- go test ./...`, nil},
 	{"-o with a tilde", `/usr/bin/time -o ~/t.txt go test ./...`,
@@ -76,8 +76,23 @@ var matchTestWrapperRewrites = []matchTestCase{
 		`env A= /x/wk run --slot check -- go test ./...`, nil},
 	{"env with a glob in the value, which only makes more A= words", `env A=x* go test ./...`,
 		`env A=x* /x/wk run --slot check -- go test ./...`, nil},
-	{"a file named time counts as the wrapper", `./time -p go test ./...`,
-		`./time -p /x/wk run --slot check -- go test ./...`, nil},
+
+	// Row 28, from the row 27 audit N1: a wrapper is read as a bare name or an absolute path.
+	{"gtime by an absolute path", `/opt/homebrew/bin/gtime -p go test ./...`,
+		`/opt/homebrew/bin/gtime -p /x/wk run --slot check -- go test ./...`, nil},
+	{"env with a relative path in a value", `env A=./time go test ./...`,
+		`env A=./time /x/wk run --slot check -- go test ./...`, nil},
+
+	// Row 28, from the row 27 audit N2: these quoted expansions stay one word in real bash and
+	// zsh, so the gate does not move.
+	{`env with "$*"`, `env A="$*" go test ./...`,
+		`env A="$*" /x/wk run --slot check -- go test ./...`, nil},
+	{`env with "${arr[*]}"`, `env A="${arr[*]}" go test ./...`,
+		`env A="${arr[*]}" /x/wk run --slot check -- go test ./...`, nil},
+	{`env with "${#arr[@]}"`, `env A="${#arr[@]}" go test ./...`,
+		`env A="${#arr[@]}" /x/wk run --slot check -- go test ./...`, nil},
+	{`env with "$@" inside a quoted $( )`, `env A="$(echo "$@")" go test ./...`,
+		`env A="$(echo "$@")" /x/wk run --slot check -- go test ./...`, nil},
 
 	// Row 27: wk run waits for its place before the shell starts, so timeout's clock inside the
 	// string starts after the wait; the string is wrapped whole as any other.
@@ -259,6 +274,75 @@ var matchTestWrapperUntouched = []matchTestCase{
 		[]Missed{{`"timeout" 300 go test ./...`, matchTimeoutReason}}},
 	{"a quoted timeout behind env", `env -u X "timeout" 300 go test ./...`, `env -u X "timeout" 300 go test ./...`,
 		[]Missed{{`env -u X "timeout" 300 go test ./...`, matchTimeoutReason}}},
+
+	// Row 28, from the row 27 audit N1: a wrapper name with a relative path may be a project
+	// script with arguments of its own, so wk run is not inserted among them.
+	{"./time", `./time -p go test ./...`, `./time -p go test ./...`,
+		[]Missed{{"./time -p go test ./...", matchRelativeWrapperReason}}},
+	{"bin/env", `bin/env A=1 go test ./...`, `bin/env A=1 go test ./...`,
+		[]Missed{{"bin/env A=1 go test ./...", matchRelativeWrapperReason}}},
+	{"../tools/command", `../tools/command go test ./...`, `../tools/command go test ./...`,
+		[]Missed{{"../tools/command go test ./...", matchRelativeWrapperReason}}},
+	{"./time behind env", `env -u X ./time -p go test ./...`, `env -u X ./time -p go test ./...`,
+		[]Missed{{"env -u X ./time -p go test ./...", matchRelativeWrapperReason}}},
+	{"./timeout keeps the timeout reason", `./timeout 300 go test ./...`, `./timeout 300 go test ./...`,
+		[]Missed{{"./timeout 300 go test ./...", matchTimeoutReason}}},
+	{"a relative path in an env value is no wrapper", `env A=./time -C x go test ./...`, `env A=./time -C x go test ./...`,
+		[]Missed{{"env A=./time -C x go test ./...", "after the wrapper env"}}},
+
+	// Row 28, from the row 27 audit N2: a quoted expansion that makes one word per element moves
+	// the gate (real bash and zsh: env ran the second element), and so does zsh's $=X.
+	{`env with "$@"`, `env A="$@" go test ./...`, `env A="$@" go test ./...`,
+		[]Missed{{`env A="$@" go test ./...`, "after the wrapper env"}}},
+	{`env with "${arr[@]}"`, `env A="${arr[@]}" go test ./...`, `env A="${arr[@]}" go test ./...`,
+		[]Missed{{`env A="${arr[@]}" go test ./...`, "after the wrapper env"}}},
+	{`env with "${@:1}"`, `env A="${@:1}" go test ./...`, `env A="${@:1}" go test ./...`,
+		[]Missed{{`env A="${@:1}" go test ./...`, "after the wrapper env"}}},
+	{`env with "${X:-$@}"`, `env A="${X:-$@}" go test ./...`, `env A="${X:-$@}" go test ./...`,
+		[]Missed{{`env A="${X:-$@}" go test ./...`, "after the wrapper env"}}},
+	{`env with "${!p@}"`, `env A="${!p@}" go test ./...`, `env A="${!p@}" go test ./...`,
+		[]Missed{{`env A="${!p@}" go test ./...`, "after the wrapper env"}}},
+	{`env with "${arr[@]/x/y}"`, `env A="${arr[@]/x/y}" go test ./...`, `env A="${arr[@]/x/y}" go test ./...`,
+		[]Missed{{`env A="${arr[@]/x/y}" go test ./...`, "after the wrapper env"}}},
+	{`env with zsh's "$arr[@]"`, `env A="$arr[@]" go test ./...`, `env A="$arr[@]" go test ./...`,
+		[]Missed{{`env A="$arr[@]" go test ./...`, "after the wrapper env"}}},
+	{"env with zsh's $=X", `env A=$=X go test ./...`, `env A=$=X go test ./...`,
+		[]Missed{{"env A=$=X go test ./...", "after the wrapper env"}}},
+	{"time -o with zsh's $=F", `/usr/bin/time -o $=F go test ./...`, `/usr/bin/time -o $=F go test ./...`,
+		[]Missed{{"/usr/bin/time -o $=F go test ./...", "after the wrapper time"}}},
+
+	// Row 28, from the row 27 audit N3: the string behind a wrapper is parsed, so a spelling that
+	// is only an argument or a comment there is no gate. A string wk cannot parse is searched as
+	// text, which errs toward logging.
+	{"timeout over sh -c that echoes a spelling", `timeout 30 sh -c 'echo go test ./...'`, `timeout 30 sh -c 'echo go test ./...'`, nil},
+	{"timeout over eval that echoes a spelling", `timeout 30 eval 'echo go test'`, `timeout 30 eval 'echo go test'`, nil},
+	{"nohup over sh -c that greps a spelling", `nohup sh -c 'grep "go test" log.txt'`, `nohup sh -c 'grep "go test" log.txt'`, nil},
+	{"timeout over sh -c with a spelling in a comment", `timeout 30 sh -c 'echo hi # go test'`, `timeout 30 sh -c 'echo hi # go test'`, nil},
+	{"timeout over sh -c with a gate in $( )", `timeout 30 sh -c 'echo $(go test ./...)'`, `timeout 30 sh -c 'echo $(go test ./...)'`,
+		[]Missed{{`timeout 30 sh -c 'echo $(go test ./...)'`, matchTimeoutReason}}},
+	{"timeout over sh -c with env before the gate", `timeout 30 sh -c 'env -u X go test ./...'`, `timeout 30 sh -c 'env -u X go test ./...'`,
+		[]Missed{{`timeout 30 sh -c 'env -u X go test ./...'`, matchTimeoutReason}}},
+	{"timeout over sh -c over timeout", `timeout 30 sh -c 'timeout 5 go test ./...'`, `timeout 30 sh -c 'timeout 5 go test ./...'`,
+		[]Missed{{`timeout 30 sh -c 'timeout 5 go test ./...'`, matchTimeoutReason}}},
+	{"timeout over eval of a gate", `timeout 30 eval go test ./...`, `timeout 30 eval go test ./...`,
+		[]Missed{{"timeout 30 eval go test ./...", matchTimeoutReason}}},
+	{"timeout over sh -c with an expansion is searched as text", `timeout 30 sh -c "echo go test $PKG"`, `timeout 30 sh -c "echo go test $PKG"`,
+		[]Missed{{`timeout 30 sh -c "echo go test $PKG"`, matchTimeoutReason}}},
+	{"timeout over sh -c that does not parse is searched as text", `timeout 30 sh -c 'echo go test ('`, `timeout 30 sh -c 'echo go test ('`,
+		[]Missed{{`timeout 30 sh -c 'echo go test ('`, matchTimeoutReason}}},
+
+	// Row 28, from the row 27 audit N4: inside a substitution that captures stderr, the capture is
+	// the reason logged, whatever else holds the gate back. Neither form is rewritten.
+	{"timeout over sh -c in $( ) that captures stderr", `x=$(timeout 300 sh -c 'go test ./...' 2>&1)`, `x=$(timeout 300 sh -c 'go test ./...' 2>&1)`,
+		[]Missed{{"timeout 300 sh -c 'go test ./...'", "inside $( ) that captures stderr"}}},
+	{"timeout in $( ) that captures stderr", `x=$(timeout 300 go test ./... 2>&1)`, `x=$(timeout 300 go test ./... 2>&1)`,
+		[]Missed{{"timeout 300 go test ./...", "inside $( ) that captures stderr"}}},
+	{"timeout in backticks that capture stderr", "x=`timeout 300 go test ./... 2>&1`", "x=`timeout 300 go test ./... 2>&1`",
+		[]Missed{{"timeout 300 go test ./...", "inside backticks that capture stderr"}}},
+	{"env with an option wk does not read in $( ) that captures stderr", `x=$(env -C d go test ./... 2>&1)`, `x=$(env -C d go test ./... 2>&1)`,
+		[]Missed{{"env -C d go test ./...", "inside $( ) that captures stderr"}}},
+	{"a quoted spelling in $( ) that captures stderr", `x=$("go" test ./... 2>&1)`, `x=$("go" test ./... 2>&1)`,
+		[]Missed{{`"go" test ./...`, "inside $( ) that captures stderr"}}},
 
 	// Row 22 audit B2: wk run's stderr lines would enter a capture that takes stderr.
 	{"2>&1 on each command in $( )", `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`, `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`,

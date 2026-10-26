@@ -73,16 +73,17 @@ const matchTimeoutReason = "after the wrapper timeout: the wait for a place woul
 // whole, such as `command time -p env -u X go test`. ok is false when args starts with no such
 // wrapper, or one of them holds a word wk does not read.
 //
-// A wrapper is known by its last path element, so ./time and bin/env count too (row 25 audit
-// N3, left as it is in row 27). Such a file is passed wrapper flags and then a gate's words, so
-// it runs a command made of its later words as the utility does, and the inserted wk run is
-// that command. The utility's own path differs by machine (/usr/bin/time, Homebrew's gtime, a
-// nix store), so a list of paths would refuse real ones. Reversal: accept only a bare name or
-// an absolute path here.
+// A wrapper word is read only as a bare name (time, found on PATH) or an absolute path
+// (/usr/bin/time, Homebrew's gtime, a nix store), known by its last path element (row 28, from
+// the row 27 audit N1). A relative path such as ./time or bin/env names a file in the working
+// directory, most likely a project script with arguments of its own, so wk does not insert
+// wk run among them; wrapperReason logs such a line with matchRelativeWrapperReason. Before
+// row 28 any path counted; reversal: read path.Base of every word here.
 func matchWrapped(args []*syntax.Word) (int, bool) {
 	i := 0
 	for i < len(args) {
-		read, isWrapper := matchWrapperReaders[path.Base(args[i].Lit())]
+		name, _ := matchWrapperName(args[i].Lit())
+		read, isWrapper := matchWrapperReaders[name]
 		if !isWrapper {
 			return i, i > 0
 		}
@@ -93,6 +94,19 @@ func matchWrapped(args []*syntax.Word) (int, bool) {
 		i = next
 	}
 	return 0, false
+}
+
+// matchRelativeWrapperReason is the missed.log reason for a gate behind a wrapper's name spelled
+// as a relative path, which matchWrapped does not read.
+const matchRelativeWrapperReason = "after a wrapper name with a relative path: it may be a project script"
+
+// matchWrapperName gives the last path element of word, and relative is true when word is a
+// path that is neither a bare name nor absolute (./time, bin/env); name is "" then.
+func matchWrapperName(word string) (name string, relative bool) {
+	if strings.Contains(word, "/") && !strings.HasPrefix(word, "/") {
+		return "", true
+	}
+	return path.Base(word), false
 }
 
 // matchEnvArgs reads env's options and assignments, when env reads every word the same way on
@@ -180,13 +194,15 @@ func matchTimeArgs(args []*syntax.Word, at int) (int, bool) {
 // matchFixedWord is true for a word the shell passes on as exactly one word, whatever the
 // variables and the files hold: plain text with no expansion (matchPlainText), and no glob or
 // brace character outside quotes. A quoted format such as -f '%e %M' is one; $F, t*.txt and
-// {a,b} are not.
+// {a,b} are not. Nor is unquoted text that holds a $ (row 28): zsh reads -o $=F as F split into
+// words, so an empty F drops the word as $F does in bash (seen in real zsh), and this parser
+// reads $=F as plain text.
 func matchFixedWord(word *syntax.Word) bool {
 	if _, plain := matchPlainText(word); !plain {
 		return false
 	}
 	for _, part := range word.Parts {
-		if lit, ok := part.(*syntax.Lit); ok && strings.ContainsAny(lit.Value, "*?[{") {
+		if lit, ok := part.(*syntax.Lit); ok && strings.ContainsAny(lit.Value, "*?[{$") {
 			return false
 		}
 	}
@@ -265,16 +281,67 @@ func matchAssignName(word *syntax.Word) (string, bool) {
 // X="1 2", `env A=$X go test` sets A=1 and runs `2 go test`, and after the insertion env would
 // run `2` with wk run's words as its arguments, so such a line stays a miss. An empty value
 // cannot move the gate, since the word keeps its literal NAME=, and a glob or a brace only makes
-// more NAME= words, so neither is refused. A quoted expansion is one word.
+// more NAME= words, so neither is refused.
+//
+// A quoted expansion is one word, except those that make one word per element (row 28, from the
+// row 27 audit N2), checked in real bash and zsh: "$@", "${@:1}", "${arr[@]}", "${arr[@]/x/y}",
+// "${X:-$@}" and "${!prefix@}" in both, and "$arr[@]" in zsh, which bash reads as $arr and the
+// text [@]. "$*", "${arr[*]}" and "${#arr[@]}" stay one word in both, so they are kept. Unquoted
+// text that holds a $ is refused too: zsh reads $=X as X split into words, which this parser
+// reads as plain text.
 func matchAssignValueUnsplit(word *syntax.Word) bool {
 	for _, part := range word.Parts {
-		switch part.(type) {
-		case *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
+		switch p := part.(type) {
+		case *syntax.Lit:
+			if strings.ContainsRune(p.Value, '$') {
+				return false
+			}
+		case *syntax.SglQuoted:
+		case *syntax.DblQuoted:
+			if matchQuotedSplits(p) {
+				return false
+			}
 		default:
 			return false
 		}
 	}
 	return true
+}
+
+// matchQuotedSplits is true when double-quoted text may expand to more than one word: an
+// expansion of every positional parameter or array element ($@, [@], ${!prefix@}) anywhere in
+// it, outside a command substitution, whose output is one word, or a short $name followed by a
+// subscript, which zsh reads as one.
+func matchQuotedSplits(q *syntax.DblQuoted) bool {
+	for i, part := range q.Parts {
+		pe, ok := part.(*syntax.ParamExp)
+		if !ok || !pe.Short || i+1 >= len(q.Parts) {
+			continue
+		}
+		if lit, ok := q.Parts[i+1].(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "[") {
+			return true
+		}
+	}
+	splits := false
+	syntax.Walk(q, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.CmdSubst:
+			return false
+		case *syntax.ParamExp:
+			if n.Length {
+				return true
+			}
+			splits = splits || n.Names == syntax.NamesPrefixWords ||
+				(n.Param != nil && n.Param.Value == "@") || matchIndexAll(n.Index)
+		}
+		return !splits
+	})
+	return splits
+}
+
+func matchIndexAll(index syntax.ArithmExpr) bool {
+	word, ok := index.(*syntax.Word)
+	return ok && word.Lit() == "@"
 }
 
 // shellGate wraps a whole `<shell> -c <string>` call in one place, because the string is one
