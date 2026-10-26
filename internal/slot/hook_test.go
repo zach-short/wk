@@ -196,12 +196,12 @@ func TestHookPreToolUseInputNotJSON(t *testing.T) {
 
 func TestHookPreToolUseLogsMisses(t *testing.T) {
 	env := hookTestSetup(t, matchTestSlotsTOML)
-	if got := env.run(t, hookTestInput("Bash", `{"command":"echo $(bun run build) && go test ./..."}`)); !strings.Contains(got, `"command":"echo $(bun run build) && /x/wk run --slot check -- go test ./..."`) {
+	if got := env.run(t, hookTestInput("Bash", `{"command":"cat <(bun run build) && go test ./..."}`)); !strings.Contains(got, `"command":"cat <(bun run build) && /x/wk run --slot check -- go test ./..."`) {
 		t.Errorf("stdout %q; want the go test rewritten", got)
 	}
 	env.run(t, hookTestInput("Bash", `{"command":"bun run build && ("}`))
 	want := []string{
-		`ezhomesteading inside $( ): "bun run build" in "echo $(bun run build) && go test ./..."`,
+		`ezhomesteading inside a process substitution: "bun run build" in "cat <(bun run build) && go test ./..."`,
 		`ezhomesteading does not parse: 1:18: reached EOF without matching ( with ): "bun run build && (" in "bun run build && ("`,
 	}
 	if got := env.logLines(t, "missed.log"); !slices.Equal(got, want) {
@@ -213,7 +213,7 @@ func TestHookPreToolUseLogsMisses(t *testing.T) {
 // another stamp format would be read as having no age and never counted.
 func TestHookPreToolUseLinesCountInStatus(t *testing.T) {
 	env := hookTestSetup(t, matchTestSlotsTOML)
-	env.run(t, hookTestInput("Bash", `{"command":"echo $(bun run build)"}`))
+	env.run(t, hookTestInput("Bash", `{"command":"cat <(bun run build)"}`))
 	env.deps.Resolve = func(string) (string, error) { return "", errors.New("not a git repository") }
 	env.run(t, hookTestInput("Bash", `{"command":"bun run build"}`))
 	st, err := ReadStatus(env.home)

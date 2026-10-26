@@ -199,31 +199,16 @@ var matchTestRewrites = []matchTestCase{
 		"/x/wk run --slot heavy --trim web/.next/cache -- bun  run \tbuild", nil},
 }
 
+// The cases for $( ), backticks, bash -c, sh -ec, time and env that stood here until
+// 2026-10-26 encoded the refusals match_wrappers.go lifts; each moved to
+// match_wrappers_test.go with its rewritten form.
 var matchTestUntouched = []matchTestCase{
-	{"$( )", `echo $(bun run build)`, `echo $(bun run build)`,
-		[]Missed{{"bun run build", "inside $( )"}}},
-	{"backticks", "echo `bun run test`", "echo `bun run test`",
-		[]Missed{{"bun run test", "inside backticks"}}},
-	{"$( ) in an assignment", `OUT=$(go test ./...) && echo "$OUT"`, `OUT=$(go test ./...) && echo "$OUT"`,
-		[]Missed{{"go test ./...", "inside $( )"}}},
-	{"$( ) in a parameter default", `echo ${X:-$(bun run lint)}`, `echo ${X:-$(bun run lint)}`,
-		[]Missed{{"bun run lint", "inside $( )"}}},
-	{"$( ) in a test clause", `[[ -n $(tsc --version) ]]`, `[[ -n $(tsc --version) ]]`,
-		[]Missed{{"tsc --version", "inside $( )"}}},
-	{"$( ) in a here-document", "cat <<EOF\n$(bun run build)\nEOF", "cat <<EOF\n$(bun run build)\nEOF",
-		[]Missed{{"bun run build", "inside $( )"}}},
 	{"<( )", `diff <(bun run lint) lint.txt`, `diff <(bun run lint) lint.txt`,
 		[]Missed{{"bun run lint", "inside a process substitution"}}},
-	{"bash -c", `bash -c "cd web && bun run build"`, `bash -c "cd web && bun run build"`,
-		[]Missed{{`bash -c "cd web && bun run build"`, "inside bash -c"}}},
-	{"sh -ec", `/bin/sh -ec 'go test ./...'`, `/bin/sh -ec 'go test ./...'`,
-		[]Missed{{`/bin/sh -ec 'go test ./...'`, "inside sh -c"}}},
 	{"eval", `eval "bun run lint"`, `eval "bun run lint"`,
 		[]Missed{{`eval "bun run lint"`, "inside eval"}}},
 	{"a function body", `f() { bun run build; }; f`, `f() { bun run build; }; f`,
 		[]Missed{{"bun run build", "inside a function body"}}},
-	{"time", `time bun run build`, `time bun run build`,
-		[]Missed{{"bun run build", "inside time"}}},
 	{"a quoted first word", `"bun" run build`, `"bun" run build`,
 		[]Missed{{`"bun" run build`, "quoted spelling"}}},
 	{"a quoted later word", `bun run 'build'`, `bun run 'build'`,
@@ -245,8 +230,6 @@ var matchTestUntouched = []matchTestCase{
 		[]Missed{{"command -v tsc", "after the wrapper command"}, {"exec go test ./...", "after the wrapper exec"}}},
 	{"a spelling behind a wrapper with options", `nice -n 19 bun run build`, `nice -n 19 bun run build`,
 		[]Missed{{"nice -n 19 bun run build", "after the wrapper nice"}}},
-	{"a spelling behind env", `env GOTOOLCHAIN=local go test ./...`, `env GOTOOLCHAIN=local go test ./...`,
-		[]Missed{{"env GOTOOLCHAIN=local go test ./...", "after the wrapper env"}}},
 	{"wk run before ;", `wk run; bun run build`, `wk run; bun run build`,
 		[]Missed{{"bun run build", "the line already holds wk run"}}},
 	{"wk run as two words of another command", `ls ~/Projects/wk run; go test ./...`, `ls ~/Projects/wk run; go test ./...`,

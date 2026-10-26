@@ -17,8 +17,10 @@ import (
 type Missed struct{ Command, Reason string }
 
 // Rewrite inserts "<wkExe> run --slot <class> [--trim <p>]... -- " at the byte offset of each
-// matched simple command's first word (SB-15, every statement position, never inside a word or
-// a function body) and changes no other byte. Text that does not parse comes back unchanged
+// matched simple command's first word (SB-15, every statement position, never in a function
+// body) and changes no other byte. Statement positions include the command of `time` and the
+// commands inside $( ) and backticks; behind `env` the insertion goes after env's options and
+// assignments, and a `<shell> -c` call is wrapped whole (match_wrappers.go). Text that does not parse comes back unchanged
 // with parseErr set. Each literal spelling left alone is a Missed with its reason.
 //
 // A simple command matches when its first words, after any VAR=value words, are unquoted
@@ -68,8 +70,11 @@ type matchWalk struct {
 	exe       string
 	spellings []matchSpelling
 	wrapped   bool
-	inserts   []matchInsert
-	missed    []Missed
+	// backquotes counts the backtick substitutions around the walk. Inside one the shell reads a
+	// backslash, a backtick and a dollar sign once more before it parses the command.
+	backquotes int
+	inserts    []matchInsert
+	missed     []Missed
 }
 
 func (w *matchWalk) stmts(list []*syntax.Stmt) {
@@ -79,8 +84,12 @@ func (w *matchWalk) stmts(list []*syntax.Stmt) {
 }
 
 // stmt visits one statement position. The cases are the positions GATE 2 answered "every
-// statement" for; `time` and `coproc` are left out because the wrapper's wait would change what
-// they measure or start.
+// statement" for. `coproc` is left out because the wrapper's wait would change what it starts.
+// `time` was left out for the same reason until 2026-10-26, when it held 14 of ezhomesteading's
+// missed.log lines from 2026-10-17 to 2026-10-25, each a gate an agent timed. Under
+// `time <wk> run` the real time also counts the wait for a place, which wk run reports on
+// stderr; a gate that runs unslotted for an honest time is the overload the slot exists to stop.
+// Claude Code strips `time` before it matches a permission rule, so the gate's twin still applies.
 func (w *matchWalk) stmt(s *syntax.Stmt) {
 	for _, r := range s.Redirs {
 		w.words(r)
@@ -116,7 +125,9 @@ func (w *matchWalk) compound(c syntax.Command) {
 	case *syntax.FuncDecl:
 		w.missAll(c.Body, "inside a function body")
 	case *syntax.TimeClause:
-		w.missAll(c, "inside time")
+		if c.Stmt != nil {
+			w.stmt(c.Stmt)
+		}
 	case *syntax.CoprocClause:
 		w.missAll(c, "inside coproc")
 	default:
@@ -146,26 +157,28 @@ func (w *matchWalk) call(c *syntax.CallExpr) {
 	if w.isWKRun(c) {
 		return
 	}
-	s, literal, ok := w.lookup(c.Args)
+	g, reason := w.gate(c)
 	switch {
-	case !ok:
-		w.unmatched(c, "")
-	case !literal:
-		w.miss(c, "quoted spelling")
+	case reason != "":
+		w.miss(c, reason)
+	case g.word == nil:
 	case w.wrapped:
 		w.miss(c, "the line already holds wk run")
 	default:
-		w.insert(c, s.entry)
+		w.insert(c, g)
 	}
 }
 
 // words looks inside the words of a non-statement part, where a command can only sit in a
-// substitution; nothing there is rewritten, because an insertion inside a word changes the word.
+// substitution. A command substitution holds statements of its own, so they are walked as
+// statements: the insertion lands at the start of a command inside it, and wk run writes only to
+// stderr, so the text the substitution captures does not change. A process substitution stays a
+// miss: its command runs beside the outer one, and wk does not follow what waits for it.
 func (w *matchWalk) words(n syntax.Node) {
 	syntax.Walk(n, func(n syntax.Node) bool {
 		switch n := n.(type) {
 		case *syntax.CmdSubst:
-			w.missAll(n, matchSubstReason(n))
+			w.subst(n)
 			return false
 		case *syntax.ProcSubst:
 			w.missAll(n, "inside a process substitution")
@@ -175,11 +188,12 @@ func (w *matchWalk) words(n syntax.Node) {
 	})
 }
 
-func matchSubstReason(c *syntax.CmdSubst) string {
+func (w *matchWalk) subst(c *syntax.CmdSubst) {
 	if c.Backquotes {
-		return "inside backticks"
+		w.backquotes++
+		defer func() { w.backquotes-- }()
 	}
-	return "inside $( )"
+	w.stmts(c.Stmts)
 }
 
 // missAll records every spelling under n with the reason of the outermost place that kept it
@@ -198,13 +212,10 @@ func (w *matchWalk) missAll(n syntax.Node, reason string) {
 }
 
 // unmatched records a spelling in a command whose first words spell none: in the string an
-// `eval` or a `<shell> -c` runs, or after a wrapper word. Neither is rewritten, for missed.log
-// only (SB-15).
+// `eval` or a `<shell> -c` runs, or after a wrapper word, where gate did not route it. It is
+// for missed.log only (SB-15), under the outer reason when there is one.
 func (w *matchWalk) unmatched(c *syntax.CallExpr, outer string) {
-	reason, ok := w.nestedShellReason(c)
-	if !ok {
-		reason, ok = w.wrapperReason(c)
-	}
+	reason, ok := w.unmatchedReason(c)
 	if !ok {
 		return
 	}
@@ -214,6 +225,13 @@ func (w *matchWalk) unmatched(c *syntax.CallExpr, outer string) {
 	w.miss(c, reason)
 }
 
+func (w *matchWalk) unmatchedReason(c *syntax.CallExpr) (string, bool) {
+	if reason, ok := w.nestedShellReason(c); ok {
+		return reason, true
+	}
+	return w.wrapperReason(c)
+}
+
 // The string a nested shell runs is one word to this parser, so it is searched as text.
 func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 	reason, ok := matchNestedShell(c)
@@ -221,7 +239,8 @@ func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 }
 
 // A wrapper runs a command made of its later words, so a gate behind one runs unslotted. It is
-// logged, not rewritten, because the wrapper's own options sit between it and the gate. The set
+// logged, not rewritten, because the wrapper's own options sit between it and the gate; env is
+// routed when matchEnvGate can read every option and assignment before the gate. The set
 // is closed on purpose: any word before a spelling would also log `grep eslint`.
 var matchWrappers = map[string]bool{"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "timeout": true, "xargs": true}
 
@@ -390,13 +409,17 @@ func matchUnescape(s string) string {
 	return b.String()
 }
 
-func (w *matchWalk) insert(c *syntax.CallExpr, e MatchEntry) {
-	prefix, ok := matchPrefix(w.exe, e)
+func (w *matchWalk) insert(c *syntax.CallExpr, g matchGate) {
+	prefix, ok := matchPrefix(w.exe, g.entry)
 	if !ok {
 		w.miss(c, "the wk path or the entry cannot be quoted")
 		return
 	}
-	w.inserts = append(w.inserts, matchInsert{at: c.Args[0].Pos().Offset(), text: prefix})
+	if w.backquotes > 0 && strings.ContainsAny(prefix, "\\`$") {
+		w.miss(c, "inside backticks")
+		return
+	}
+	w.inserts = append(w.inserts, matchInsert{at: g.word.Pos().Offset(), text: prefix})
 }
 
 // Prefix is the text Rewrite inserts before a command that matches e. `wk hooks install` builds
@@ -446,20 +469,28 @@ func matchUnparsed(command string, spellings []matchSpelling, err error) []Misse
 	return []Missed{{Command: command, Reason: "does not parse: " + err.Error()}}
 }
 
-// matchMentions searches text that was not parsed into commands, so its tokens break at shell
-// punctuation as well as at spaces.
 func matchMentions(text string, spellings []matchSpelling) bool {
+	return len(matchMentioned(text, spellings)) > 0
+}
+
+// matchMentioned lists the spelling at each place text spells one, the longest where two start
+// at one word. It searches text that was not parsed into commands, so its tokens break at shell
+// punctuation as well as at spaces.
+func matchMentioned(text string, spellings []matchSpelling) []matchSpelling {
 	tokens := strings.FieldsFunc(text, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune(";&|()<>'\"`$", r)
 	})
-	for i := range tokens {
+	var found []matchSpelling
+	for i := 0; i < len(tokens); i++ {
 		for _, s := range spellings {
 			if len(tokens)-i >= len(s.words) && slices.Equal(tokens[i:i+len(s.words)], s.words) {
-				return true
+				found = append(found, s)
+				i += len(s.words) - 1
+				break
 			}
 		}
 	}
-	return false
+	return found
 }
 
 func matchApply(src string, inserts []matchInsert) string {
