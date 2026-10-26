@@ -49,18 +49,25 @@ func (w *matchWalk) spelledAt(args []*syntax.Word) (matchGate, string, bool) {
 // matchWrapperReaders read the words of one wrapper at args[i]: each returns the index of the
 // command the wrapper runs, and false for a word it does not read. The insertion goes at that
 // command, after the wrapper's own words, as it does under the `time` keyword, so runs.log names
-// the gate. Claude Code strips timeout, time and command by name before it matches a Bash
-// permission rule (code.claude.com/docs/en/permissions, "Wrappers", read 2026-10-26), so the
-// wrapped gate still meets its twin there; it strips neither env nor a path such as
-// /usr/bin/time, which the gate did not meet before the rewrite either.
+// the gate. Claude Code strips time and command by name before it matches a Bash permission
+// rule (code.claude.com/docs/en/permissions, "Wrappers", read 2026-10-26), so the wrapped gate
+// still meets its twin there; it strips neither env nor a path such as /usr/bin/time, which the
+// gate did not meet before the rewrite either.
+//
+// timeout and gtimeout are left out on purpose (row 25, owner's decision 2026-10-26): after the
+// insertion their clock would also count the wait for a place, and the slot logs held 118 waits
+// over 10 minutes, so `timeout 600 go test` would often exit 124 before the gate started, which
+// agents read as a hang. wk run before timeout would lose the permission twin. A gate behind
+// timeout stays a miss with matchTimeoutReason.
 var matchWrapperReaders = map[string]func(args []*syntax.Word, i int) (int, bool){
-	"env":      matchEnvArgs,
-	"command":  matchCommandArgs,
-	"time":     matchTimeArgs,
-	"gtime":    matchTimeArgs,
-	"timeout":  matchTimeoutArgs,
-	"gtimeout": matchTimeoutArgs,
+	"env":     matchEnvArgs,
+	"command": matchCommandArgs,
+	"time":    matchTimeArgs,
+	"gtime":   matchTimeArgs,
 }
+
+// matchTimeoutReason is the missed.log reason for a gate behind timeout, so wk stats shows it.
+const matchTimeoutReason = "after the wrapper timeout: the wait for a place would count against its clock"
 
 // matchWrapped returns the index of the first word after a chain of wrappers that wk reads
 // whole, such as `command time -p env -u X go test`. ok is false when args starts with no such
@@ -166,50 +173,6 @@ func matchShortFlags(cluster, bare, withArg string) (skip int, ok bool) {
 		}
 	}
 	return 0, true
-}
-
-// matchTimeoutArgs reads the options and the duration of GNU timeout: -v, -p and their long
-// forms, -s SIGNAL and -k DURATION in each spelling. Its clock then also counts the wait for a
-// place, as `time` does; a gate that runs unslotted to beat its own timeout is the overload the
-// slot exists to stop. A stop still reaches the gate: timeout signals its process group, which
-// wk run and the gate share, and wk run passes a signal on (SB-7). --foreground (-f) is refused,
-// because then timeout signals wk run alone, and a -k SIGKILL would leave the gate running.
-func matchTimeoutArgs(args []*syntax.Word, at int) (int, bool) {
-	for i := at + 1; i < len(args); i++ {
-		opt := args[i].Lit()
-		switch {
-		case opt == "--":
-			return matchTimeoutDuration(args, i+1)
-		case matchTimeoutLongFlags[opt]:
-		case opt == "--signal" || opt == "--kill-after":
-			i++
-		case strings.HasPrefix(opt, "--signal=") || strings.HasPrefix(opt, "--kill-after="):
-		case strings.HasPrefix(opt, "--"):
-			return 0, false
-		case len(opt) > 1 && opt[0] == '-':
-			skip, ok := matchShortFlags(opt[1:], "vp", "sk")
-			if !ok {
-				return 0, false
-			}
-			i += skip
-		default:
-			return matchTimeoutDuration(args, i)
-		}
-	}
-	return 0, false
-}
-
-var matchTimeoutLongFlags = map[string]bool{"--verbose": true, "--preserve-status": true}
-
-var matchDuration = regexp.MustCompile(`^([0-9]+\.?[0-9]*|\.[0-9]+)[smhd]?$`)
-
-// matchTimeoutDuration reads the duration at args[i] and returns the index of the command after
-// it.
-func matchTimeoutDuration(args []*syntax.Word, i int) (int, bool) {
-	if i+1 >= len(args) || !matchDuration.MatchString(args[i].Lit()) {
-		return 0, false
-	}
-	return i + 1, true
 }
 
 // matchEnvOptions reads -u NAME, -uNAME, --unset=NAME and a closing --, from args[i] on.

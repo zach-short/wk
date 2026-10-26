@@ -20,10 +20,10 @@ type Missed struct{ Command, Reason string }
 // Rewrite inserts "<wkExe> run --slot <class> [--trim <p>]... -- " at the byte offset of each
 // matched simple command's first word (SB-15, every statement position, never in a function
 // body) and changes no other byte. Statement positions include the command of `time` and the
-// commands inside $( ) and backticks; behind env, command, the time utility and timeout the
-// insertion goes after the wrapper's words, and a `<shell> -c` call is wrapped whole
-// (match_wrappers.go). Text that does not parse comes back unchanged
-// with parseErr set. Each literal spelling left alone is a Missed with its reason.
+// commands inside $( ) and backticks; behind env, command and the time utility the insertion
+// goes after the wrapper's words (a gate behind timeout stays a miss), and a `<shell> -c` call
+// is wrapped whole (match_wrappers.go). Text that does not parse comes back unchanged with
+// parseErr set. Each literal spelling left alone is a Missed with its reason.
 //
 // A simple command matches when its first words, after any VAR=value words, are unquoted
 // literals equal to the words of a spelling; the longest spelling wins. A line that already
@@ -344,9 +344,10 @@ func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 
 // A wrapper runs a command made of its later words, so a gate behind one runs unslotted. It is
 // logged, not rewritten, because the wrapper's own options sit between it and the gate; env,
-// command, the time utility and timeout are routed when matchWrapped can read every word
-// before the gate. The set is closed on purpose: any word before a spelling would also log
-// `grep eslint`.
+// command and the time utility are routed when matchWrapped can read every word before the
+// gate. A gate with timeout anywhere before it is logged with matchTimeoutReason, which
+// match_wrappers.go explains. The set is closed on purpose: any word before a spelling would
+// also log `grep eslint`.
 var matchWrappers = map[string]bool{
 	"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "xargs": true,
 	"timeout": true, "gtimeout": true, "time": true, "gtime": true,
@@ -362,10 +363,19 @@ func (w *matchWalk) wrapperReason(c *syntax.CallExpr) (string, bool) {
 	}
 	for i := 1; i < len(c.Args); i++ {
 		if _, _, found := w.lookup(c.Args[i:]); found {
-			return "after the wrapper " + name, true
+			return matchWrapperMiss(name, c.Args[:i]), true
 		}
 	}
 	return "", false
+}
+
+func matchWrapperMiss(name string, before []*syntax.Word) string {
+	for _, word := range before {
+		if base := path.Base(word.Lit()); base == "timeout" || base == "gtimeout" {
+			return matchTimeoutReason
+		}
+	}
+	return "after the wrapper " + name
 }
 
 var matchShells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}

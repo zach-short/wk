@@ -36,9 +36,8 @@ var matchTestWrapperRewrites = []matchTestCase{
 	{"an assignment before env", `CI=1 env -u X go test ./...`,
 		`CI=1 env -u X /x/wk run --slot check -- go test ./...`, nil},
 
-	// Row 25: the time utility, `command`, and timeout. The insertion goes after the wrapper's
-	// words, as it does after env's. The timeout cases are the four "after the wrapper timeout"
-	// lines of ezhomesteading's missed.log from 2026-10-17 to 2026-10-26, shortened.
+	// Row 25: the time utility and `command`. The insertion goes after the wrapper's words, as it
+	// does after env's. A gate behind timeout stays a miss (matchTestWrapperUntouched).
 	{"/usr/bin/time -p, the form row 22 left open", `/usr/bin/time -p go test ./...`,
 		`/usr/bin/time -p /x/wk run --slot check -- go test ./...`, nil},
 	{"/usr/bin/time -l on macOS", `cd web && /usr/bin/time -l bun run build 2>time.txt`,
@@ -59,22 +58,8 @@ var matchTestWrapperRewrites = []matchTestCase{
 		`command -- /x/wk run --slot check -- go test ./...`, nil},
 	{"time after an assignment is the utility", `CI=1 time -p go test ./...`,
 		`CI=1 time -p /x/wk run --slot check -- go test ./...`, nil},
-	{"timeout, from missed.log", `cd web && timeout 300 bun run lint -- --file a.tsx 2>&1 | tail -20`,
-		`cd web && timeout 300 /x/wk run --slot check -- bun run lint -- --file a.tsx 2>&1 | tail -20`, nil},
-	{"timeout twice on one line, from missed.log", `timeout 280 bunx eslint a.tsx 2>&1 | tail -15; cd ../native && timeout 200 bunx eslint b.tsx`,
-		`timeout 280 /x/wk run --slot check -- bunx eslint a.tsx 2>&1 | tail -15; cd ../native && timeout 200 /x/wk run --slot check -- bunx eslint b.tsx`, nil},
-	{"timeout -s -k with units", `timeout -s KILL -k 5s 2m go test ./...`,
-		`timeout -s KILL -k 5s 2m /x/wk run --slot check -- go test ./...`, nil},
-	{"timeout long options and a fraction", `timeout --signal=INT --kill-after 10 --preserve-status 1.5m go test ./...`,
-		`timeout --signal=INT --kill-after 10 --preserve-status 1.5m /x/wk run --slot check -- go test ./...`, nil},
-	{"timeout -sINT -v -p and --", `gtimeout -sINT -v -p -- 30 go test ./...`,
-		`gtimeout -sINT -v -p -- 30 /x/wk run --slot check -- go test ./...`, nil},
-	{"a chain of wrappers", `timeout 600 env -u X /usr/bin/time -p go test ./...`,
-		`timeout 600 env -u X /usr/bin/time -p /x/wk run --slot check -- go test ./...`, nil},
-	{"the time keyword over timeout", `time timeout 300 go test ./...`,
-		`time timeout 300 /x/wk run --slot check -- go test ./...`, nil},
-	{"timeout in $( ) that leaves stderr out", `n=$(timeout 60 go test ./... | wc -l)`,
-		`n=$(timeout 60 /x/wk run --slot check -- go test ./... | wc -l)`, nil},
+	{"a chain of wrappers", `command env -u X /usr/bin/time -p go test ./...`,
+		`command env -u X /usr/bin/time -p /x/wk run --slot check -- go test ./...`, nil},
 	{"/usr/bin/time in a loop under the time keyword", `time (for p in a b; do /usr/bin/time -p go test ./$p; done)`,
 		`time (for p in a b; do /usr/bin/time -p /x/wk run --slot check -- go test ./$p; done)`, nil},
 
@@ -163,15 +148,30 @@ var matchTestWrapperUntouched = []matchTestCase{
 	{"env -u PATH", `env -u PATH go test ./...`, `env -u PATH go test ./...`,
 		[]Missed{{"env -u PATH go test ./...", "after the wrapper env"}}},
 
-	// Row 25: wrapper words wk does not read stay a miss.
-	{"timeout --foreground signals wk run alone", `timeout --foreground -k 5 300 go test ./...`, `timeout --foreground -k 5 300 go test ./...`,
-		[]Missed{{"timeout --foreground -k 5 300 go test ./...", "after the wrapper timeout"}}},
-	{"timeout -f is --foreground", `timeout -f 300 go test ./...`, `timeout -f 300 go test ./...`,
-		[]Missed{{"timeout -f 300 go test ./...", "after the wrapper timeout"}}},
-	{"timeout with a duration wk does not read", `timeout "$T" go test ./...`, `timeout "$T" go test ./...`,
-		[]Missed{{`timeout "$T" go test ./...`, "after the wrapper timeout"}}},
-	{"timeout before a wrapper wk does not read", `timeout 300 nice go test ./...`, `timeout 300 nice go test ./...`,
-		[]Missed{{"timeout 300 nice go test ./...", "after the wrapper timeout"}}},
+	// Row 25, owner's decision 2026-10-26: a gate behind timeout stays a miss, because timeout's
+	// clock would also count the wait for a place, and waits over 10 minutes are common. The
+	// first two are the four "after the wrapper timeout" lines of ezhomesteading's missed.log
+	// from 2026-10-17 to 2026-10-26, shortened.
+	{"timeout, from missed.log", `cd web && timeout 300 bun run lint -- --file a.tsx 2>&1 | tail -20`, `cd web && timeout 300 bun run lint -- --file a.tsx 2>&1 | tail -20`,
+		[]Missed{{"timeout 300 bun run lint -- --file a.tsx", matchTimeoutReason}}},
+	{"timeout twice on one line, from missed.log", `timeout 280 bunx eslint a.tsx | tail -15; cd ../native && timeout 200 bunx eslint b.tsx`, `timeout 280 bunx eslint a.tsx | tail -15; cd ../native && timeout 200 bunx eslint b.tsx`,
+		[]Missed{{"timeout 280 bunx eslint a.tsx", matchTimeoutReason}, {"timeout 200 bunx eslint b.tsx", matchTimeoutReason}}},
+	{"timeout -s -k with units", `timeout -s KILL -k 5s 2m go test ./...`, `timeout -s KILL -k 5s 2m go test ./...`,
+		[]Missed{{"timeout -s KILL -k 5s 2m go test ./...", matchTimeoutReason}}},
+	{"gtimeout", `gtimeout 30 go test ./...`, `gtimeout 30 go test ./...`,
+		[]Missed{{"gtimeout 30 go test ./...", matchTimeoutReason}}},
+	{"timeout --foreground", `timeout --foreground 300 go test ./...`, `timeout --foreground 300 go test ./...`,
+		[]Missed{{"timeout --foreground 300 go test ./...", matchTimeoutReason}}},
+	{"timeout behind a wrapper wk reads", `command env -u X timeout 300 go test ./...`, `command env -u X timeout 300 go test ./...`,
+		[]Missed{{"command env -u X timeout 300 go test ./...", matchTimeoutReason}}},
+	{"wrappers behind timeout", `timeout 600 env -u X /usr/bin/time -p go test ./...`, `timeout 600 env -u X /usr/bin/time -p go test ./...`,
+		[]Missed{{"timeout 600 env -u X /usr/bin/time -p go test ./...", matchTimeoutReason}}},
+	{"the time keyword over timeout", `time timeout 300 go test ./...`, `time timeout 300 go test ./...`,
+		[]Missed{{"timeout 300 go test ./...", matchTimeoutReason}}},
+	{"timeout in $( ) that leaves stderr out", `n=$(timeout 60 go test ./... | wc -l)`, `n=$(timeout 60 go test ./... | wc -l)`,
+		[]Missed{{"timeout 60 go test ./...", matchTimeoutReason}}},
+
+	// Row 25: other wrapper words wk does not read stay a miss.
 	{"timeout with no gate", `timeout 5 curl -s localhost`, `timeout 5 curl -s localhost`, nil},
 	{"/usr/bin/time with an option wk does not read", `/usr/bin/time -x go test ./...`, `/usr/bin/time -x go test ./...`,
 		[]Missed{{"/usr/bin/time -x go test ./...", "after the wrapper time"}}},
@@ -181,8 +181,8 @@ var matchTestWrapperUntouched = []matchTestCase{
 		[]Missed{{"command -p go test ./...", "after the wrapper command"}}},
 	{"/usr/bin/time in $( ) that captures stderr", `v=$(/usr/bin/time -p go test ./... 2>&1)`, `v=$(/usr/bin/time -p go test ./... 2>&1)`,
 		[]Missed{{"/usr/bin/time -p go test ./...", "inside $( ) that captures stderr"}}},
-	{"timeout on a line that holds wk run", `timeout 300 go test ./...; wk run -- bun run lint`, `timeout 300 go test ./...; wk run -- bun run lint`,
-		[]Missed{{"timeout 300 go test ./...", "the line already holds wk run"}}},
+	{"command time on a line that holds wk run", `command time go test ./...; wk run -- bun run lint`, `command time go test ./...; wk run -- bun run lint`,
+		[]Missed{{"command time go test ./...", "the line already holds wk run"}}},
 
 	// Row 22 audit B2: wk run's stderr lines would enter a capture that takes stderr.
 	{"2>&1 on each command in $( )", `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`, `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`,
