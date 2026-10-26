@@ -387,26 +387,16 @@ func matchIndexAll(index syntax.ArithmExpr) bool {
 
 // shellGate wraps a whole `<shell> -c <string>` call in one place, because the string is one
 // word to the outer parser and an insertion inside it would have to be quoted for the inner
-// shell. It does so only when the string is plain text with no expansion, parses, runs a gate as
-// a command, and every spelling it mentions has one class, with the trims of all of them; a
-// string holding a heavy and a check gate would otherwise run the heavy one in a check place. ok
-// is false when c is no `<shell> -c` call, its words mention no spelling, or its parsed string
-// runs no gate. Before row 29 every mentioned spelling also decided whether the string ran a gate,
-// so `sh -c 'echo go test'` was wrapped whole; nestedGates now decides that from the parsed
-// string, as runsGateAt does.
+// shell. It does so only when the string is plain text with no expansion, parses, and every
+// spelling it mentions has one class, with the trims of all of them; a string holding a heavy
+// and a check gate would otherwise run the heavy one in a check place. ok is false when c is no
+// `<shell> -c` call or its words mention no spelling.
 //
-// The class still comes from every spelling the string mentions, not only the gates nestedGates
-// finds (row 29 audit F1, decided by the row 29 session by risk): a string can run a mentioned
-// spelling in ways the walk does not see, such as `echo bun run build | sh`, `x="bun run build";
-// $x`, `bash <<< "bun run build"` or `. <(echo bun run build)`, and taking the class from the
-// found gates alone would run that gate in another class's place with no log line. So
-// `sh -c 'go test && echo bun run build'` is refused as two classes. Reversal: give nestedGates
-// back a list of the gates it found and take the class from that.
-//
-// A string that names a gate but runs none the walk sees, and holds a form that can run text as
-// a command (`echo go test | sh`, `$x`), is refused with matchRunsTextReason, never wrapped and
-// never silent (row 29 audit F2, decided by the row 29 session by risk). Reversal: remove the
-// runsText check in nestedGates.
+// A gate counts when the string mentions it as text, wherever it sits. Row 29 tried a parse of
+// the string instead (item 5) and took it out after its audit 4, by the owner's choice of the
+// recommended way: a mention the walk reads as no command can still run (`| env sh`,
+// `| xargs sh -c`, `exec $x`, `> f; sh f`, `| python3 -c`), and no list of such forms is
+// closed, so the text match, which errs toward slotting, stays.
 //
 // A string that runs a gate behind timeout, `sh -c 'timeout 300 go test'`, is wrapped whole like
 // any other (row 27, from the row 25 audit N1): wk run waits for its place before the shell
@@ -426,15 +416,8 @@ func (w *matchWalk) shellGate(c *syntax.CallExpr) (matchGate, string, bool) {
 	if !plain {
 		return why("the string is not plain text")
 	}
-	runs, runsText, parsed := w.nestedGates(text)
-	if !parsed {
+	if _, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), ""); err != nil {
 		return why("the string does not parse")
-	}
-	if runsText {
-		return why(matchRunsTextReason)
-	}
-	if !runs {
-		return matchGate{}, "", false
 	}
 	entry, one := matchOneClass(matchMentioned(text, w.spellings))
 	if !one {

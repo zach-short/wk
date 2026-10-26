@@ -347,27 +347,10 @@ func (w *matchWalk) unmatchedReason(c *syntax.CallExpr) (string, bool) {
 	return w.wrapperReason(c)
 }
 
-// nestedShellReason logs a `<shell> -c` call or an eval whose string runs a gate. The string is
-// one word to this parser, so runsGateAt parses it as a line of its own (row 29, the row 28
-// builder's open item: `eval 'echo go test'` runs no gate and is not logged); a string that is
-// not plain text or does not parse is searched as text, as before.
-//
-// A string that names a gate and can run text as a command (matchRunsText) is logged with
-// matchRunsTextReason after the nested reason (row 29 audit F2).
+// The string a nested shell runs is one word to this parser, so it is searched as text.
 func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 	reason, ok := matchNestedShell(c.Args)
-	if !ok {
-		return "", false
-	}
-	if text, plain := matchNestedText(c.Args); plain {
-		if runs, runsText, parsed := w.nestedGates(text); parsed {
-			if runsText {
-				return reason + ": " + matchRunsTextReason, true
-			}
-			return reason, runs
-		}
-	}
-	return reason, matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings)
+	return reason, ok && matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings)
 }
 
 // A wrapper runs a command made of its later words, so a gate behind one runs unslotted. It is
@@ -420,34 +403,23 @@ func (w *matchWalk) runsGateAt(c *syntax.CallExpr, i int) bool {
 		return false
 	}
 	if text, plain := matchNestedText(args); plain {
-		if runs, runsText, parsed := w.nestedGates(text); parsed {
-			return runs || runsText
+		if file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), ""); err == nil {
+			return w.nestedRunsGate(text, file)
 		}
 	}
 	return matchMentions(w.text(args[1].Pos(), c.End()), w.spellings)
 }
 
-// nestedGates parses text, the string of a `<shell> -c` call or an eval, and walks it as a line
-// of its own. runs is true when the walk finds a gate it would rewrite or log, or a wk run whose
-// later words run one: the walk leaves a wk run alone, but behind a wrapper the bare form
+// nestedRunsGate walks the parsed string of a `<shell> -c` call or an eval behind a wrapper as a
+// line of its own. It is true when the walk finds a gate it would rewrite or log, or a wk run
+// whose later words run one: the walk leaves a wk run alone, but behind a wrapper the bare form
 // `timeout 30 wk run -- go test` is logged, so `timeout 30 sh -c 'wk run -- go test'` is too
-// (row 29, from the row 28 audit N-B). parsed is false when text does not parse. It decides only
-// whether a gate runs; shellGate takes the class from every spelling the text mentions.
-//
-// runsText is true when the walk finds no gate, but text names one and holds a form that can
-// run text as a command (matchRunsText), such as `echo go test | sh`: the gate may run where the
-// walk does not see it, so the caller logs a miss and never wraps the string (row 29 audit F2,
-// decided by the row 29 session by risk; main wrapped such a string whole). Reversal: drop
-// runsText and the matchRunsText check.
-func (w *matchWalk) nestedGates(text string) (runs, runsText, parsed bool) {
-	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), "")
-	if err != nil {
-		return false, false, false
-	}
+// (row 29, from the row 28 audit N-B). Only runsGateAt reads it; shellGate and
+// nestedShellReason find a gate in a string by text, as before row 29.
+func (w *matchWalk) nestedRunsGate(text string, file *syntax.File) bool {
 	inner := matchWalk{src: text, exe: w.exe, spellings: w.spellings}
-	inner.wrapped = inner.holdsWKRun(file)
 	inner.stmts(file.Stmts)
-	runs = len(inner.inserts) > 0 || len(inner.missed) > 0
+	runs := len(inner.inserts) > 0 || len(inner.missed) > 0
 	syntax.Walk(file, func(n syntax.Node) bool {
 		c, ok := n.(*syntax.CallExpr)
 		if runs || !ok || !inner.isWKRun(c) {
@@ -458,87 +430,7 @@ func (w *matchWalk) nestedGates(text string) (runs, runsText, parsed bool) {
 		}
 		return !runs
 	})
-	runsText = !runs && matchMentions(text, w.spellings) && matchRunsText(file)
-	return runs, runsText, true
-}
-
-// matchRunsTextReason is the missed.log reason, after `inside <shell> -c` or `inside eval`, for a
-// string that names a gate and can run text as a command (matchRunsText).
-const matchRunsTextReason = "a gate is named and the string can run text as a command"
-
-// matchRunsText is true when the parsed string of a `<shell> -c` call or an eval holds a form
-// that can run text as a command, which the walk cannot follow: a pipe into a shell or eval; a
-// command word that expands ($x, "${x}", $(...)); a here-string or a heredoc into a shell or
-// eval; `.` or `source` of a process substitution; and a nested `<shell> -c` or eval whose
-// string is not plain text. It errs toward true, because a wrong true costs one logged miss and
-// a wrong false runs a gate unslotted with no log line.
-func matchRunsText(file *syntax.File) bool {
-	found := false
-	syntax.Walk(file, func(n syntax.Node) bool {
-		switch n := n.(type) {
-		case *syntax.BinaryCmd:
-			found = found || ((n.Op == syntax.Pipe || n.Op == syntax.PipeAll) && matchTextRunner(n.Y))
-		case *syntax.Stmt:
-			found = found || (matchTextRunner(n) && slices.ContainsFunc(n.Redirs, func(r *syntax.Redirect) bool {
-				return r.Op == syntax.WordHdoc || r.Op == syntax.Hdoc || r.Op == syntax.DashHdoc
-			}))
-		case *syntax.CallExpr:
-			found = found || matchRunsWords(n)
-		}
-		return !found
-	})
-	return found
-}
-
-// matchTextRunner is true when s is a simple command that runs the text it reads: a shell or
-// eval.
-func matchTextRunner(s *syntax.Stmt) bool {
-	c, ok := s.Cmd.(*syntax.CallExpr)
-	if !ok || len(c.Args) == 0 {
-		return false
-	}
-	name, _ := matchUnquoted(c.Args[0])
-	name = path.Base(name)
-	return matchShells[name] || name == "eval"
-}
-
-// matchRunsWords is true when c runs text that its words build: an expanding command word, `.`
-// or `source` of a process substitution, or a `<shell> -c` call or eval whose string is not
-// plain text.
-func matchRunsWords(c *syntax.CallExpr) bool {
-	if len(c.Args) == 0 {
-		return false
-	}
-	if matchExpands(c.Args[0]) {
-		return true
-	}
-	name, _ := matchUnquoted(c.Args[0])
-	switch path.Base(name) {
-	case ".", "source":
-		return slices.ContainsFunc(c.Args[1:], func(a *syntax.Word) bool {
-			return slices.ContainsFunc(a.Parts, func(p syntax.WordPart) bool { _, ok := p.(*syntax.ProcSubst); return ok })
-		})
-	case "eval":
-		return slices.ContainsFunc(c.Args[1:], func(a *syntax.Word) bool { _, plain := matchPlainText(a); return !plain })
-	}
-	if shell, at, reason := matchShellString(c.Args); shell != "" && reason == "" {
-		_, plain := matchPlainText(c.Args[at])
-		return !plain
-	}
-	return false
-}
-
-// matchExpands is true when word holds a parameter, command, arithmetic or process expansion.
-func matchExpands(word *syntax.Word) bool {
-	found := false
-	syntax.Walk(word, func(n syntax.Node) bool {
-		switch n.(type) {
-		case *syntax.ParamExp, *syntax.CmdSubst, *syntax.ArithmExp, *syntax.ProcSubst:
-			found = true
-		}
-		return !found
-	})
-	return found
+	return runs
 }
 
 // matchNestedText is the text a `<shell> -c` call or an eval runs, when every word of it is

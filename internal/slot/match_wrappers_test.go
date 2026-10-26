@@ -487,17 +487,40 @@ var matchTestRow29 = []matchTestCase{
 		[]Missed{{`env -u X "time" -p go test ./...`, "quoted spelling"}}},
 	{"a value that ends in /timeout is no timeout", `env -C d X=/a/timeout go test ./...`, `env -C d X=/a/timeout go test ./...`,
 		[]Missed{{"env -C d X=/a/timeout go test ./...", "after the wrapper env"}}},
+}
 
-	// Row 28 builder's open item: the string of a shell or an eval is parsed, and only a gate it
-	// runs as a command is wrapped or logged.
-	{"sh -c that echoes a spelling", `sh -c 'echo go test ./...'`, `sh -c 'echo go test ./...'`, nil},
-	{"bash -c that greps a spelling", `bash -c 'grep "go test" log.txt'`, `bash -c 'grep "go test" log.txt'`, nil},
-	{"sh -c with a spelling in a comment", `sh -c 'echo hi # go test'`, `sh -c 'echo hi # go test'`, nil},
-	{"eval that echoes a spelling", `eval 'echo go test'`, `eval 'echo go test'`, nil},
-	{"sh -c in a function body that echoes a spelling", `f() { sh -c 'echo go test'; }`, `f() { sh -c 'echo go test'; }`, nil},
-	// Row 29 audit F1, decided by the row 29 session by risk: the class still comes from every
-	// spelling the string mentions, since a string can run a mentioned spelling in ways the walk
-	// does not see. Each of these stays refused and logged, as on the code before row 29.
+// Row 29 item 5 (parse the string of a shell or an eval) was taken out after the row 29 audit 4,
+// by the owner's choice of the recommended way. A spelling the string mentions counts as text,
+// as before row 29, so a string that only echoes one is wrapped or logged: a mention the walk
+// reads as no command can still run, and no list of such forms is closed.
+var matchTestShellText = []matchTestCase{
+	{"sh -c that echoes a spelling is wrapped", `sh -c 'echo go test ./...'`,
+		`/x/wk run --slot check -- sh -c 'echo go test ./...'`, nil},
+	{"bash -c that greps a spelling is wrapped", `bash -c 'grep "go test" log.txt'`,
+		`/x/wk run --slot check -- bash -c 'grep "go test" log.txt'`, nil},
+	{"sh -c with a spelling in a comment is wrapped", `sh -c 'echo hi # go test'`,
+		`/x/wk run --slot check -- sh -c 'echo hi # go test'`, nil},
+	{"eval that echoes a spelling is logged", `eval 'echo go test'`, `eval 'echo go test'`,
+		[]Missed{{`eval 'echo go test'`, "inside eval"}}},
+	{"sh -c in a function body that echoes a spelling is logged", `f() { sh -c 'echo go test'; }`, `f() { sh -c 'echo go test'; }`,
+		[]Missed{{`sh -c 'echo go test'`, "inside a function body"}}},
+	{"sh -c that pipes a gate into sh is wrapped", `sh -c 'echo go test ./... | sh'`,
+		`/x/wk run --slot check -- sh -c 'echo go test ./... | sh'`, nil},
+	{"sh -c that runs a variable is wrapped", `sh -c 'x="go test ./..."; $x'`,
+		`/x/wk run --slot check -- sh -c 'x="go test ./..."; $x'`, nil},
+	{"sh -c that feeds a gate to bash with <<< is wrapped", `sh -c 'bash <<< "go test ./..."'`,
+		`/x/wk run --slot check -- sh -c 'bash <<< "go test ./..."'`, nil},
+	{"sh -c that feeds a gate to sh with a heredoc is wrapped", "sh -c 'sh <<EOF\ngo test ./...\nEOF'",
+		"/x/wk run --slot check -- sh -c 'sh <<EOF\ngo test ./...\nEOF'", nil},
+	{"bash -c that sources a process substitution is wrapped", `bash -c 'source <(echo go test ./...)'`,
+		`/x/wk run --slot check -- bash -c 'source <(echo go test ./...)'`, nil},
+	{"sh -c with a nested shell whose string is not plain text is wrapped", `sh -c 'c="go test ./..."; bash -c "$c"'`,
+		`/x/wk run --slot check -- sh -c 'c="go test ./..."; bash -c "$c"'`, nil},
+	{"eval that pipes a gate into sh is logged", `eval 'echo go test ./... | sh'`, `eval 'echo go test ./... | sh'`,
+		[]Missed{{`eval 'echo go test ./... | sh'`, "inside eval"}}},
+
+	// Row 29 audit F1: a string that mentions spellings of two classes is refused, whatever it
+	// runs, as before row 29.
 	{"sh -c that runs one class and echoes another", `sh -c 'go test ./... && echo bun run build'`, `sh -c 'go test ./... && echo bun run build'`,
 		[]Missed{{`sh -c 'go test ./... && echo bun run build'`, "inside sh -c: spellings of more than one class"}}},
 	{"sh -c that pipes another class into sh", `sh -c 'go test ./... && echo bun run build | sh'`, `sh -c 'go test ./... && echo bun run build | sh'`,
@@ -510,41 +533,10 @@ var matchTestRow29 = []matchTestCase{
 		[]Missed{{`sh -c 'go test ./...; . <(echo bun run build)'`, "inside sh -c: spellings of more than one class"}}},
 	{"sh -c that runs a heavy gate and echoes a check spelling", `sh -c 'bun run build && echo tsc'`, `sh -c 'bun run build && echo tsc'`,
 		[]Missed{{`sh -c 'bun run build && echo tsc'`, "inside sh -c: spellings of more than one class"}}},
-	// Row 29 audit F2, decided by the row 29 session by risk: a string that names a gate and holds
-	// a form that can run text as a command may run the gate where the walk does not see it, so
-	// it is a logged miss, never wrapped and never silent.
-	{"sh -c that pipes a gate into sh", `sh -c 'echo go test ./... | sh'`, `sh -c 'echo go test ./... | sh'`,
-		[]Missed{{`sh -c 'echo go test ./... | sh'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c that pipes a gate into bash -s", `sh -c 'echo go test ./... | bash -s'`, `sh -c 'echo go test ./... | bash -s'`,
-		[]Missed{{`sh -c 'echo go test ./... | bash -s'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c that runs a variable", `sh -c 'x="go test ./..."; $x'`, `sh -c 'x="go test ./..."; $x'`,
-		[]Missed{{`sh -c 'x="go test ./..."; $x'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c that runs a quoted expansion", `sh -c 'x="go test"; "${x}" ./...'`, `sh -c 'x="go test"; "${x}" ./...'`,
-		[]Missed{{`sh -c 'x="go test"; "${x}" ./...'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c that feeds a gate to bash with <<<", `sh -c 'bash <<< "go test ./..."'`, `sh -c 'bash <<< "go test ./..."'`,
-		[]Missed{{`sh -c 'bash <<< "go test ./..."'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c that feeds a gate to sh with a heredoc", "sh -c 'sh <<EOF\ngo test ./...\nEOF'", "sh -c 'sh <<EOF\ngo test ./...\nEOF'",
-		[]Missed{{"sh -c 'sh <<EOF\ngo test ./...\nEOF'", "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c that sources a process substitution", `sh -c '. <(echo go test ./...)'`, `sh -c '. <(echo go test ./...)'`,
-		[]Missed{{`sh -c '. <(echo go test ./...)'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"bash -c that sources a process substitution by name", `bash -c 'source <(echo go test ./...)'`, `bash -c 'source <(echo go test ./...)'`,
-		[]Missed{{`bash -c 'source <(echo go test ./...)'`, "inside bash -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c with a nested shell whose string is not plain text", `sh -c 'c="go test ./..."; bash -c "$c"'`, `sh -c 'c="go test ./..."; bash -c "$c"'`,
-		[]Missed{{`sh -c 'c="go test ./..."; bash -c "$c"'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"sh -c with an eval that is not plain text", `sh -c 'c="go test ./..."; eval "$c"'`, `sh -c 'c="go test ./..."; eval "$c"'`,
-		[]Missed{{`sh -c 'c="go test ./..."; eval "$c"'`, "inside sh -c: a gate is named and the string can run text as a command"}}},
-	{"eval that pipes a gate into sh", `eval 'echo go test ./... | sh'`, `eval 'echo go test ./... | sh'`,
-		[]Missed{{`eval 'echo go test ./... | sh'`, "inside eval: a gate is named and the string can run text as a command"}}},
-	{"timeout over sh -c that pipes a gate into sh", `timeout 30 sh -c 'echo go test ./... | sh'`, `timeout 30 sh -c 'echo go test ./... | sh'`,
-		[]Missed{{`timeout 30 sh -c 'echo go test ./... | sh'`, matchTimeoutReason}}},
-	{"sh -c with a gate in $( ) is still wrapped", `sh -c 'echo $(go test ./...)'`,
-		`/x/wk run --slot check -- sh -c 'echo $(go test ./...)'`, nil},
-	{"sh -c with a gate behind timeout is still wrapped", `sh -c 'timeout 300 go test ./...'`,
-		`/x/wk run --slot check -- sh -c 'timeout 300 go test ./...'`, nil},
-	{"eval of a gate is still logged", `eval 'go test ./...'`, `eval 'go test ./...'`,
-		[]Missed{{`eval 'go test ./...'`, "inside eval"}}},
-	{"sh -c with an expansion is still searched as text", `sh -c "echo go test $PKG"`, `sh -c "echo go test $PKG"`,
-		[]Missed{{`sh -c "echo go test $PKG"`, "inside sh -c: the string is not plain text"}}},
+}
+
+func TestMatchRewriteShellStringsByText(t *testing.T) {
+	matchTestRun(t, matchTestShellText)
 }
 
 func TestMatchRewriteRow29(t *testing.T) {
