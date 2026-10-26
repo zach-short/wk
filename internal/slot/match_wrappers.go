@@ -54,8 +54,8 @@ func (w *matchWalk) spelledAt(args []*syntax.Word) (matchGate, string, bool) {
 // still meets its twin there; it strips neither env nor a path such as /usr/bin/time, which the
 // gate did not meet before the rewrite either.
 //
-// timeout and gtimeout are left out on purpose (row 25, owner's decision 2026-10-26): after the
-// insertion their clock would also count the wait for a place, and the slot logs held 118 waits
+// timeout and gtimeout are left out on purpose (row 25, decided by the coordinating session by
+// risk, 2026-10-26): after the insertion their clock would also count the wait for a place, and the slot logs held 118 waits
 // over 10 minutes, so `timeout 600 go test` would often exit 124 before the gate started, which
 // agents read as a hang. wk run before timeout would lose the permission twin. A gate behind
 // timeout stays a miss with matchTimeoutReason.

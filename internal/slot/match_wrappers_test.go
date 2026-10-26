@@ -148,8 +148,8 @@ var matchTestWrapperUntouched = []matchTestCase{
 	{"env -u PATH", `env -u PATH go test ./...`, `env -u PATH go test ./...`,
 		[]Missed{{"env -u PATH go test ./...", "after the wrapper env"}}},
 
-	// Row 25, owner's decision 2026-10-26: a gate behind timeout stays a miss, because timeout's
-	// clock would also count the wait for a place, and waits over 10 minutes are common. The
+	// Row 25, decided by the coordinating session by risk, 2026-10-26: a gate behind timeout
+	// stays a miss, because timeout's clock would also count the wait for a place, and waits over 10 minutes are common. The
 	// first two are the four "after the wrapper timeout" lines of ezhomesteading's missed.log
 	// from 2026-10-17 to 2026-10-26, shortened.
 	{"timeout, from missed.log", `cd web && timeout 300 bun run lint -- --file a.tsx 2>&1 | tail -20`, `cd web && timeout 300 bun run lint -- --file a.tsx 2>&1 | tail -20`,
