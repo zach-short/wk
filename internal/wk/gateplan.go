@@ -315,7 +315,7 @@ func (e *Env) gateList() []gateSpec {
 	sf, found := e.slotsFile()
 	list := make([]gateSpec, len(e.Cfg.Gates.Run))
 	for i, r := range e.Cfg.Gates.Run {
-		g := gate.Gate{Name: r.Name, Dir: r.Dir, Run: r.Run, NeedsEnv: r.NeedsEnv, Timeout: time.Duration(r.TimeoutSeconds) * time.Second}
+		g := gate.Gate{Name: r.Name, Dir: r.Dir, Run: r.Run, NeedsEnv: r.NeedsEnv, Timeout: time.Duration(r.TimeoutSeconds) * time.Second, AfterFunc: e.gateAfter}
 		list[i] = gateSpec{g: g, argv0: r.Run[0]}
 		if found && e.WKExe != "" {
 			list[i].g, list[i].slotted = slotted(g, e.WKExe, sf)

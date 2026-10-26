@@ -37,7 +37,13 @@ type Gate struct {
 	Name, Dir     string
 	Run, NeedsEnv []string
 	Timeout       time.Duration
+	// AfterFunc starts the clock that kills a gate past its Timeout. nil is time.AfterFunc;
+	// tests only.
+	AfterFunc func(time.Duration, func()) Timer
 }
+
+// Timer is the clock Gate.AfterFunc starts. *time.Timer is one.
+type Timer interface{ Stop() bool }
 
 // Result is one gate's outcome. Output holds stdout and stderr together.
 type Result struct {
@@ -114,7 +120,7 @@ func execute(root string, g Gate, env []string) (Result, error) {
 	cmd.Dir = filepath.Join(root, filepath.FromSlash(g.Dir))
 	cmd.Env, cmd.Stdout, cmd.Stderr, cmd.WaitDelay = env, &out, &out, pipeGrace
 	start := time.Now()
-	timedOut, err := runFor(cmd, g.Timeout)
+	timedOut, err := runFor(cmd, g.Timeout, g.AfterFunc)
 	r := Result{Name: g.Name, Status: Pass, Output: out.Bytes(), Seconds: time.Since(start).Seconds()}
 	var exit *exec.ExitError
 	switch {
@@ -132,15 +138,18 @@ func execute(root string, g Gate, env []string) (Result, error) {
 // whole group is killed when the limit runs out, because go test and bun leave
 // children that would hold the CPU and the output pipe after the leader dies.
 // Without one, cmd stays in the worker's group, as before the limit existed.
-func runFor(cmd *exec.Cmd, limit time.Duration) (timedOut bool, err error) {
+func runFor(cmd *exec.Cmd, limit time.Duration, after func(time.Duration, func()) Timer) (timedOut bool, err error) {
 	if limit <= 0 {
 		return false, cmd.Run()
+	}
+	if after == nil {
+		after = func(d time.Duration, f func()) Timer { return time.AfterFunc(d, f) }
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return false, err
 	}
-	timer := time.AfterFunc(limit, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	timer := after(limit, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
 	err = cmd.Wait()
 	// A leader that exited by itself before the kill was not timed out, even when the kill came
 	// while Wait still read the pipe a background child held.

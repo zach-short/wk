@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -466,6 +467,73 @@ func TestSlottedStartErrorIsNotLoggedAsAFail(t *testing.T) {
 	}
 }
 
+// ready is the fake wk run's mark that it has said all it will say: it touches "$0.ready" just
+// before it sleeps, so the timeout fires only after its lines are out, however busy the machine.
+const ready = `: > "$0.ready"; `
+
+// readyBackstop is how long killWhenReady waits for a ready file that never comes.
+const readyBackstop = 30 * time.Second
+
+// killWhenReady makes e's gate timeouts fire when the fake wk run at e.WKExe writes its ready
+// file, in place of after the configured seconds of wall clock, which two /bin/sh starts can use
+// up on a loaded machine. A fake that never writes the file fails the test after readyBackstop.
+func killWhenReady(t *testing.T, e *Env) {
+	t.Helper()
+	e.gateAfter = func(_ time.Duration, kill func()) gate.Timer {
+		rt := &readyTimer{stop: make(chan struct{})}
+		go rt.wait(t, e.WKExe+".ready", kill)
+		return rt
+	}
+}
+
+// readyTimer is the gate.Timer killWhenReady starts. Stop, as time.Timer's, reports whether it
+// stopped the kill before the kill ran.
+type readyTimer struct {
+	mu   sync.Mutex
+	done bool
+	stop chan struct{}
+}
+
+func (rt *readyTimer) Stop() bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.done {
+		return false
+	}
+	rt.done = true
+	close(rt.stop)
+	return true
+}
+
+func (rt *readyTimer) wait(t *testing.T, path string, kill func()) {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	backstop, late := time.After(readyBackstop), false
+poll:
+	for !exists(path) {
+		select {
+		case <-rt.stop:
+			return
+		case <-backstop:
+			late = true
+			break poll
+		case <-tick.C:
+		}
+	}
+	rt.mu.Lock()
+	fire := !rt.done
+	rt.done = true
+	rt.mu.Unlock()
+	if !fire {
+		return
+	}
+	// Stop has not run, so the test is still in the gate run and may still fail.
+	if late {
+		t.Errorf("the fake wk run never wrote %s; killed it after %s", path, readyBackstop)
+	}
+	kill()
+}
+
 // sayStart is the fake wk run's "starting" line, written only when the worker set
 // slot.SayStartEnv for it, as the real one does.
 const sayStart = `[ -n "$WK_RUN_SAY_START" ] && echo 'wk run: starting true' >&2; `
@@ -477,13 +545,14 @@ const sayStart = `[ -n "$WK_RUN_SAY_START" ] && echo 'wk run: starting true' >&2
 // wk run's waiting line itself (row 16's A2).
 func TestSlottedGateTimeoutWhileWaitingIsAStartError(t *testing.T) {
 	for _, tc := range []struct{ exe, state string }{
-		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Submitted},
-		{"sleep 60", changeset.Submitted},
-		{sayStart + "echo 'checking' >&2; sleep 60", changeset.Failed},
-		{sayStart + "echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; sleep 60", changeset.Failed},
+		{"echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; " + ready + "sleep 60", changeset.Submitted},
+		{ready + "sleep 60", changeset.Submitted},
+		{sayStart + "echo 'checking' >&2; " + ready + "sleep 60", changeset.Failed},
+		{sayStart + "echo 'wk run: waiting for a check place: 1 of 1 held; 0 ahead of this run' >&2; " + ready + "sleep 60", changeset.Failed},
 	} {
 		e, id := slotFixture(t, "true", tc.exe, "true")
 		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
+		killWhenReady(t, e)
 		err := e.LandLoop(io.Discard)
 		if (tc.state == changeset.Submitted) != (err != nil && strings.Contains(err.Error(), "gate types: timed out after 1s while still waiting for a place through wk run --slot, so its command never ran; the next worker gates the batch again")) {
 			t.Errorf("%s: loop = %v", tc.exe, err)
@@ -508,8 +577,9 @@ func TestSlottedGateTimeoutAfterTakingAPlaceIsAFail(t *testing.T) {
 		{"wk run: took a check place after 1s", long, "timed out after 1s (wk run took a check place after 1s)"},
 		{"wk run: running unslotted: lock /x/check-0.lock: input/output error", "echo 'checking' >&2; ", "timed out after 1s"},
 	} {
-		e, id := slotFixture(t, "true", wait+"echo '"+tc.ended+"' >&2; "+sayStart+tc.output+"sleep 60", "true")
+		e, id := slotFixture(t, "true", wait+"echo '"+tc.ended+"' >&2; "+sayStart+tc.output+ready+"sleep 60", "true")
 		e.Cfg.Gates.Run[1].TimeoutSeconds = 1
+		killWhenReady(t, e)
 		var out bytes.Buffer
 		if err := e.LandLoop(&out); err != nil {
 			t.Fatalf("%s: loop = %v; want the changeset failed", tc.ended, err)

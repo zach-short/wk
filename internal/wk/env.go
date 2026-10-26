@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zach-short/wk/internal/config"
+	"github.com/zach-short/wk/internal/gate"
 	"github.com/zach-short/wk/internal/gitx"
 )
 
@@ -31,6 +32,9 @@ type Env struct {
 	log   *syncWriter
 	clock func() time.Time
 	sleep func(time.Duration)
+	// gateAfter is the clock that kills a gate past its timeout, copied into each gate by
+	// gateList. Open leaves it nil, which is time.AfterFunc; tests only.
+	gateAfter func(time.Duration, func()) gate.Timer
 }
 
 // Open resolves the repository holding dir and reads its config from home/<repo>.toml. All
