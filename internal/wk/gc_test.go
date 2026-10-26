@@ -613,7 +613,7 @@ func TestScheduleCheckReportsOnlyAFailedAgent(t *testing.T) {
 		want string
 	}{
 		"exit 78":      {printed("78: EX_CONFIG"), nil, "gc agent " + label + ": last exit code 78: EX_CONFIG, so scheduled gc is not running; fix: wk gc schedule install\n"},
-		"exit 1":       {printed("1"), nil, "gc agent " + label + ": last exit code 1, so scheduled gc is not running; fix: wk gc schedule install\n"},
+		"exit 1":       {printed("1"), nil, "gc agent " + label + ": the last scheduled gc failed with exit code 1; see " + e.GCLogPath() + "\n"},
 		"exit 0":       {printed("0"), nil, ""},
 		"never exited": {printed("(never exited)"), nil, ""},
 		"missing":      {"Bad request.\nCould not find service \"" + label + "\" in domain for user gui: 501\n", errors.New("exit status 113"), ""},

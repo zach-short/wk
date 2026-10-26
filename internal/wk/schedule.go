@@ -75,8 +75,14 @@ func (e *Env) ScheduleUninstall(l Launchd, out io.Writer) error {
 var lastExit = regexp.MustCompile(`(?m)^\s*last exit code = (-?\d+)(?::[ \t]*(.*\S))?\s*$`)
 
 // ScheduleCheck prints one line when the repository's agent is loaded and its last run exited
-// non-zero, as launchd's EX_CONFIG (78) refusal to spawn does. A missing agent, a failing
-// launchctl or a last exit of 0 prints nothing. It only reads.
+// non-zero. Exit 78 (EX_CONFIG) is launchd refusing to start the program, which an install
+// fixes; any other code is a gc run that failed, whose cause is in gc.log. A missing agent, a
+// failing launchctl or a last exit of 0 prints nothing. It only reads.
+//
+// Known gap: a job killed by a signal is reported by launchctl print on other lines (such as
+// "last terminating signal" or "last exit reason"), not as "last exit code". That format was
+// not captured on this machine when this was written (the read was refused), so such a job
+// prints nothing here rather than a line parsed from a guessed format.
 func (e *Env) ScheduleCheck(l Launchd, out io.Writer) {
 	if l.Print == nil {
 		return
@@ -93,7 +99,11 @@ func (e *Env) ScheduleCheck(l Launchd, out io.Writer) {
 	if m[2] != "" {
 		code += ": " + m[2]
 	}
-	_, _ = fmt.Fprintf(out, "gc agent %s: last exit code %s, so scheduled gc is not running; fix: wk gc schedule install\n", e.Label(), code)
+	if m[1] == "78" {
+		_, _ = fmt.Fprintf(out, "gc agent %s: last exit code %s, so scheduled gc is not running; fix: wk gc schedule install\n", e.Label(), code)
+		return
+	}
+	_, _ = fmt.Fprintf(out, "gc agent %s: the last scheduled gc failed with exit code %s; see %s\n", e.Label(), code, e.GCLogPath())
 }
 
 // agentArgs starts wk through /bin/sh, which execs it. launchd infers a lightweight code

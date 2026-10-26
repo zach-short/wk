@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -658,8 +659,12 @@ func realLaunchd() (wk.Launchd, error) {
 			}
 			return nil
 		},
+		// A hung launchctl must not hold up the dry run: after the timeout the context kills it,
+		// Output returns an error, and the check prints nothing.
 		Print: func(target string) (string, error) {
-			out, err := exec.Command("launchctl", "print", target).Output()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "launchctl", "print", target).Output()
 			return string(out), err
 		},
 	}, nil
