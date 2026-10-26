@@ -2,6 +2,7 @@ package slot
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -268,6 +269,113 @@ func TestDurText(t *testing.T) {
 	for sec, want := range map[float64]string{0: "0.0s", 59.94: "59.9s", 61: "1m01s", 3599: "59m59s", 5400: "1.5h"} {
 		if got := dur(sec); got != want {
 			t.Errorf("dur(%v) = %q, want %q", sec, got, want)
+		}
+	}
+}
+
+// tieFixture has a tie in every sorted list: three directories ran the same command for the same
+// time (holders, commands, repeats), and two of the subdirectories have names of equal length.
+func tieFixture(t *testing.T) []string {
+	t.Helper()
+	m := time.Minute
+	var lines []string
+	for _, sub := range []string{"web", "app", "native"} {
+		dir := "/p/ezh/.claude/worktrees/w1/" + sub
+		// Held a place from 0 to 10 min, then issued again 2 min after it ended.
+		lines = append(lines,
+			runLine(t0.Add(10*m), "check", "0", 0, 10*m, dir, "bun run lint"),
+			runLine(t0.Add(13*m), "check", "0", 0, m, dir, "bun run lint"))
+	}
+	// A long wait from 0 to 20 min, so the runs above are holders.
+	return append(lines, runLine(t0.Add(21*m), "check", "0", 20*m, m, "/p/ezh/.claude/worktrees/w2", "go test"))
+}
+
+type tieResult struct {
+	Classes []ClassStats
+	Long    LongWaits
+	Repeats Repeats
+	Learned []string
+}
+
+func tieRun(t *testing.T, lines []string) tieResult {
+	t.Helper()
+	runs := timedRuns(t, lines...)
+	r := newRoots(t.TempDir())
+	r.repos["ezh"] = true
+	r.resolve(runs)
+	return tieResult{classStats(runs), longWaits(runs), repeats(runs), r.learned}
+}
+
+func TestStatsOrderDoesNotDependOnInputOrderOrMapOrder(t *testing.T) {
+	t.Parallel()
+	lines := tieFixture(t)
+	want := tieRun(t, lines)
+	if got := want.Long.Holders; len(got) < 3 || got[0].Subdir != "app" || got[1].Subdir != "native" || got[2].Subdir != "web" {
+		t.Fatalf("holders %+v, want the three tied lint holders by subdir", got)
+	}
+	if got := want.Repeats.Commands; len(got) != 3 || got[0].Subdir != "app" || got[1].Subdir != "native" || got[2].Subdir != "web" {
+		t.Fatalf("repeat groups %+v, want the tied groups by subdir", got)
+	}
+	if len(want.Learned) != 3 || want.Learned[0] != "native" || want.Learned[1] != "app" || want.Learned[2] != "web" {
+		t.Fatalf("learned %v, want longest first, then by name", want.Learned)
+	}
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 20; i++ {
+		shuffled := append([]string(nil), lines...)
+		rng.Shuffle(len(shuffled), func(a, b int) { shuffled[a], shuffled[b] = shuffled[b], shuffled[a] })
+		if got := tieRun(t, shuffled); !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d gave\n%+v\nwant\n%+v", i, got, want)
+		}
+	}
+}
+
+func TestMissedReasonsWithEqualCountsKeepOneOrder(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "missed.log")
+	var lines []string
+	for _, reason := range []string{"zeta", "alpha", "mid", "beta"} {
+		lines = append(lines, t0.Format(logTimeLayout)+"\tezh "+reason+": \"c\" in \"l\"")
+	}
+	writeLog(t, path, lines...)
+	var want []ReasonCount
+	for i := 0; i < 20; i++ {
+		ms, err := readMissed(path, Range{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			want = ms.Reasons
+			if len(want) != 4 || want[0].Reason != "alpha" || want[3].Reason != "zeta" {
+				t.Fatalf("reasons %+v, want equal counts by name", want)
+			}
+		}
+		if !reflect.DeepEqual(ms.Reasons, want) {
+			t.Fatalf("run %d gave %+v, want %+v", i, ms.Reasons, want)
+		}
+	}
+}
+
+// A float sum depends on the order of its terms, so repeats must add the runs of its map in one
+// order: 40 directories with run times that have no exact binary form give one total.
+func TestRepeatsRunSecondsSumInOneOrder(t *testing.T) {
+	t.Parallel()
+	var lines []string
+	for i := 0; i < 40; i++ {
+		dir := fmt.Sprintf("/w/d%02d", i)
+		run := time.Duration(100+i*37) * time.Millisecond
+		lines = append(lines,
+			runLine(t0, "check", "0", 0, time.Second, dir, "c"),
+			runLine(t0.Add(time.Second+run+time.Second), "check", "0", 0, run, dir, "c"))
+	}
+	runs := timedRuns(t, lines...)
+	newRoots(t.TempDir()).resolve(runs)
+	want := repeats(runs)
+	if want.Count != 40 {
+		t.Fatalf("repeats %+v, want 40", want)
+	}
+	for i := 0; i < 50; i++ {
+		if got := repeats(runs); got.RunSeconds != want.RunSeconds {
+			t.Fatalf("run %d summed %v, want %v", i, got.RunSeconds, want.RunSeconds)
 		}
 	}
 }

@@ -79,7 +79,12 @@ func (r *roots) resolve(runs []timedRun) {
 			r.learned = append(r.learned, sub)
 		}
 	}
-	sort.Slice(r.learned, func(a, b int) bool { return len(r.learned[a]) > len(r.learned[b]) })
+	sort.Slice(r.learned, func(a, b int) bool {
+		if len(r.learned[a]) != len(r.learned[b]) {
+			return len(r.learned[a]) > len(r.learned[b])
+		}
+		return r.learned[a] < r.learned[b]
+	})
 	for _, i := range unknown {
 		runs[i].subdir = r.guess(runs[i].Workspace)
 	}
@@ -129,7 +134,13 @@ func commandStats(rs []timedRun) []CommandStats {
 		if out[a].Wait.Total != out[b].Wait.Total {
 			return out[a].Wait.Total > out[b].Wait.Total
 		}
-		return out[a].Runs > out[b].Runs || out[a].Runs == out[b].Runs && out[a].Command < out[b].Command
+		if out[a].Runs != out[b].Runs {
+			return out[a].Runs > out[b].Runs
+		}
+		if out[a].Command != out[b].Command {
+			return out[a].Command < out[b].Command
+		}
+		return out[a].Subdir < out[b].Subdir
 	})
 	return out
 }
@@ -188,7 +199,12 @@ func longWaits(rs []timedRun) LongWaits {
 }
 
 func merge(spans []span) []span {
-	sort.Slice(spans, func(a, b int) bool { return spans[a].from.Before(spans[b].from) })
+	sort.Slice(spans, func(a, b int) bool {
+		if !spans[a].from.Equal(spans[b].from) {
+			return spans[a].from.Before(spans[b].from)
+		}
+		return spans[a].to.Before(spans[b].to)
+	})
 	var out []span
 	for _, s := range spans {
 		if n := len(out); n > 0 && !s.from.After(out[n-1].to) {
@@ -220,7 +236,19 @@ func holders(rs []timedRun, spans []span) []Holder {
 	for _, h := range byKey {
 		out = append(out, *h)
 	}
-	sort.Slice(out, func(a, b int) bool { return out[a].HeldSeconds > out[b].HeldSeconds })
+	sort.Slice(out, func(a, b int) bool {
+		x, y := out[a], out[b]
+		if x.HeldSeconds != y.HeldSeconds {
+			return x.HeldSeconds > y.HeldSeconds
+		}
+		if x.Runs != y.Runs {
+			return x.Runs > y.Runs
+		}
+		if x.Command != y.Command {
+			return x.Command < y.Command
+		}
+		return x.Subdir < y.Subdir
+	})
 	return out
 }
 
@@ -259,8 +287,28 @@ func repeats(runs []timedRun) Repeats {
 	}
 	var rep Repeats
 	counts := map[commandKey]int{}
-	for _, rs := range byKey {
-		sort.Slice(rs, func(a, b int) bool { return rs[a].queued.Before(rs[b].queued) })
+	// Float sums depend on the order of the terms, so walk the keys in a fixed order.
+	keys := make([]commandKey, 0, len(byKey))
+	for k := range byKey {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(a, b int) bool {
+		if keys[a].subdir != keys[b].subdir {
+			return keys[a].subdir < keys[b].subdir
+		}
+		return keys[a].command < keys[b].command
+	})
+	for _, k := range keys {
+		rs := byKey[k]
+		sort.Slice(rs, func(a, b int) bool {
+			if !rs[a].queued.Equal(rs[b].queued) {
+				return rs[a].queued.Before(rs[b].queued)
+			}
+			if !rs[a].started.Equal(rs[b].started) {
+				return rs[a].started.Before(rs[b].started)
+			}
+			return rs[a].ended.Before(rs[b].ended)
+		})
 		for i := 1; i < len(rs); i++ {
 			if gap := rs[i].queued.Sub(rs[i-1].ended); gap >= 0 && gap <= repeatWindow {
 				rep.add(rs[i-1], rs[i])
@@ -286,7 +334,13 @@ func rankRepeats(counts map[commandKey]int) []RepeatGroup {
 		out = append(out, RepeatGroup{Subdir: k.subdir, Command: k.command, Count: n})
 	}
 	sort.Slice(out, func(a, b int) bool {
-		return out[a].Count > out[b].Count || out[a].Count == out[b].Count && out[a].Command < out[b].Command
+		if out[a].Count != out[b].Count {
+			return out[a].Count > out[b].Count
+		}
+		if out[a].Command != out[b].Command {
+			return out[a].Command < out[b].Command
+		}
+		return out[a].Subdir < out[b].Subdir
 	})
 	return out
 }
