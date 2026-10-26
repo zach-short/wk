@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -246,7 +247,7 @@ func matchStderrToStdout(r *syntax.Redirect) bool {
 		target, plain := matchLiteral(r.Word)
 		return !plain || !matchFDWord(target)
 	}
-	if r.N == nil || r.N.Value != "2" || r.Word == nil {
+	if r.N == nil || !matchFDIs(r.N.Value, 2) || r.Word == nil {
 		return false
 	}
 	target, plain := matchLiteral(r.Word)
@@ -258,6 +259,13 @@ func matchStderrToStdout(r *syntax.Redirect) bool {
 	}
 	target = path.Clean(target)
 	return target == "/dev/stdout" || strings.HasPrefix(target, "/dev/fd/")
+}
+
+// matchFDIs is true when the digits of a redirect's fd number name fd; bash reads 02 and 002
+// as fd 2 (row 22 audit 4).
+func matchFDIs(digits string, fd int) bool {
+	n, err := strconv.Atoi(digits)
+	return err == nil && n == fd && strings.Trim(digits, "0123456789") == ""
 }
 
 // matchFDWord is true for the word of a dup that names a file descriptor: `-`, or digits with

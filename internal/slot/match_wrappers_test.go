@@ -78,6 +78,10 @@ var matchTestWrapperRewrites = []matchTestCase{
 		`v=$(/x/wk run --slot check -- go test ./... >&2-)`, nil},
 	{"stderr to /dev/null spelled with a dot", `v=$(go test ./... 2>/dev/./null)`,
 		`v=$(/x/wk run --slot check -- go test ./... 2>/dev/./null)`, nil},
+	{"1>&2 sends stdout out of the capture and leaves stderr", `v=$(go test ./... 1>&2)`,
+		`v=$(/x/wk run --slot check -- go test ./... 1>&2)`, nil},
+	{"01>&2 is fd 1 as 1>&2 is", `v=$(go test ./... 01>&2)`,
+		`v=$(/x/wk run --slot check -- go test ./... 01>&2)`, nil},
 
 	// sh -c: the whole call is wrapped, so one place holds every gate its string runs. Only when
 	// the string is plain text, parses, and every spelling in it has one class.
@@ -171,6 +175,16 @@ var matchTestWrapperUntouched = []matchTestCase{
 	{"2>/dev/./stdout", `v=$(go test ./... 2>/dev/./stdout)`, `v=$(go test ./... 2>/dev/./stdout)`,
 		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
 	{"2>/dev//fd/1", `v=$(go test ./... 2>/dev//fd/1)`, `v=$(go test ./... 2>/dev//fd/1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+
+	// Row 22 audit 4: bash reads an fd number with leading zeros by its value.
+	{"02>&1", `v=$(go test ./... 02>&1)`, `v=$(go test ./... 02>&1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"002>&1", `v=$(go test ./... 002>&1)`, `v=$(go test ./... 002>&1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"02>/dev/stdout", `v=$(go test ./... 02>/dev/stdout)`, `v=$(go test ./... 02>/dev/stdout)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"2>&01", `v=$(go test ./... 2>&01)`, `v=$(go test ./... 2>&01)`,
 		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
 	{"<( ) stays", `diff <(bun run lint) lint.txt`, `diff <(bun run lint) lint.txt`,
 		[]Missed{{"bun run lint", "inside a process substitution"}}},
