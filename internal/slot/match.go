@@ -273,19 +273,37 @@ func (w *matchWalk) isWKWord(word *syntax.Word) bool {
 
 // holdsWKRun reads the parsed words, never the raw text, so a comment that mentions wk run does
 // not hold the line back. Two words "wk" and "run" in a row count wherever they sit, and so does
-// "wk run" inside one quoted word, whatever punctuation follows it.
+// "wk run" inside one quoted word, whatever punctuation follows it, except in the arguments of a
+// text filter such as grep: agents write `| grep -v '^wk run'` to drop wk's waiting lines, and a
+// pattern never runs. From 2026-10-17 to 2026-10-25, 63 of the 66 lines held back for this reason
+// in ezhomesteading were such filters, so their gates ran unslotted.
 func (w *matchWalk) holdsWKRun(file *syntax.File) bool {
 	found := false
 	syntax.Walk(file, func(n syntax.Node) bool {
 		switch n := n.(type) {
 		case *syntax.CallExpr:
 			found = found || w.callHoldsWKRun(n)
+			if !found && matchTextFilter(n) {
+				return false
+			}
 		case *syntax.Word:
 			found = found || matchWKRun.MatchString(w.text(n.Pos(), n.End()))
 		}
 		return !found
 	})
 	return found
+}
+
+// matchTextFilters are the commands whose arguments are patterns and file names: none of them
+// runs an argument as a command. awk and sed are left out, since each can run one.
+var matchTextFilters = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "rg": true}
+
+func matchTextFilter(c *syntax.CallExpr) bool {
+	if len(c.Args) == 0 {
+		return false
+	}
+	v, ok := matchUnquoted(c.Args[0])
+	return ok && matchTextFilters[path.Base(v)]
 }
 
 func (w *matchWalk) callHoldsWKRun(c *syntax.CallExpr) bool {
