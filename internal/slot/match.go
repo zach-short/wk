@@ -338,7 +338,7 @@ func (w *matchWalk) unmatchedReason(c *syntax.CallExpr) (string, bool) {
 
 // The string a nested shell runs is one word to this parser, so it is searched as text.
 func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
-	reason, ok := matchNestedShell(c)
+	reason, ok := matchNestedShell(c.Args)
 	return reason, ok && matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings)
 }
 
@@ -348,6 +348,11 @@ func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 // gate. A gate with timeout anywhere before it is logged with matchTimeoutReason, which
 // match_wrappers.go explains. The set is closed on purpose: any word before a spelling would
 // also log `grep eslint`.
+//
+// Row 27 (from the row 25 audit): the gate behind a wrapper may also sit in the string of a
+// `<shell> -c` call or an eval, so `timeout 300 sh -c 'go test'` is logged with
+// matchTimeoutReason; and a quoted wrapper word, `"/usr/bin/time" -p go test`, is logged as a
+// quoted spelling, the reason a quoted gate word gets, since matchWrapped reads plain words only.
 var matchWrappers = map[string]bool{
 	"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "xargs": true,
 	"timeout": true, "gtimeout": true, "time": true, "gtime": true,
@@ -357,41 +362,58 @@ func (w *matchWalk) wrapperReason(c *syntax.CallExpr) (string, bool) {
 	if len(c.Args) < 2 {
 		return "", false
 	}
-	name := path.Base(c.Args[0].Lit())
+	name, _ := matchUnquoted(c.Args[0])
+	name = path.Base(name)
 	if !matchWrappers[name] {
 		return "", false
 	}
 	for i := 1; i < len(c.Args); i++ {
-		if _, _, found := w.lookup(c.Args[i:]); found {
+		if w.runsGateAt(c, i) {
 			return matchWrapperMiss(name, c.Args[:i]), true
 		}
 	}
 	return "", false
 }
 
+// runsGateAt is true when the words of c from i on spell a gate, or are a `<shell> -c` call or
+// an eval whose words mention one.
+func (w *matchWalk) runsGateAt(c *syntax.CallExpr, i int) bool {
+	if _, _, found := w.lookup(c.Args[i:]); found {
+		return true
+	}
+	_, nested := matchNestedShell(c.Args[i:])
+	return nested && matchMentions(w.text(c.Args[i+1].Pos(), c.End()), w.spellings)
+}
+
+// matchWrapperMiss gives timeout's reason first, wherever it sits before the gate, so a gate
+// behind timeout is always counted as one.
 func matchWrapperMiss(name string, before []*syntax.Word) string {
 	for _, word := range before {
-		if base := path.Base(word.Lit()); base == "timeout" || base == "gtimeout" {
+		v, _ := matchUnquoted(word)
+		if base := path.Base(v); base == "timeout" || base == "gtimeout" {
 			return matchTimeoutReason
 		}
+	}
+	if _, literal := matchLiteral(before[0]); !literal {
+		return "quoted spelling"
 	}
 	return "after the wrapper " + name
 }
 
 var matchShells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}
 
-func matchNestedShell(c *syntax.CallExpr) (string, bool) {
-	if len(c.Args) < 2 {
+func matchNestedShell(args []*syntax.Word) (string, bool) {
+	if len(args) < 2 {
 		return "", false
 	}
-	name := path.Base(c.Args[0].Lit())
+	name := path.Base(args[0].Lit())
 	if name == "eval" {
 		return "inside eval", true
 	}
 	if !matchShells[name] {
 		return "", false
 	}
-	for _, a := range c.Args[1:] {
+	for _, a := range args[1:] {
 		if flag := a.Lit(); len(flag) > 1 && flag[0] == '-' && flag[1] != '-' && strings.ContainsRune(flag, 'c') {
 			return "inside " + name + " -c", true
 		}

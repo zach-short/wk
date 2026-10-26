@@ -72,6 +72,13 @@ const matchTimeoutReason = "after the wrapper timeout: the wait for a place woul
 // matchWrapped returns the index of the first word after a chain of wrappers that wk reads
 // whole, such as `command time -p env -u X go test`. ok is false when args starts with no such
 // wrapper, or one of them holds a word wk does not read.
+//
+// A wrapper is known by its last path element, so ./time and bin/env count too (row 25 audit
+// N3, left as it is in row 27). Such a file is passed wrapper flags and then a gate's words, so
+// it runs a command made of its later words as the utility does, and the inserted wk run is
+// that command. The utility's own path differs by machine (/usr/bin/time, Homebrew's gtime, a
+// nix store), so a list of paths would refuse real ones. Reversal: accept only a bare name or
+// an absolute path here.
 func matchWrapped(args []*syntax.Word) (int, bool) {
 	i := 0
 	for i < len(args) {
@@ -103,7 +110,7 @@ func matchEnvArgs(args []*syntax.Word, at int) (int, bool) {
 		if !isAssign {
 			return i, true
 		}
-		if !matchEnvNameFree(name) {
+		if !matchEnvNameFree(name) || !matchAssignValueUnsplit(args[i]) {
 			return 0, false
 		}
 	}
@@ -127,18 +134,31 @@ func matchCommandArgs(args []*syntax.Word, at int) (int, bool) {
 // matchTimeArgs reads the options of the time utility, which runs where the keyword does not:
 // /usr/bin/time, `command time`, and `time` after an assignment. It reads the flags of macOS
 // (-a -h -l -p, -o FILE) and of GNU time (-a -p -q -v, -o FILE, -f FORMAT and their long
-// forms). Its report goes to stderr or the -o file, as the keyword's does, and -l still reads
-// the gate's usage, because wk run waits for the gate and a child's usage holds what it waited
-// for. Any other option, such as -V or --help, which run nothing, is refused.
+// forms). Its report goes to stderr or the -o file, as the keyword's does. After the insertion
+// it times wk run, which waits for the gate. On macOS (measured 2026-10-26, row 27) -l's real,
+// user and sys times and its maximum resident set size include the gate, because a process's
+// usage holds the children it waited for, but its instructions retired, cycles elapsed and peak
+// memory footprint describe wk run alone; real also counts the wait for a place. Any other
+// option, such as -V or --help, which run nothing, is refused.
+//
+// Every option word and every option argument must be a matchFixedWord (row 25 audit N2). An
+// empty $F in `-o $F` drops the word, so time writes to a file named after the next word and
+// runs the rest: the rewritten line would run `run --slot ...` where the original ran the gate's
+// second word. A glob or a brace can add words the same way. Such a line stays a miss.
 func matchTimeArgs(args []*syntax.Word, at int) (int, bool) {
 	for i := at + 1; i < len(args); i++ {
 		opt := args[i].Lit()
+		if strings.HasPrefix(opt, "-") && !matchFixedWord(args[i]) {
+			return 0, false
+		}
 		switch {
 		case opt == "--":
 			return i + 1, i+1 < len(args)
 		case matchTimeLongFlags[opt]:
 		case opt == "--output" || opt == "--format":
-			i++
+			if i++; i >= len(args) || !matchFixedWord(args[i]) {
+				return 0, false
+			}
 		case strings.HasPrefix(opt, "--output=") || strings.HasPrefix(opt, "--format="):
 		case strings.HasPrefix(opt, "--"):
 			return 0, false
@@ -147,12 +167,30 @@ func matchTimeArgs(args []*syntax.Word, at int) (int, bool) {
 			if !ok {
 				return 0, false
 			}
-			i += skip
+			if i += skip; skip == 1 && (i >= len(args) || !matchFixedWord(args[i])) {
+				return 0, false
+			}
 		default:
 			return i, true
 		}
 	}
 	return 0, false
+}
+
+// matchFixedWord is true for a word the shell passes on as exactly one word, whatever the
+// variables and the files hold: plain text with no expansion (matchPlainText), and no glob or
+// brace character outside quotes. A quoted format such as -f '%e %M' is one; $F, t*.txt and
+// {a,b} are not.
+func matchFixedWord(word *syntax.Word) bool {
+	if _, plain := matchPlainText(word); !plain {
+		return false
+	}
+	for _, part := range word.Parts {
+		if lit, ok := part.(*syntax.Lit); ok && strings.ContainsAny(lit.Value, "*?[{") {
+			return false
+		}
+	}
+	return true
 }
 
 var matchTimeLongFlags = map[string]bool{"--append": true, "--portability": true, "--quiet": true, "--verbose": true}
@@ -209,7 +247,7 @@ func matchEnvNameFree(name string) bool {
 }
 
 // matchAssignName reads NAME from a NAME=value word whose name is plain text; the value may be
-// quoted or hold expansions.
+// quoted or hold expansions, which matchAssignValueUnsplit reads for env.
 func matchAssignName(word *syntax.Word) (string, bool) {
 	if len(word.Parts) == 0 {
 		return "", false
@@ -222,12 +260,35 @@ func matchAssignName(word *syntax.Word) (string, bool) {
 	return name, found && matchEnvName.MatchString(name)
 }
 
+// matchAssignValueUnsplit is true when an env NAME=value argument stays one word. To env it is
+// an ordinary argument, so an unquoted expansion in its value is split (row 25 audit N2): with
+// X="1 2", `env A=$X go test` sets A=1 and runs `2 go test`, and after the insertion env would
+// run `2` with wk run's words as its arguments, so such a line stays a miss. An empty value
+// cannot move the gate, since the word keeps its literal NAME=, and a glob or a brace only makes
+// more NAME= words, so neither is refused. A quoted expansion is one word.
+func matchAssignValueUnsplit(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		switch part.(type) {
+		case *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // shellGate wraps a whole `<shell> -c <string>` call in one place, because the string is one
 // word to the outer parser and an insertion inside it would have to be quoted for the inner
 // shell. It does so only when the string is plain text with no expansion, parses, and every
 // spelling it mentions has one class, with the trims of all of them; a string holding a heavy
 // and a check gate would otherwise run the heavy one in a check place. ok is false when c is no
 // `<shell> -c` call or its words mention no spelling.
+//
+// A string that runs a gate behind timeout, `sh -c 'timeout 300 go test'`, is wrapped whole like
+// any other (row 27, from the row 25 audit N1): wk run waits for its place before the shell
+// starts, so timeout's clock starts after the wait, and the harm that keeps a gate behind
+// timeout a miss is absent. `timeout 300 sh -c '...'` is the other way round; wrapperReason logs
+// it with matchTimeoutReason.
 func (w *matchWalk) shellGate(c *syntax.CallExpr) (matchGate, string, bool) {
 	name, at, reason := matchShellString(c.Args)
 	if name == "" || !matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings) {

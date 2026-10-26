@@ -63,6 +63,27 @@ var matchTestWrapperRewrites = []matchTestCase{
 	{"/usr/bin/time in a loop under the time keyword", `time (for p in a b; do /usr/bin/time -p go test ./$p; done)`,
 		`time (for p in a b; do /usr/bin/time -p /x/wk run --slot check -- go test ./$p; done)`, nil},
 
+	// Row 27: a time option's argument is read when the shell passes it on as one word whatever
+	// the variables and files hold; an env value stays one word unless an unquoted expansion
+	// splits it. A wrapper is known by its last path element (row 25 audit N3, left as it is).
+	{"-o with a quoted file name", `/usr/bin/time -o "t 1.txt" go test ./...`,
+		`/usr/bin/time -o "t 1.txt" /x/wk run --slot check -- go test ./...`, nil},
+	{"-o with a tilde", `/usr/bin/time -o ~/t.txt go test ./...`,
+		`/usr/bin/time -o ~/t.txt /x/wk run --slot check -- go test ./...`, nil},
+	{"env with a quoted expansion", `env A="$X" go test ./...`,
+		`env A="$X" /x/wk run --slot check -- go test ./...`, nil},
+	{"env with an empty value", `env A= go test ./...`,
+		`env A= /x/wk run --slot check -- go test ./...`, nil},
+	{"env with a glob in the value, which only makes more A= words", `env A=x* go test ./...`,
+		`env A=x* /x/wk run --slot check -- go test ./...`, nil},
+	{"a file named time counts as the wrapper", `./time -p go test ./...`,
+		`./time -p /x/wk run --slot check -- go test ./...`, nil},
+
+	// Row 27: wk run waits for its place before the shell starts, so timeout's clock inside the
+	// string starts after the wait; the string is wrapped whole as any other.
+	{"sh -c around timeout", `sh -c 'timeout 300 go test ./...'`,
+		`/x/wk run --slot check -- sh -c 'timeout 300 go test ./...'`, nil},
+
 	// $( ) and backticks: the insertion sits at the start of the substituted command. wk run
 	// writes its waiting, place and trim lines to stderr and nothing to stdout, so the captured
 	// text is the same while stderr stays out of the capture; a substitution that sends stderr
@@ -183,6 +204,61 @@ var matchTestWrapperUntouched = []matchTestCase{
 		[]Missed{{"/usr/bin/time -p go test ./...", "inside $( ) that captures stderr"}}},
 	{"command time on a line that holds wk run", `command time go test ./...; wk run -- bun run lint`, `command time go test ./...; wk run -- bun run lint`,
 		[]Missed{{"command time go test ./...", "the line already holds wk run"}}},
+
+	// Row 27, from the row 25 audit N2: an option argument that an empty variable drops, or a
+	// glob or brace splits, would move the gate, so the line stays a miss.
+	{"-o $F", `/usr/bin/time -o $F go test ./...`, `/usr/bin/time -o $F go test ./...`,
+		[]Missed{{"/usr/bin/time -o $F go test ./...", "after the wrapper time"}}},
+	{"-f $FMT", `gtime -f $FMT go test ./...`, `gtime -f $FMT go test ./...`,
+		[]Missed{{"gtime -f $FMT go test ./...", "after the wrapper gtime"}}},
+	{"-o with a glob", `/usr/bin/time -o t*.txt go test ./...`, `/usr/bin/time -o t*.txt go test ./...`,
+		[]Missed{{"/usr/bin/time -o t*.txt go test ./...", "after the wrapper time"}}},
+	{"-o with a brace", `/usr/bin/time -o {a,b} go test ./...`, `/usr/bin/time -o {a,b} go test ./...`,
+		[]Missed{{"/usr/bin/time -o {a,b} go test ./...", "after the wrapper time"}}},
+	{"-o with a glob attached", `/usr/bin/time -ot?.txt go test ./...`, `/usr/bin/time -ot?.txt go test ./...`,
+		[]Missed{{"/usr/bin/time -ot?.txt go test ./...", "after the wrapper time"}}},
+	{"-o with an expansion attached", `/usr/bin/time -o$F go test ./...`, `/usr/bin/time -o$F go test ./...`,
+		[]Missed{{"/usr/bin/time -o$F go test ./...", "after the wrapper time"}}},
+	{"--output $F", `/usr/bin/time --output $F go test ./...`, `/usr/bin/time --output $F go test ./...`,
+		[]Missed{{"/usr/bin/time --output $F go test ./...", "after the wrapper time"}}},
+	{"--output=$F", `/usr/bin/time --output=$F go test ./...`, `/usr/bin/time --output=$F go test ./...`,
+		[]Missed{{"/usr/bin/time --output=$F go test ./...", "after the wrapper time"}}},
+	{"--format= with a brace", `gtime --format={a,b} go test ./...`, `gtime --format={a,b} go test ./...`,
+		[]Missed{{"gtime --format={a,b} go test ./...", "after the wrapper gtime"}}},
+	{"-o with a quoted expansion is refused too", `/usr/bin/time -o "$F" go test ./...`, `/usr/bin/time -o "$F" go test ./...`,
+		[]Missed{{`/usr/bin/time -o "$F" go test ./...`, "after the wrapper time"}}},
+	{"-o with no argument before the gate", `/usr/bin/time -o`, `/usr/bin/time -o`, nil},
+	{"env with an unquoted expansion that may split", `env A=$X go test ./...`, `env A=$X go test ./...`,
+		[]Missed{{"env A=$X go test ./...", "after the wrapper env"}}},
+	{"env with a substitution in the value", `env A=$(date) go test ./...`, `env A=$(date) go test ./...`,
+		[]Missed{{"env A=$(date) go test ./...", "after the wrapper env"}}},
+	{"env with an expansion after text", `env A=x${Y} go test ./...`, `env A=x${Y} go test ./...`,
+		[]Missed{{"env A=x${Y} go test ./...", "after the wrapper env"}}},
+
+	// Row 27, from the row 25 audit N1: a shell string behind timeout runs its gate after the
+	// wait would start timeout's clock, so it is logged with timeout's reason, as a gate is.
+	{"timeout over sh -c", `cd web && timeout 300 sh -c 'bun run lint' | tail -5`, `cd web && timeout 300 sh -c 'bun run lint' | tail -5`,
+		[]Missed{{"timeout 300 sh -c 'bun run lint'", matchTimeoutReason}}},
+	{"timeout over bash -c in double quotes", `timeout 300 bash -c "cd web && go test ./..."`, `timeout 300 bash -c "cd web && go test ./..."`,
+		[]Missed{{`timeout 300 bash -c "cd web && go test ./..."`, matchTimeoutReason}}},
+	{"gtimeout and env over sh -c", `gtimeout 30 env -u X sh -c 'go test ./...'`, `gtimeout 30 env -u X sh -c 'go test ./...'`,
+		[]Missed{{"gtimeout 30 env -u X sh -c 'go test ./...'", matchTimeoutReason}}},
+	{"timeout over sh -c with no gate", `timeout 300 sh -c 'echo hi'`, `timeout 300 sh -c 'echo hi'`, nil},
+	{"another wrapper over sh -c is logged under its name", `nohup sh -c 'go test ./...'`, `nohup sh -c 'go test ./...'`,
+		[]Missed{{"nohup sh -c 'go test ./...'", "after the wrapper nohup"}}},
+
+	// Row 27, from the row 25 audit N6: a quoted wrapper word is logged as a quoted spelling, and
+	// a quoted timeout keeps timeout's reason.
+	{"a quoted /usr/bin/time", `"/usr/bin/time" -p go test ./...`, `"/usr/bin/time" -p go test ./...`,
+		[]Missed{{`"/usr/bin/time" -p go test ./...`, "quoted spelling"}}},
+	{"a quoted env", `'env' -u X go test ./...`, `'env' -u X go test ./...`,
+		[]Missed{{`'env' -u X go test ./...`, "quoted spelling"}}},
+	{"an escaped time", `\time -p go test ./...`, `\time -p go test ./...`,
+		[]Missed{{`\time -p go test ./...`, "quoted spelling"}}},
+	{"a quoted timeout", `"timeout" 300 go test ./...`, `"timeout" 300 go test ./...`,
+		[]Missed{{`"timeout" 300 go test ./...`, matchTimeoutReason}}},
+	{"a quoted timeout behind env", `env -u X "timeout" 300 go test ./...`, `env -u X "timeout" 300 go test ./...`,
+		[]Missed{{`env -u X "timeout" 300 go test ./...`, matchTimeoutReason}}},
 
 	// Row 22 audit B2: wk run's stderr lines would enter a capture that takes stderr.
 	{"2>&1 on each command in $( )", `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`, `test -z "$(go vet ./... 2>&1; go test ./... 2>&1)"`,
