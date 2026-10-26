@@ -271,3 +271,14 @@ Empty. Row 19 left out. Follow-up to write after row 22 lands: the hook writes t
 
 ### Row 27, audit (a047a81c66fb41c03), 2026-10-26 13:56 EDT
 - Non-blocking N1-N4 (in close-out). Replay byte-identical. 20/31 confirmed. Landed main 54c6eba..d08f2cc, pushed. Board DONE, log written.
+
+## Row 28, opened 2026-10-26 14:11 EDT
+- 28 | Opus 5.5 | IN FLIGHT | builder a19195291b602c211, row-28-build | row 27 audit N1-N4
+
+### Row 28, builder (a19195291b602c211, row-28-build), 2026-10-26 14:20 EDT
+- 0fc095b on 16834e0: 3 files +224 -20. Gates green. Replay byte-identical incl. reasons. 22/36 new cases fail on main.
+- Calls: capture reason wins over every gate reason (reversal: timeout only); $ refused in time args too (reversal: drop from matchFixedWord); ./timeout keeps timeout reason; ~/bin/time relative.
+- Audit a4868330748d552b7 launched.
+
+### Row 28, audit (a4868330748d552b7), 2026-10-26 14:28 EDT
+- Non-blocking N-A..N-D (in close-out); zsh not verified (guard refused zsh). Replay identical. Landed main 16834e0..0fc095b, pushed. Board DONE, log written.
