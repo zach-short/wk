@@ -282,3 +282,5 @@ Empty. Row 19 left out. Follow-up to write after row 22 lands: the hook writes t
 
 ### Row 28, audit (a4868330748d552b7), 2026-10-26 14:28 EDT
 - Non-blocking N-A..N-D (in close-out); zsh not verified (guard refused zsh). Replay identical. Landed main 16834e0..0fc095b, pushed. Board DONE, log written.
+
+- 2026-10-26 16:52 EDT row 29 opened from the row 26 and row 28 open findings (owner said "continue"), claimed, builder Opus 5.5 launched in its own worktree, branch row-29-build. Judgment call: N-A refuses `$=` on the safe side when zsh cannot be run (reversal: drop the refusal if a zsh check shows no split).
