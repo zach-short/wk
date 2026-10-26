@@ -225,3 +225,30 @@ Empty. Row 19 left out. Follow-up to write after row 22 lands: the hook writes t
 ### Row 22, audit 5 (a82eac2b6a6fd7926), 2026-10-26 12:02 EDT
 - Clean. Reproduced 505528c; diffstat 10 files +1068 -64. Gates green (internal/wk 48.6 s, lint 0 issues). Numeric fd rule checked in every capture path; bash 3.2.57 experiments agree; overflow fds are rejected by bash, so no capture is missed.
 - Landed: main b0a1368..505528c fast-forward, pushed 12:02 EDT. Board DONE, log line written.
+
+## After the run: rows 24 and 25, opened 2026-10-26 13:19 EDT
+- 24 | Opus 5.5 | IN FLIGHT | builder a197c885e59552959, branch row-24-build | warm line names its source; stats reads it
+- 25 | Opus 5.5 | IN FLIGHT | builder a4558eee9bf1c618f, branch row-25-build | replay missed.log; route /usr/bin/time and compound time forms
+
+### Row 24, builder (a197c885e59552959, row-24-build), 2026-10-26 13:23 EDT
+- 46494ee on 405ec7e: 6 files +118 -22 (README, hook.go, hook_test.go, new.go, stats.go, stats_test.go). Gates green (internal/wk 53.0 s, lint 0). Real-log warm numbers equal before and after (ezh pool 175, template none, unattributed 202).
+- Calls: createFrom beside create (trial.go untouched); sourced warm line with no create line counts at its source; sourced creates still cross old-format ones.
+- Found: wk stats --json order unstable on equal held_seconds in internal/slot (new row later).
+- Judgment call (this session, caught at once): update help text at cmd/wk/main.go:135; main.go added to row 24's cell. Reversal: revert that hunk and drop it from the cell.
+
+### Row 25, builder (a4558eee9bf1c618f, row-25-build), 2026-10-26 13:26 EDT
+- 305ea4d on 405ec7e: match.go, match_wrappers.go, match_wrappers_test.go, +227 -20. Gates green. Replay of ~/.wk/slots/missed.log (112, ezh): main 98 routed, 9 stderr-capture misses, 4 timeout misses, 1 zsh parse; after 102/9/0/1. No /usr/bin/time lines in the log; routed with tests anyway.
+- Judgment call (this session, by risk: a wrong answer passes every gate): do not route timeout/gtimeout; log it as a miss with a reason. Reason: 118 waits over 10 min, so the wait would spend the timeout's clock and exit 124 before the gate starts. Reversal: re-add timeout to matchWrapperReaders. Sent back to the builder.
+- Open: timeout ... sh -c not routed or logged.
+
+### Row 24, audit (a8b3be3231d063483), 2026-10-26 13:28 EDT
+- Clean. Reproduced d3f834c; 7 files +121 -24. Gates green. Real-log warm numbers equal with both binaries. Non-blocking: repeats sort has no tie-break (internal/slot).
+- Landed: main 405ec7e..d3f834c, pushed. Board DONE, log line written.
+
+### Row 25, builder rework (a4558eee9bf1c618f), 2026-10-26 13:30 EDT
+- 6fce4fb on 305ea4d: timeout/gtimeout not routed, logged "after the wrapper timeout: the wait for a place would count against its clock". 3 files +202 -22. Gates green. Replay: 98 routed (same as main), 9 stderr, 1 zsh, 4 timeout (miss, new reason). /usr/bin/time, gtime, command time routed with tests.
+- Correction: builder text said the owner decided timeout; this session decided it. Sent: merge main d3f834c, re-gate, before audit.
+
+### Row 25, audit (a2b8dea9f59de0c1f), 2026-10-26 13:39 EDT
+- Non-blocking only. Reproduced 32286e6, replay equal, gates green. Findings N1-N6 in the item close-out.
+- Landed: main d3f834c..32286e6, pushed 13:39 EDT. Board DONE, log line written.
