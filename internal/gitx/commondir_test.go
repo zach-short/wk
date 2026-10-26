@@ -104,14 +104,41 @@ func TestCommonDirAgreesWithGitOnGitDirectoriesAndLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, dir := range []string{
+	// Row 22 second audit B: an inner repository whose .git fails git's own test of a git
+	// directory. Git skips it and names the outer repository.
+	broken := map[string]func(gitdir string) error{
+		"garbage-head": func(g string) error { return os.WriteFile(filepath.Join(g, "HEAD"), []byte("garbage\n"), 0o644) },
+		"head-dir": func(g string) error {
+			if err := os.Remove(filepath.Join(g, "HEAD")); err != nil {
+				return err
+			}
+			return os.Mkdir(filepath.Join(g, "HEAD"), 0o755)
+		},
+		"head-outside-refs": func(g string) error { return os.WriteFile(filepath.Join(g, "HEAD"), []byte("ref: foo/bar\n"), 0o644) },
+		"refs-file": func(g string) error {
+			if err := os.RemoveAll(filepath.Join(g, "refs")); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(g, "refs"), nil, 0o644)
+		},
+	}
+	dirs := []string{
 		inner,
 		filepath.Join(inner, "objects"),
 		filepath.Join(f.Repo, ".git", "modules", "sub"),
 		filepath.Join(f.Repo, ".git", "refs"),
 		filepath.Join(f.Repo, "sub"),
 		wt,
-	} {
+	}
+	for name, breakIt := range broken {
+		d := filepath.Join(f.Repo, name)
+		f.Git(t, "init", "--quiet", d)
+		if err := breakIt(filepath.Join(d, ".git")); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, d)
+	}
+	for _, dir := range dirs {
 		t.Run(dir, func(t *testing.T) {
 			want, err := Run(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 			got, ok := CommonDir(dir)
