@@ -51,6 +51,7 @@ const usage = `usage:
   wk hook lease --repo <absolute main checkout> < <Claude Code hook input>
   wk run [--slot <class>] [--keep] [--trim <path>]... -- <command> [args...]
   wk slots [--json]
+  wk stats [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--json]
 
 wk alone, in a terminal, opens setup: it reads the repository, writes its config and warms the
 template. Once the config exists it opens a home screen instead, and never overwrites the file.
@@ -126,6 +127,13 @@ level, is removed after the command ends, except with --keep and in the main che
 template or a pool slot.
 wk slots lists each class's places, waiters and last runs, and the last day of missed.log and
 errors.log; --json prints the same as one JSON document.
+wk stats reports from wk's own logs how the places and the warm creates performed between two
+local dates, both included (every date by default): per class and per command, the runs, nonzero
+exits, wait and run times; how the waits overlapped; the waits over 10 minutes and the commands
+that held the places during them; commands issued again in the same directory within 10 minutes
+of the last one ending; missed.log by reason and the hook's deadline misses in errors.log; and
+each repository's warm creates in hook.log, from a pool slot or the template. --json prints the
+same as one JSON document, with every row the text leaves out.
 `
 
 // version is set at release time with -ldflags "-X main.version=<tag>".
@@ -199,6 +207,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runHooks(home, repoDir, rest[1], stdout, stderr)
 	case rest[0] == "slots":
 		return runSlots(home, rest[1:], stdout, stderr)
+	case rest[0] == "stats":
+		return runStats(home, rest[1:], stdout, stderr)
 	case rest[0] == "claim" || rest[0] == "lease" || rest[0] == "release" || rest[0] == "status":
 		return runLeases(home, repoDir, rest, stdout, stderr)
 	case rest[0] == "submit":
@@ -527,6 +537,41 @@ func runSlots(home string, args []string, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	return fail(stderr, enc.Encode(st), exitError)
+}
+
+func runStats(home string, args []string, stdout, stderr io.Writer) int {
+	r, asJSON, err := parseStats(args)
+	if err != nil {
+		return fail(stderr, err, exitUsage)
+	}
+	st, err := wk.ReadStats(home, r)
+	if err != nil {
+		return fail(stderr, err, exitError)
+	}
+	if !asJSON {
+		_, _ = fmt.Fprint(stdout, st.Text())
+		return exitOK
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	return fail(stderr, enc.Encode(st), exitError)
+}
+
+func parseStats(args []string) (r slot.Range, asJSON bool, err error) {
+	dates := map[string]string{}
+	for i := 0; i < len(args); i++ {
+		switch flag := args[i]; {
+		case flag == "--json" && !asJSON:
+			asJSON = true
+		case (flag == "--since" || flag == "--until") && dates[flag] == "" && i+1 < len(args):
+			i++
+			dates[flag] = args[i]
+		default:
+			return slot.Range{}, false, fmt.Errorf("unexpected argument to wk stats: %q", flag)
+		}
+	}
+	r, err = slot.ParseRange(dates["--since"], dates["--until"])
+	return r, asJSON, err
 }
 
 // runPreToolUse is wk hook pre-tool-use. It exits 0 on every path, a panic included: exit 2 from

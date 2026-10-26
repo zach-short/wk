@@ -109,6 +109,25 @@ wk slots
 
 `wk slots` lists each class with its capacity, the holder of each place, the waiters in queue order and the last five runs, then the count and the newest line of `missed.log` and `errors.log` from the last 24 hours. `wk slots --json` prints the same as one JSON document. It reads the places without taking one.
 
+### How the places performed
+
+```bash
+wk stats --since 2026-10-17 --until 2026-10-26
+wk stats --json
+```
+
+`wk stats` reads wk's own logs and reports how the places and the warm creates performed between two local dates, both days included. Without `--since` or `--until` that side of the range is open. It reads `runs.log`, `missed.log` and `errors.log` in the slots directory, and `hook.log` of every repository under `WK_HOME`. A run's start is its end minus its run time, and it was queued its wait before that. The report has these parts:
+
+- For each class: the runs, the nonzero exits (a signal such as `SIGTERM` counts as one), and the total, median and 90th percentile of the waits and the run times.
+- For each command in each class, grouped by the subdirectory of the worktree (`backend`, `packages/core`, or `.` for the top level) and the command with its whitespace collapsed: the same figures, ranked by total wait.
+- The overlap of the waits: the agent time spent waiting, the wall-clock time in which at least one run waited, and the most runs queued at once.
+- The waits over 10 minutes, their count and total, and the commands that held the class's places while one of them went on, ranked by the time held inside those waits. Overlapping waits are merged first, so a run is counted once for the time it held a place.
+- Repeats: a command issued again in the same directory within 10 minutes of the previous run of it ending, with how many followed a nonzero exit.
+- `missed.log` lines counted by reason, and the hook's deadline misses in `errors.log` with the lowest and highest latency.
+- For each repository, the warm creates from a pool slot and from the template: count, total, median and 90th percentile. A create is from the pool when `hook.log` has a `claim pool slot` line between its `WorktreeCreate` line and its `warm` line.
+
+The text shows the head of each ranking; `wk stats --json` prints every row as one JSON document. A `runs.log` line that cannot be read is counted as unreadable and left out. The subdirectory comes from the path, since the worktree may be gone: the part after `.claude/worktrees/<name>/`, else the part after a directory named like a repository with a config in `WK_HOME`, else the longest subdirectory seen in those paths that ends it (a landing trial copy under `/tmp`).
+
 ### The hook
 
 `wk hook pre-tool-use` sees every `Bash` call before it runs. When the command holds a gate spelling of the repository's slots file, the hook returns the command with `<wk> run --slot <class> [--trim <path>]... -- ` inserted before that gate, and changes no other byte:
