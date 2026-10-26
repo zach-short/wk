@@ -111,6 +111,39 @@ func TestCrossedCreatesAreUnattributed(t *testing.T) {
 	}
 }
 
+// sourcedHookLog is crossedHookLog as the hook writes it since 2026-10-26, with the source on
+// each warm line, plus an old-format create (o) open across the sourced ones and a sourced warm
+// line with no WorktreeCreate line. Every sourced create counts at its source; o stays
+// unattributed, since its own warm line names none.
+const sourcedHookLog = `2026-10-21T09:00:00-04:00 WorktreeCreate name=p cwd=/p/ezh base=d534a262c7
+2026-10-21T09:00:00-04:00 WorktreeCreate name=o cwd=/p/ezh base=d534a262c7
+2026-10-21T09:00:00-04:00 WorktreeCreate name=t cwd=/p/ezh base=d534a262c7
+wk: claim pool slot wk-pool-11111111   0.05s
+wk: worktree add --no-checkout         0.07s
+2026-10-21T09:00:01-04:00 warm /p/ezh/.claude/worktrees/p in 1.00s from pool
+2026-10-21T09:00:20-04:00 warm /p/ezh/.claude/worktrees/o in 20.00s
+2026-10-21T09:00:30-04:00 warm /p/ezh/.claude/worktrees/t in 30.00s from template
+2026-10-21T09:01:00-04:00 warm /p/ezh/.claude/worktrees/orphan in 3.00s from pool
+`
+
+func TestSourcedCrossedCreatesAreAttributed(t *testing.T) {
+	t.Parallel()
+	warm := warmFixture(t, map[string]string{"ezh": sourcedHookLog})
+	if len(warm) != 1 {
+		t.Fatalf("warm %+v, want ezh", warm)
+	}
+	w := warm[0]
+	if w.Pool != (slot.Distribution{Count: 2, Total: 4, Median: 1, P90: 3}) {
+		t.Errorf("pool %+v, want p and the orphan", w.Pool)
+	}
+	if w.Template != (slot.Distribution{Count: 1, Total: 30, Median: 30, P90: 30}) {
+		t.Errorf("template %+v, want t", w.Template)
+	}
+	if w.Unattributed != (slot.Distribution{Count: 1, Total: 20, Median: 20, P90: 20}) {
+		t.Errorf("unattributed %+v, want the old-format o alone", w.Unattributed)
+	}
+}
+
 func hookLine(at, rest string) string { return "2026-10-21T" + at + "-04:00 " + rest + "\n" }
 
 func createLine(at, name string) string {

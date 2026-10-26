@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -59,12 +60,41 @@ func TestHookMakesAWarmWorktreeFromTheSessionsHead(t *testing.T) {
 	if !refilled {
 		t.Fatal("the hook did not top the pool up")
 	}
-	if log := hookLog(t, f); !strings.Contains(log, "warm "+path) {
-		t.Fatalf("hook.log:\n%s", log)
-	}
+	assertWarmLine(t, hookLog(t, f), path, "template")
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr on success: %q", stderr.String())
 	}
+}
+
+// assertWarmLine checks that hook.log ends the create of path with a warm line naming source,
+// in the shape wk stats reads.
+func assertWarmLine(t *testing.T, log, path, source string) {
+	t.Helper()
+	want := regexp.MustCompile(`(?m)^\S+ warm ` + regexp.QuoteMeta(path) + ` in [0-9.]+s from ` + source + `$`)
+	if !want.MatchString(log) {
+		t.Fatalf("hook.log has no warm line for %s from %s:\n%s", path, source, log)
+	}
+	if at, name, _, got, ok := warmLine(want.FindString(log)); !ok || at.IsZero() || name != filepath.Base(path) || got != source {
+		t.Fatalf("wk stats reads the warm line as %v %q %q %v", at, name, got, ok)
+	}
+}
+
+func TestHookWarmLineNamesAPoolSlot(t *testing.T) {
+	f := testrepo.New(t)
+	mustFill(t, openPool(t, f, io.Discard, 1, 0))
+	var stderr bytes.Buffer
+	path, err := WorktreeCreate(f.Home, hookInput(t, "agent-pool01", f.Repo), &stderr, func(e *Env) {
+		e.Cfg.Pool.Size = 1
+		e.Refill = func() {}
+	})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	log := hookLog(t, f)
+	if !strings.Contains(log, "claim pool slot") {
+		t.Fatalf("the hook did not take the slot:\n%s", log)
+	}
+	assertWarmLine(t, log, path, "pool")
 }
 
 func TestHookFallsBackToAPlainWorktree(t *testing.T) {

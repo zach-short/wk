@@ -63,21 +63,36 @@ func (e *Env) New(row string, c Checkout) (string, error) {
 // commit when branch is "" (the trial): from a pool slot when one is ready, else from the
 // template. Either way the pool is topped up afterwards, in the background.
 func (e *Env) create(dir, branch, commit string, sparse bool) (string, error) {
+	path, _, err := e.createFrom(dir, branch, commit, sparse)
+	return path, err
+}
+
+// The sources createFrom reports. The hook writes one at the end of its warm line in hook.log,
+// and wk stats reads it there, so a rename changes what stats can read.
+const (
+	sourcePool     = "pool"
+	sourceTemplate = "template"
+)
+
+// createFrom is create that also says where the workspace came from: sourcePool when a pool
+// slot was claimed, sourceTemplate when the template was cloned, "" when it failed before either.
+func (e *Env) createFrom(dir, branch, commit string, sparse bool) (path, source string, err error) {
 	if _, err := os.Lstat(dir); err == nil {
-		return "", fmt.Errorf("%s %w", dir, errExists)
+		return "", "", fmt.Errorf("%s %w", dir, errExists)
 	}
 	if branch != "" && gitx.BranchExists(e.Repo.Primary, branch) {
-		return "", fmt.Errorf("branch %s already exists", branch)
+		return "", "", fmt.Errorf("branch %s already exists", branch)
 	}
 	defer e.refill()
 	path, claimed, err := e.claim(dir, branch, commit, sparse)
 	if claimed {
-		return path, err
+		return path, sourcePool, err
 	}
 	if err != nil {
 		e.say("pool: %v; making the workspace from the template", err)
 	}
-	return e.createCold(dir, branch, commit, sparse)
+	path, err = e.createCold(dir, branch, commit, sparse)
+	return path, sourceTemplate, err
 }
 
 func (e *Env) createCold(dir, branch, commit string, sparse bool) (string, error) {
