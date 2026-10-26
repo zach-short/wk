@@ -63,8 +63,9 @@ func matchSpellings(sf SlotsFile) []matchSpelling {
 }
 
 type matchInsert struct {
-	at   uint
-	text string
+	at    uint
+	text  string
+	entry MatchEntry
 }
 
 type matchWalk struct {
@@ -164,10 +165,11 @@ func (w *matchWalk) call(c *syntax.CallExpr) {
 	}
 	g, reason := w.gate(c)
 	switch {
-	case reason != "" && w.stderrCaptured != "":
+	case (reason != "" || g.word != nil) && w.stderrCaptured != "":
 		// Row 28, from the row 27 audit N4: inside a substitution that captures stderr no gate
 		// is rewritten whatever else holds it back, so that reason is logged, and wk stats counts
-		// `x=$(timeout 300 sh -c 'go test' 2>&1)` under the capture, not under timeout.
+		// `x=$(timeout 300 sh -c 'go test' 2>&1)` under the capture, not under timeout. Row 29
+		// (N-D): on a line that holds wk run too, where it logged that reason before.
 		w.miss(c, w.stderrCaptured)
 	case reason != "":
 		w.miss(c, reason)
@@ -306,8 +308,13 @@ func matchExecDups(s *syntax.Stmt) bool {
 }
 
 // missAll records every spelling under n with the reason of the outermost place that kept it
-// from being rewritten.
+// from being rewritten. Inside a substitution that captures stderr that place is the capture,
+// whose reason call logs over any other (row 29, from the row 28 audit N-D: a function body, a
+// coproc or a process substitution inside such a capture logged its own reason before).
 func (w *matchWalk) missAll(n syntax.Node, reason string) {
+	if w.stderrCaptured != "" {
+		reason = w.stderrCaptured
+	}
 	syntax.Walk(n, func(n syntax.Node) bool {
 		if c, ok := n.(*syntax.CallExpr); ok && !w.isWKRun(c) {
 			if _, _, found := w.lookup(c.Args); found {
@@ -341,10 +348,13 @@ func (w *matchWalk) unmatchedReason(c *syntax.CallExpr) (string, bool) {
 	return w.wrapperReason(c)
 }
 
-// The string a nested shell runs is one word to this parser, so it is searched as text.
+// nestedShellReason logs a `<shell> -c` call or an eval whose string runs a gate. The string is
+// one word to this parser, so runsGateAt parses it as a line of its own (row 29, the row 28
+// builder's open item: `eval 'echo go test'` runs no gate and is not logged); a string that is
+// not plain text or does not parse is searched as text, as before.
 func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 	reason, ok := matchNestedShell(c.Args)
-	return reason, ok && matchMentions(w.text(c.Args[1].Pos(), c.End()), w.spellings)
+	return reason, ok && w.runsGateAt(c, 0)
 }
 
 // A wrapper runs a command made of its later words, so a gate behind one runs unslotted. It is
@@ -397,13 +407,49 @@ func (w *matchWalk) runsGateAt(c *syntax.CallExpr, i int) bool {
 		return false
 	}
 	if text, plain := matchNestedText(args); plain {
-		if file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), ""); err == nil {
-			inner := matchWalk{src: text, exe: w.exe, spellings: w.spellings}
-			inner.stmts(file.Stmts)
-			return len(inner.inserts) > 0 || len(inner.missed) > 0
+		if runs, _, parsed := w.nestedGates(text); parsed {
+			return runs
 		}
 	}
 	return matchMentions(w.text(args[1].Pos(), c.End()), w.spellings)
+}
+
+// nestedGates parses text, the string of a `<shell> -c` call or an eval, and walks it as a line
+// of its own. runs is true when the walk finds a gate it would rewrite or log, or a wk run whose
+// later words run one: the walk leaves a wk run alone, but behind a wrapper the bare form
+// `timeout 30 wk run -- go test` is logged, so `timeout 30 sh -c 'wk run -- go test'` is too
+// (row 29, from the row 28 audit N-B). found lists the spellings of those gates, for shellGate's
+// class. parsed is false when text does not parse.
+func (w *matchWalk) nestedGates(text string) (runs bool, found []matchSpelling, parsed bool) {
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), "")
+	if err != nil {
+		return false, nil, false
+	}
+	inner := matchWalk{src: text, exe: w.exe, spellings: w.spellings}
+	inner.wrapped = inner.holdsWKRun(file)
+	inner.stmts(file.Stmts)
+	for _, in := range inner.inserts {
+		found = append(found, matchSpelling{entry: in.entry})
+	}
+	for _, m := range inner.missed {
+		found = append(found, matchMentioned(m.Command, w.spellings)...)
+	}
+	runs = len(inner.inserts) > 0 || len(inner.missed) > 0
+	syntax.Walk(file, func(n syntax.Node) bool {
+		c, ok := n.(*syntax.CallExpr)
+		if !ok || !inner.isWKRun(c) {
+			return true
+		}
+		for j := 2; j < len(c.Args); j++ {
+			if inner.runsGateAt(c, j) {
+				runs = true
+				found = append(found, matchMentioned(inner.text(c.Args[j].Pos(), c.End()), w.spellings)...)
+				break
+			}
+		}
+		return true
+	})
+	return runs, found, true
 }
 
 // matchNestedText is the text a `<shell> -c` call or an eval runs, when every word of it is
@@ -428,25 +474,39 @@ func matchNestedText(args []*syntax.Word) (string, bool) {
 }
 
 // matchWrapperMiss gives timeout's reason first, wherever it sits before the gate, so a gate
-// behind timeout is always counted as one; ./timeout counts too. Then a quoted first word, then
-// a wrapper name spelled as a relative path anywhere before the gate (row 28), which
-// matchWrapped does not read.
+// behind timeout is always counted as one; ./timeout counts too. Then a quoted wrapper word
+// anywhere before the gate, then a wrapper name spelled as a relative path (row 28) or under a
+// home directory (row 29) anywhere before the gate, which matchWrapped does not read. An
+// assignment word is no wrapper word: env X=/a/timeout runs no timeout.
+//
+// Row 29, from the row 28 audit N-D: before it only the first word was checked for quotes, so
+// `env -u X "time" -p go test` was logged after the wrapper env, and an assignment whose value
+// ended in /timeout took timeout's reason. Labels only; no rewrite changed.
 func matchWrapperMiss(name string, before []*syntax.Word) string {
+	words := make([]*syntax.Word, 0, len(before))
 	for _, word := range before {
+		if _, isAssign := matchAssignName(word); !isAssign {
+			words = append(words, word)
+		}
+	}
+	for _, word := range words {
 		v, _ := matchUnquoted(word)
 		if base := path.Base(v); base == "timeout" || base == "gtimeout" {
 			return matchTimeoutReason
 		}
 	}
-	if _, literal := matchLiteral(before[0]); !literal {
-		return "quoted spelling"
-	}
-	for _, word := range before {
-		if _, isAssign := matchAssignName(word); isAssign {
-			continue
+	for _, word := range words {
+		v, unquoted := matchUnquoted(word)
+		if _, literal := matchLiteral(word); unquoted && !literal && matchWrappers[path.Base(v)] {
+			return "quoted spelling"
 		}
+	}
+	for _, word := range words {
 		lit := word.Lit()
 		if _, relative := matchWrapperName(lit); relative && matchWrappers[path.Base(lit)] {
+			if strings.HasPrefix(lit, "~") {
+				return matchHomeWrapperReason
+			}
 			return matchRelativeWrapperReason
 		}
 	}
@@ -608,15 +668,12 @@ func (w *matchWalk) insert(c *syntax.CallExpr, g matchGate) {
 		w.miss(c, "the wk path or the entry cannot be quoted")
 		return
 	}
-	if w.stderrCaptured != "" {
-		w.miss(c, w.stderrCaptured)
-		return
-	}
+	// call logs a gate inside a capture of stderr before it reaches insert.
 	if w.backquotes > 0 && strings.ContainsAny(prefix, "\\`$") {
 		w.miss(c, "inside backticks")
 		return
 	}
-	w.inserts = append(w.inserts, matchInsert{at: g.word.Pos().Offset(), text: prefix})
+	w.inserts = append(w.inserts, matchInsert{at: g.word.Pos().Offset(), text: prefix, entry: g.entry})
 }
 
 // Prefix is the text Rewrite inserts before a command that matches e. `wk hooks install` builds

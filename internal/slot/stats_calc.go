@@ -300,15 +300,7 @@ func repeats(runs []timedRun) Repeats {
 	})
 	for _, k := range keys {
 		rs := byKey[k]
-		sort.Slice(rs, func(a, b int) bool {
-			if !rs[a].queued.Equal(rs[b].queued) {
-				return rs[a].queued.Before(rs[b].queued)
-			}
-			if !rs[a].started.Equal(rs[b].started) {
-				return rs[a].started.Before(rs[b].started)
-			}
-			return rs[a].ended.Before(rs[b].ended)
-		})
+		sort.Slice(rs, func(a, b int) bool { return runBefore(rs[a], rs[b]) })
 		for i := 1; i < len(rs); i++ {
 			if gap := rs[i].queued.Sub(rs[i-1].ended); gap >= 0 && gap <= repeatWindow {
 				rep.add(rs[i-1], rs[i])
@@ -318,6 +310,35 @@ func repeats(runs []timedRun) Repeats {
 	}
 	rep.Commands = rankRepeats(counts)
 	return rep
+}
+
+// runBefore orders the runs of one command in one directory by when they were issued, then by
+// every other field of the line, so two runs with the same instants keep one order whatever the
+// input order. Row 29: before it the exit was not compared, and the run issued after two such
+// runs was a repeat after a failure or not by the input order. Runs equal in every field compared
+// here are the same line twice, and either order gives the same result.
+func runBefore(x, y timedRun) bool {
+	switch {
+	case !x.queued.Equal(y.queued):
+		return x.queued.Before(y.queued)
+	case !x.started.Equal(y.started):
+		return x.started.Before(y.started)
+	case !x.ended.Equal(y.ended):
+		return x.ended.Before(y.ended)
+	case x.Exit != y.Exit:
+		return x.Exit < y.Exit
+	case x.RunSeconds != y.RunSeconds:
+		return x.RunSeconds < y.RunSeconds
+	case x.WaitSeconds != y.WaitSeconds:
+		return x.WaitSeconds < y.WaitSeconds
+	case x.Class != y.Class:
+		return x.Class < y.Class
+	case x.PID != y.PID:
+		return x.PID < y.PID
+	case x.Workspace != y.Workspace:
+		return x.Workspace < y.Workspace
+	}
+	return x.Command < y.Command
 }
 
 func (rep *Repeats) add(prev, next timedRun) {

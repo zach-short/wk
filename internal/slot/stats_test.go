@@ -172,6 +172,32 @@ func TestRepeatsAreReissuesWithinTenMinutes(t *testing.T) {
 	}
 }
 
+// Row 29: two runs of one command with the same three instants differ only in their exit, and
+// the run issued after them is a repeat of whichever sorts last, so the per-key order must
+// compare the exit, or AfterFailure follows the input order.
+func TestRepeatsOrderRunsWithEqualTimesByExit(t *testing.T) {
+	t.Parallel()
+	m := time.Minute
+	ok := runLine(t0, "check", "0", 0, m, "/w/web", "go test")
+	failed := runLine(t0, "check", "1", 0, m, "/w/web", "go test")
+	next := runLine(t0.Add(3*m), "check", "0", 0, m, "/w/web", "go test")
+	var want Repeats
+	for i, lines := range [][]string{{ok, failed, next}, {failed, ok, next}, {next, failed, ok}, {next, ok, failed}} {
+		runs := timedRuns(t, lines...)
+		newRoots(t.TempDir()).resolve(runs)
+		got := repeats(runs)
+		if i == 0 {
+			want = got
+			if want.Count != 1 || want.AfterFailure != 1 {
+				t.Fatalf("repeats %+v, want one, after the failed run, which sorts after exit 0", want)
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("order %d gave %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestSubdirFromWorktreeRepoOrLearnedSuffix(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()

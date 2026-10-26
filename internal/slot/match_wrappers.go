@@ -100,8 +100,16 @@ func matchWrapped(args []*syntax.Word) (int, bool) {
 // as a relative path, which matchWrapped does not read.
 const matchRelativeWrapperReason = "after a wrapper name with a relative path: it may be a project script"
 
+// matchHomeWrapperReason is the missed.log reason for a gate behind a wrapper's name spelled
+// under a home directory (~/bin/time, ~ci/bin/env). The path is absolute once the shell expands
+// the tilde, but a home script named time is no time utility, so matchWrapped refuses it as it
+// refuses a relative path (row 29, from the row 28 audit N-C, which logged it as relative).
+const matchHomeWrapperReason = "after a wrapper name under a home directory: it may be a personal script"
+
 // matchWrapperName gives the last path element of word, and relative is true when word is a
-// path that is neither a bare name nor absolute (./time, bin/env); name is "" then.
+// path that is neither a bare name nor absolute (./time, bin/env); name is "" then. A tilde path
+// counts as relative here, since this parser reads ~ as plain text; matchWrapperMiss gives it
+// matchHomeWrapperReason.
 func matchWrapperName(word string) (name string, relative bool) {
 	if strings.Contains(word, "/") && !strings.HasPrefix(word, "/") {
 		return "", true
@@ -196,17 +204,50 @@ func matchTimeArgs(args []*syntax.Word, at int) (int, bool) {
 // brace character outside quotes. A quoted format such as -f '%e %M' is one; $F, t*.txt and
 // {a,b} are not. Nor is unquoted text that holds a $ (row 28): zsh reads -o $=F as F split into
 // words, so an empty F drops the word as $F does in bash (seen in real zsh), and this parser
-// reads $=F as plain text.
+// reads $=F as plain text. Row 29: nor is double-quoted text that holds $= (matchQuotedZshSplit).
 func matchFixedWord(word *syntax.Word) bool {
 	if _, plain := matchPlainText(word); !plain {
 		return false
 	}
 	for _, part := range word.Parts {
-		if lit, ok := part.(*syntax.Lit); ok && strings.ContainsAny(lit.Value, "*?[{$") {
-			return false
+		switch p := part.(type) {
+		case *syntax.Lit:
+			if strings.ContainsAny(p.Value, "*?[{$") {
+				return false
+			}
+		case *syntax.DblQuoted:
+			if matchQuotedZshSplit(p) {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// matchQuotedZshSplit is true when the literal text of a double-quoted part holds a $ followed by
+// =, which this parser reads as plain text and zsh reads as $=X, X split into words. zsh may
+// split it inside double quotes as well (row 28 audit N-A). That was not checked in real zsh,
+// because the row 29 session's guard refused to run zsh, so it is refused on the safe side: a
+// wrong refusal costs one logged, unslotted gate, and a wrong pass moves the gate among wk run's
+// words. Reversal, once real zsh shows "$=X" stays one word: drop this check from its two callers.
+//
+// This parser gives "x $=X" as the three literals "x ", "$" and "=X", so the text of each run of
+// adjacent literals is searched. "$$=X" is the expansion $$ and the text =X, which zsh reads the
+// same way, so it is kept.
+func matchQuotedZshSplit(q *syntax.DblQuoted) bool {
+	var run strings.Builder
+	for _, part := range q.Parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok {
+			run.Reset()
+			continue
+		}
+		run.WriteString(lit.Value)
+		if strings.Contains(run.String(), "$=") {
+			return true
+		}
+	}
+	return false
 }
 
 var matchTimeLongFlags = map[string]bool{"--append": true, "--portability": true, "--quiet": true, "--verbose": true}
@@ -288,7 +329,7 @@ func matchAssignName(word *syntax.Word) (string, bool) {
 // "${X:-$@}" and "${!prefix@}" in both, and "$arr[@]" in zsh, which bash reads as $arr and the
 // text [@]. "$*", "${arr[*]}" and "${#arr[@]}" stay one word in both, so they are kept. Unquoted
 // text that holds a $ is refused too: zsh reads $=X as X split into words, which this parser
-// reads as plain text.
+// reads as plain text. Row 29: so is double-quoted text that holds $= (matchQuotedZshSplit).
 func matchAssignValueUnsplit(word *syntax.Word) bool {
 	for _, part := range word.Parts {
 		switch p := part.(type) {
@@ -298,7 +339,7 @@ func matchAssignValueUnsplit(word *syntax.Word) bool {
 			}
 		case *syntax.SglQuoted:
 		case *syntax.DblQuoted:
-			if matchQuotedSplits(p) {
+			if matchQuotedSplits(p) || matchQuotedZshSplit(p) {
 				return false
 			}
 		default:
@@ -346,10 +387,12 @@ func matchIndexAll(index syntax.ArithmExpr) bool {
 
 // shellGate wraps a whole `<shell> -c <string>` call in one place, because the string is one
 // word to the outer parser and an insertion inside it would have to be quoted for the inner
-// shell. It does so only when the string is plain text with no expansion, parses, and every
-// spelling it mentions has one class, with the trims of all of them; a string holding a heavy
-// and a check gate would otherwise run the heavy one in a check place. ok is false when c is no
-// `<shell> -c` call or its words mention no spelling.
+// shell. It does so only when the string is plain text with no expansion, parses, runs a gate as
+// a command, and every gate it runs has one class, with the trims of all of them; a string
+// holding a heavy and a check gate would otherwise run the heavy one in a check place. ok is
+// false when c is no `<shell> -c` call, its words mention no spelling, or its parsed string runs
+// no gate. Before row 29 every spelling the string mentioned counted, so `sh -c 'echo go test'`
+// was wrapped whole; nestedGates now walks the parsed string as runsGateAt does.
 //
 // A string that runs a gate behind timeout, `sh -c 'timeout 300 go test'`, is wrapped whole like
 // any other (row 27, from the row 25 audit N1): wk run waits for its place before the shell
@@ -369,10 +412,14 @@ func (w *matchWalk) shellGate(c *syntax.CallExpr) (matchGate, string, bool) {
 	if !plain {
 		return why("the string is not plain text")
 	}
-	if _, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), ""); err != nil {
+	runs, found, parsed := w.nestedGates(text)
+	if !parsed {
 		return why("the string does not parse")
 	}
-	entry, one := matchOneClass(matchMentioned(text, w.spellings))
+	if !runs {
+		return matchGate{}, "", false
+	}
+	entry, one := matchOneClass(found)
 	if !one {
 		return why("spellings of more than one class")
 	}

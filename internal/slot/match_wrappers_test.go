@@ -437,9 +437,88 @@ var matchTestWrapperUntouched = []matchTestCase{
 		[]Missed{{`sh -c 'go test ./...'`, "inside a function body"}}},
 }
 
+// Row 29, from the row 28 audit N-A to N-D and the row 28 builder's open item. The reasons are
+// written out, not named by their constants, so the table runs on the code before row 29 too.
+var matchTestRow29 = []matchTestCase{
+	// N-A: zsh may split $=X inside double quotes as it does outside them. zsh could not be run
+	// in the row 29 session (its guard refused it), so a $ followed by = in the literal text of a
+	// double-quoted env value or time option argument is refused on the safe side.
+	{`env with zsh's "$=X"`, `env A="$=X" go test ./...`, `env A="$=X" go test ./...`,
+		[]Missed{{`env A="$=X" go test ./...`, "after the wrapper env"}}},
+	{`env with zsh's $=X after text in quotes`, `env A="x $=X" go test ./...`, `env A="x $=X" go test ./...`,
+		[]Missed{{`env A="x $=X" go test ./...`, "after the wrapper env"}}},
+	{`time -o with zsh's "$=F"`, `/usr/bin/time -o "$=F" go test ./...`, `/usr/bin/time -o "$=F" go test ./...`,
+		[]Missed{{`/usr/bin/time -o "$=F" go test ./...`, "after the wrapper time"}}},
+	{`time --output= with zsh's "$=F"`, `/usr/bin/time --output="$=F" go test ./...`, `/usr/bin/time --output="$=F" go test ./...`,
+		[]Missed{{`/usr/bin/time --output="$=F" go test ./...`, "after the wrapper time"}}},
+	{`env with $= in single quotes, which no shell expands`, `env A='$=X' go test ./...`,
+		`env A='$=X' /x/wk run --slot check -- go test ./...`, nil},
+	{`env with = and no $ in quotes`, `env A="x=1" go test ./...`,
+		`env A="x=1" /x/wk run --slot check -- go test ./...`, nil},
+
+	// N-B: a wk run in the string of a shell under timeout is read as the bare form is.
+	{"timeout over wk run", `timeout 30 wk run -- go test ./...`, `timeout 30 wk run -- go test ./...`,
+		[]Missed{{"timeout 30 wk run -- go test ./...", matchTimeoutReason}}},
+	{"timeout over sh -c over wk run", `timeout 30 sh -c 'wk run -- go test ./...'`, `timeout 30 sh -c 'wk run -- go test ./...'`,
+		[]Missed{{`timeout 30 sh -c 'wk run -- go test ./...'`, matchTimeoutReason}}},
+	{"timeout over sh -c over wk run --slot", `timeout 30 sh -c 'cd web && wk run --slot check -- bun run lint'`, `timeout 30 sh -c 'cd web && wk run --slot check -- bun run lint'`,
+		[]Missed{{`timeout 30 sh -c 'cd web && wk run --slot check -- bun run lint'`, matchTimeoutReason}}},
+	{"timeout over sh -c over a wk run with no gate", `timeout 30 sh -c 'wk run -- echo hi'`, `timeout 30 sh -c 'wk run -- echo hi'`, nil},
+
+	// N-C: a tilde path is absolute once expanded, but a home script named time is still no time
+	// utility, so the line stays a miss under its own reason.
+	{"~/bin/time", `~/bin/time -p go test ./...`, `~/bin/time -p go test ./...`,
+		[]Missed{{"~/bin/time -p go test ./...", "after a wrapper name under a home directory: it may be a personal script"}}},
+	{"~/bin/env behind env", `env -u X ~/bin/env go test ./...`, `env -u X ~/bin/env go test ./...`,
+		[]Missed{{"env -u X ~/bin/env go test ./...", "after a wrapper name under a home directory: it may be a personal script"}}},
+	{"~user/bin/time", `~ci/bin/time go test ./...`, `~ci/bin/time go test ./...`,
+		[]Missed{{"~ci/bin/time go test ./...", "after a wrapper name under a home directory: it may be a personal script"}}},
+
+	// N-D: inside a substitution that captures stderr the capture is the reason logged, also for a
+	// function body, a process substitution and a line that holds wk run; a quoted wrapper word
+	// anywhere before the gate is a quoted spelling; an assignment is no timeout.
+	{"a function body in $( ) that captures stderr", `x=$(f() { go test ./...; }; f 2>&1)`, `x=$(f() { go test ./...; }; f 2>&1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"a process substitution in $( ) that captures stderr", `x=$(diff <(go test ./...) a.txt 2>&1)`, `x=$(diff <(go test ./...) a.txt 2>&1)`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"a capture of stderr on a line that holds wk run", `x=$(go test ./... 2>&1); wk run -- bun run lint`, `x=$(go test ./... 2>&1); wk run -- bun run lint`,
+		[]Missed{{"go test ./...", "inside $( ) that captures stderr"}}},
+	{"a quoted time behind env", `env -u X "time" -p go test ./...`, `env -u X "time" -p go test ./...`,
+		[]Missed{{`env -u X "time" -p go test ./...`, "quoted spelling"}}},
+	{"a value that ends in /timeout is no timeout", `env -C d X=/a/timeout go test ./...`, `env -C d X=/a/timeout go test ./...`,
+		[]Missed{{"env -C d X=/a/timeout go test ./...", "after the wrapper env"}}},
+
+	// Row 28 builder's open item: the string of a shell or an eval is parsed, and only a gate it
+	// runs as a command is wrapped or logged.
+	{"sh -c that echoes a spelling", `sh -c 'echo go test ./...'`, `sh -c 'echo go test ./...'`, nil},
+	{"bash -c that greps a spelling", `bash -c 'grep "go test" log.txt'`, `bash -c 'grep "go test" log.txt'`, nil},
+	{"sh -c with a spelling in a comment", `sh -c 'echo hi # go test'`, `sh -c 'echo hi # go test'`, nil},
+	{"eval that echoes a spelling", `eval 'echo go test'`, `eval 'echo go test'`, nil},
+	{"sh -c in a function body that echoes a spelling", `f() { sh -c 'echo go test'; }`, `f() { sh -c 'echo go test'; }`, nil},
+	{"sh -c that runs one class and echoes another", `sh -c 'go test ./... && echo bun run build'`,
+		`/x/wk run --slot check -- sh -c 'go test ./... && echo bun run build'`, nil},
+	{"sh -c with a gate in $( ) is still wrapped", `sh -c 'echo $(go test ./...)'`,
+		`/x/wk run --slot check -- sh -c 'echo $(go test ./...)'`, nil},
+	{"sh -c with a gate behind timeout is still wrapped", `sh -c 'timeout 300 go test ./...'`,
+		`/x/wk run --slot check -- sh -c 'timeout 300 go test ./...'`, nil},
+	{"eval of a gate is still logged", `eval 'go test ./...'`, `eval 'go test ./...'`,
+		[]Missed{{`eval 'go test ./...'`, "inside eval"}}},
+	{"sh -c with an expansion is still searched as text", `sh -c "echo go test $PKG"`, `sh -c "echo go test $PKG"`,
+		[]Missed{{`sh -c "echo go test $PKG"`, "inside sh -c: the string is not plain text"}}},
+}
+
+func TestMatchRewriteRow29(t *testing.T) {
+	matchTestRun(t, matchTestRow29)
+}
+
 func TestMatchRewriteWrappers(t *testing.T) {
+	matchTestRun(t, append(append([]matchTestCase{}, matchTestWrapperRewrites...), matchTestWrapperUntouched...))
+}
+
+func matchTestRun(t *testing.T, cases []matchTestCase) {
+	t.Helper()
 	sf := matchTestSlots(t)
-	for _, tc := range append(append([]matchTestCase{}, matchTestWrapperRewrites...), matchTestWrapperUntouched...) {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out, changed, missed, err := Rewrite(tc.in, matchTestExe, sf)
 			if err != nil {
