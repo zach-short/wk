@@ -252,3 +252,22 @@ Empty. Row 19 left out. Follow-up to write after row 22 lands: the hook writes t
 ### Row 25, audit (a2b8dea9f59de0c1f), 2026-10-26 13:39 EDT
 - Non-blocking only. Reproduced 32286e6, replay equal, gates green. Findings N1-N6 in the item close-out.
 - Landed: main d3f834c..32286e6, pushed 13:39 EDT. Board DONE, log line written.
+
+## Rows 26 and 27, opened 2026-10-26 13:40 EDT
+- 26 | Sonnet 5.5 | IN FLIGHT | builder ad2f47055f59d8161, row-26-build | stats tie-breaks; audit by tier unless a trigger fires
+- 27 | Opus 5.5 | IN FLIGHT | builder a664d17ecafe2898c, row-27-build | wrapper reader findings from the row 25 audit
+
+### Row 26, builder (ad2f47055f59d8161, row-26-build), 2026-10-26 13:45 EDT
+- 54c6eba on a02a87b: stats_calc.go, stats_test.go, +169 -7. Gates green. JSON hash stable over 7 runs (main unstable). Extra fix: repeats sums floats in fixed key order.
+- Audit trigger: numbers claimed (hashes). Auditor add4cd51e215b762e launched.
+
+### Row 26, audit (add4cd51e215b762e), 2026-10-26 13:48 EDT
+- Clean. Hash reproduced 5/5; main 5 hashes. New tests fail 5/5 on old code. Landed main a02a87b..54c6eba, pushed. Board DONE, log written.
+
+### Row 27, builder (a664d17ecafe2898c, row-27-build), 2026-10-26 13:49 EDT
+- 6caf696 on a02a87b: match.go, match_wrappers.go, match_wrappers_test.go, +174 -15. Gates green. Replay byte-identical to main (98 routed). 31 cases; 20 fail on main.
+- Calls: quoted fixed text accepted as time arg (reversal matchLiteral); "$F" refused; other wrappers over sh -c now logged (reversal: only timeout); path.Base kept (reversal: bare name or absolute path).
+- Sent: merge main 54c6eba, re-gate, before audit.
+
+### Row 27, audit (a047a81c66fb41c03), 2026-10-26 13:56 EDT
+- Non-blocking N1-N4 (in close-out). Replay byte-identical. 20/31 confirmed. Landed main 54c6eba..d08f2cc, pushed. Board DONE, log written.
