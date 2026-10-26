@@ -208,16 +208,21 @@ func (h *hookRun) log(name, line string) {
 	_ = appendLog(h.deps.LogDir, name, line)
 }
 
-// hookResolveRepo runs only the first of gitx.Resolve's two git commands (SLOTS-PLAN.md 0.2),
-// because the hook runs before every Bash call, and names the repository by the same rule, so
-// the slots file sits beside the ~/.wk/<repo>.toml that wk reads.
+// hookResolveRepo finds the common git directory the way the first of gitx.Resolve's two git
+// commands does (SLOTS-PLAN.md 0.2) and names the repository by the same rule, so the slots file
+// sits beside the ~/.wk/<repo>.toml that wk reads. It reads files first (gitx.CommonDir) and runs
+// git only where they leave the answer open: the git run was most of the hook's time, and under
+// load it pushed the hook past its deadline (212-N6).
 func hookResolveRepo(cwd string) (string, error) {
 	if !filepath.IsAbs(cwd) {
 		return "", fmt.Errorf("%q is relative; wk takes absolute paths only", cwd)
 	}
-	common, err := gitx.Run(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return "", err
+	common, ok := gitx.CommonDir(cwd)
+	if !ok {
+		var err error
+		if common, err = gitx.Run(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"); err != nil {
+			return "", err
+		}
 	}
 	return filepath.Base(filepath.Dir(common)), nil
 }

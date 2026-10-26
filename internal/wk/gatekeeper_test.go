@@ -333,7 +333,8 @@ func TestTrialRefusesAnUnmarkedDirectory(t *testing.T) {
 }
 
 // PD-10: a gate whose command the slots file recognises runs through wk run --slot; one it does
-// not, or a nested shell it leaves alone, runs as it is.
+// not runs as it is. A `sh -c` gate whose string holds spellings of one class is wrapped whole,
+// as the hook does since 2026-10-26; one with two classes runs as it is.
 func TestSlottedRoutesOnlyAMatchedGate(t *testing.T) {
 	sf := slot.SlotsFile{Match: []slot.MatchEntry{
 		{Spelling: "go test", Class: "check"},
@@ -347,7 +348,8 @@ func TestSlottedRoutesOnlyAMatchedGate(t *testing.T) {
 		{[]string{"bun", "run", "build"}, []string{"/bin/sh", "-c", "/opt/wk run --slot heavy --trim web/.next/cache -- bun run build"}},
 		{[]string{"go", "test", "it's here"}, []string{"/bin/sh", "-c", `/opt/wk run --slot check -- go test "it's here"`}},
 		{[]string{"go", "vet", "./..."}, []string{"go", "vet", "./..."}},
-		{[]string{"sh", "-c", "go test ./..."}, []string{"sh", "-c", "go test ./..."}},
+		{[]string{"sh", "-c", "go test ./..."}, []string{"/bin/sh", "-c", "/opt/wk run --slot check -- sh -c 'go test ./...'"}},
+		{[]string{"sh", "-c", "go test ./... && bun run build"}, []string{"sh", "-c", "go test ./... && bun run build"}},
 	} {
 		got, ok := slotted(gate.Gate{Name: "g", Run: tc.run}, "/opt/wk", sf)
 		if !slices.Equal(got.Run, tc.want) || ok != (got.Run[0] == "/bin/sh") {
