@@ -20,8 +20,9 @@ type Missed struct{ Command, Reason string }
 // Rewrite inserts "<wkExe> run --slot <class> [--trim <p>]... -- " at the byte offset of each
 // matched simple command's first word (SB-15, every statement position, never in a function
 // body) and changes no other byte. Statement positions include the command of `time` and the
-// commands inside $( ) and backticks; behind `env` the insertion goes after env's options and
-// assignments, and a `<shell> -c` call is wrapped whole (match_wrappers.go). Text that does not parse comes back unchanged
+// commands inside $( ) and backticks; behind env, command, the time utility and timeout the
+// insertion goes after the wrapper's words, and a `<shell> -c` call is wrapped whole
+// (match_wrappers.go). Text that does not parse comes back unchanged
 // with parseErr set. Each literal spelling left alone is a Missed with its reason.
 //
 // A simple command matches when its first words, after any VAR=value words, are unquoted
@@ -342,10 +343,14 @@ func (w *matchWalk) nestedShellReason(c *syntax.CallExpr) (string, bool) {
 }
 
 // A wrapper runs a command made of its later words, so a gate behind one runs unslotted. It is
-// logged, not rewritten, because the wrapper's own options sit between it and the gate; env is
-// routed when matchEnvGate can read every option and assignment before the gate. The set
-// is closed on purpose: any word before a spelling would also log `grep eslint`.
-var matchWrappers = map[string]bool{"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "timeout": true, "xargs": true}
+// logged, not rewritten, because the wrapper's own options sit between it and the gate; env,
+// command, the time utility and timeout are routed when matchWrapped can read every word
+// before the gate. The set is closed on purpose: any word before a spelling would also log
+// `grep eslint`.
+var matchWrappers = map[string]bool{
+	"exec": true, "nohup": true, "nice": true, "env": true, "command": true, "xargs": true,
+	"timeout": true, "gtimeout": true, "time": true, "gtime": true,
+}
 
 func (w *matchWalk) wrapperReason(c *syntax.CallExpr) (string, bool) {
 	if len(c.Args) < 2 {

@@ -17,13 +17,13 @@ type matchGate struct {
 }
 
 // gate finds the gate a simple command runs: a spelling as its first words, a spelling behind
-// env's options and assignments, or a `<shell> -c` string whose spellings share one class. A
-// non-empty reason is a gate that stays unslotted, for missed.log.
+// wrappers whose every word wk reads (matchWrapped), or a `<shell> -c` string whose spellings
+// share one class. A non-empty reason is a gate that stays unslotted, for missed.log.
 func (w *matchWalk) gate(c *syntax.CallExpr) (matchGate, string) {
 	if g, reason, ok := w.spelledAt(c.Args); ok {
 		return g, reason
 	}
-	if i, ok := matchEnvGate(c.Args); ok {
+	if i, ok := matchWrapped(c.Args); ok {
 		if g, reason, ok := w.spelledAt(c.Args[i:]); ok {
 			return g, reason
 		}
@@ -46,18 +46,48 @@ func (w *matchWalk) spelledAt(args []*syntax.Word) (matchGate, string, bool) {
 	return matchGate{word: args[0], entry: s.entry}, "", true
 }
 
-// matchEnvGate returns the index of the first word after env's options and assignments, when
-// env reads every word before it the same way on macOS and in GNU coreutils. The insertion goes
-// there, not before env, so wk run sees the environment the gate sees and runs.log names the
-// gate. That is safe only while env leaves wk run's own environment alone, so it refuses -i and
-// every other option, and any HOME, PATH or WK_ variable: wk finds its slots through HOME and
-// WK_HOME, wk run finds the gate's program and its own helpers through PATH, and a nested run
-// reads WK_SLOT_HELD.
-func matchEnvGate(args []*syntax.Word) (int, bool) {
-	if len(args) < 2 || path.Base(args[0].Lit()) != "env" {
-		return 0, false
+// matchWrapperReaders read the words of one wrapper at args[i]: each returns the index of the
+// command the wrapper runs, and false for a word it does not read. The insertion goes at that
+// command, after the wrapper's own words, as it does under the `time` keyword, so runs.log names
+// the gate. Claude Code strips timeout, time and command by name before it matches a Bash
+// permission rule (code.claude.com/docs/en/permissions, "Wrappers", read 2026-10-26), so the
+// wrapped gate still meets its twin there; it strips neither env nor a path such as
+// /usr/bin/time, which the gate did not meet before the rewrite either.
+var matchWrapperReaders = map[string]func(args []*syntax.Word, i int) (int, bool){
+	"env":      matchEnvArgs,
+	"command":  matchCommandArgs,
+	"time":     matchTimeArgs,
+	"gtime":    matchTimeArgs,
+	"timeout":  matchTimeoutArgs,
+	"gtimeout": matchTimeoutArgs,
+}
+
+// matchWrapped returns the index of the first word after a chain of wrappers that wk reads
+// whole, such as `command time -p env -u X go test`. ok is false when args starts with no such
+// wrapper, or one of them holds a word wk does not read.
+func matchWrapped(args []*syntax.Word) (int, bool) {
+	i := 0
+	for i < len(args) {
+		read, isWrapper := matchWrapperReaders[path.Base(args[i].Lit())]
+		if !isWrapper {
+			return i, i > 0
+		}
+		next, ok := read(args, i)
+		if !ok {
+			return 0, false
+		}
+		i = next
 	}
-	i, ok := matchEnvOptions(args, 1)
+	return 0, false
+}
+
+// matchEnvArgs reads env's options and assignments, when env reads every word the same way on
+// macOS and in GNU coreutils, so wk run sees the environment the gate sees. That is safe only
+// while env leaves wk run's own environment alone, so it refuses -i and every other option,
+// and any HOME, PATH or WK_ variable: wk finds its slots through HOME and WK_HOME, wk run finds
+// the gate's program and its own helpers through PATH, and a nested run reads WK_SLOT_HELD.
+func matchEnvArgs(args []*syntax.Word, at int) (int, bool) {
+	i, ok := matchEnvOptions(args, at+1)
 	if !ok {
 		return 0, false
 	}
@@ -71,6 +101,115 @@ func matchEnvGate(args []*syntax.Word) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// matchCommandArgs reads `command` with no option or a closing --. It refuses -p, which looks
+// the next word up in a default PATH that wk run would not use for the gate, and -v and -V,
+// which print a path and run nothing.
+func matchCommandArgs(args []*syntax.Word, at int) (int, bool) {
+	i := at + 1
+	if i < len(args) && args[i].Lit() == "--" {
+		i++
+	}
+	if i >= len(args) || strings.HasPrefix(args[i].Lit(), "-") {
+		return 0, false
+	}
+	return i, true
+}
+
+// matchTimeArgs reads the options of the time utility, which runs where the keyword does not:
+// /usr/bin/time, `command time`, and `time` after an assignment. It reads the flags of macOS
+// (-a -h -l -p, -o FILE) and of GNU time (-a -p -q -v, -o FILE, -f FORMAT and their long
+// forms). Its report goes to stderr or the -o file, as the keyword's does, and -l still reads
+// the gate's usage, because wk run waits for the gate and a child's usage holds what it waited
+// for. Any other option, such as -V or --help, which run nothing, is refused.
+func matchTimeArgs(args []*syntax.Word, at int) (int, bool) {
+	for i := at + 1; i < len(args); i++ {
+		opt := args[i].Lit()
+		switch {
+		case opt == "--":
+			return i + 1, i+1 < len(args)
+		case matchTimeLongFlags[opt]:
+		case opt == "--output" || opt == "--format":
+			i++
+		case strings.HasPrefix(opt, "--output=") || strings.HasPrefix(opt, "--format="):
+		case strings.HasPrefix(opt, "--"):
+			return 0, false
+		case len(opt) > 1 && opt[0] == '-':
+			skip, ok := matchShortFlags(opt[1:], "ahlpqv", "of")
+			if !ok {
+				return 0, false
+			}
+			i += skip
+		default:
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+var matchTimeLongFlags = map[string]bool{"--append": true, "--portability": true, "--quiet": true, "--verbose": true}
+
+// matchShortFlags reads one cluster of short flags such as -lp or -ao: each letter is in bare,
+// or is the last letter and in withArg, so it takes the next word, or is in withArg and the rest
+// of the cluster is its argument (-ofile). skip is 1 when the next word is an argument.
+func matchShortFlags(cluster, bare, withArg string) (skip int, ok bool) {
+	for j, r := range cluster {
+		switch {
+		case strings.ContainsRune(bare, r):
+		case strings.ContainsRune(withArg, r) && j == len(cluster)-1:
+			return 1, true
+		case strings.ContainsRune(withArg, r):
+			return 0, true
+		default:
+			return 0, false
+		}
+	}
+	return 0, true
+}
+
+// matchTimeoutArgs reads the options and the duration of GNU timeout: -v, -p and their long
+// forms, -s SIGNAL and -k DURATION in each spelling. Its clock then also counts the wait for a
+// place, as `time` does; a gate that runs unslotted to beat its own timeout is the overload the
+// slot exists to stop. A stop still reaches the gate: timeout signals its process group, which
+// wk run and the gate share, and wk run passes a signal on (SB-7). --foreground (-f) is refused,
+// because then timeout signals wk run alone, and a -k SIGKILL would leave the gate running.
+func matchTimeoutArgs(args []*syntax.Word, at int) (int, bool) {
+	for i := at + 1; i < len(args); i++ {
+		opt := args[i].Lit()
+		switch {
+		case opt == "--":
+			return matchTimeoutDuration(args, i+1)
+		case matchTimeoutLongFlags[opt]:
+		case opt == "--signal" || opt == "--kill-after":
+			i++
+		case strings.HasPrefix(opt, "--signal=") || strings.HasPrefix(opt, "--kill-after="):
+		case strings.HasPrefix(opt, "--"):
+			return 0, false
+		case len(opt) > 1 && opt[0] == '-':
+			skip, ok := matchShortFlags(opt[1:], "vp", "sk")
+			if !ok {
+				return 0, false
+			}
+			i += skip
+		default:
+			return matchTimeoutDuration(args, i)
+		}
+	}
+	return 0, false
+}
+
+var matchTimeoutLongFlags = map[string]bool{"--verbose": true, "--preserve-status": true}
+
+var matchDuration = regexp.MustCompile(`^([0-9]+\.?[0-9]*|\.[0-9]+)[smhd]?$`)
+
+// matchTimeoutDuration reads the duration at args[i] and returns the index of the command after
+// it.
+func matchTimeoutDuration(args []*syntax.Word, i int) (int, bool) {
+	if i+1 >= len(args) || !matchDuration.MatchString(args[i].Lit()) {
+		return 0, false
+	}
+	return i + 1, true
 }
 
 // matchEnvOptions reads -u NAME, -uNAME, --unset=NAME and a closing --, from args[i] on.
