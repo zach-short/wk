@@ -14,13 +14,16 @@ import (
 // deadline (ezhomesteading errors.log, 42 lines from 2026-10-17 to 2026-10-26), so the gate it
 // stood in front of ran unslotted.
 //
-// It walks up from the real path of dir to the first .git: a directory is the git directory, and
-// a file names one on its "gitdir:" line. A git directory with a commondir file (a linked
-// worktree's) points at the common one. ok is false wherever the files leave the answer open: a
-// relative dir, a GIT_ variable that moves or bounds the repository, a bare repository, no .git
-// up to the root, or a .git that does not read as git writes it. The caller then asks git.
-// Unlike git, the walk does not stop at a file system boundary; no repository wk serves sits
-// above a mount point.
+// It walks up from the real path of dir, checking each level as git does: first d/.git, where a
+// directory is the git directory and a file names one on its "gitdir:" line, then d itself. A
+// git directory with a commondir file (a linked worktree's) points at the common one; a relative
+// commondir or gitdir path is resolved on disk, through any symbolic link, as git resolves it,
+// and the common directory must hold HEAD, objects and refs. ok is false wherever the files
+// leave the answer open: a relative dir, a GIT_ variable that moves or bounds the repository, a
+// level that is itself a git directory (a bare repository, a submodule's git directory, the
+// inside of .git), no .git up to the root, or a .git or commondir that does not lead to a git
+// directory. The caller then asks git. Unlike git, the walk does not stop at a file system
+// boundary; no repository wk serves sits above a mount point.
 func CommonDir(dir string) (string, bool) {
 	if !filepath.IsAbs(dir) || gitEnvMovesRepo() {
 		return "", false
@@ -32,6 +35,9 @@ func CommonDir(dir string) (string, bool) {
 	for {
 		if common, found, ok := commonDirAt(d); found {
 			return common, ok
+		}
+		if isGitDir(d) {
+			return "", false
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
@@ -81,29 +87,49 @@ func readGitFile(path string) (string, bool) {
 	if !ok || target == "" || strings.ContainsAny(target, "\r\n") {
 		return "", false
 	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(path), target)
-	}
-	return target, true
+	return onDisk(filepath.Dir(path), target)
 }
 
 // commonOf is the common directory of a git directory: the one its commondir file names, or
 // itself. git prints it with symbolic links resolved.
 func commonOf(gitdir string) (string, bool) {
-	if _, err := os.Stat(filepath.Join(gitdir, "HEAD")); err != nil {
+	gitdir, ok := onDisk("", gitdir)
+	if !ok || !exists(filepath.Join(gitdir, "HEAD")) {
 		return "", false
 	}
 	common := gitdir
 	data, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
 	switch {
 	case err == nil:
-		common = strings.TrimRight(string(data), "\r\n")
-		if !filepath.IsAbs(common) {
-			common = filepath.Join(gitdir, common)
+		if common, ok = onDisk(gitdir, strings.TrimRight(string(data), "\r\n")); !ok {
+			return "", false
 		}
 	case !errors.Is(err, fs.ErrNotExist):
 		return "", false
 	}
-	real, err := filepath.EvalSymlinks(common)
+	return common, isGitDir(common)
+}
+
+// onDisk resolves p, relative to base when it is relative, the way git's real-path does: each
+// component in turn, so a ".." after a symbolic link leaves the link's target, not the link.
+// filepath.Join would clean ".." away as text first and could name a directory git never reads.
+func onDisk(base, p string) (string, bool) {
+	if p == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(p) {
+		p = base + string(filepath.Separator) + p
+	}
+	real, err := filepath.EvalSymlinks(p)
 	return real, err == nil
+}
+
+// isGitDir is git's own test of a git directory: HEAD, objects and refs are there.
+func isGitDir(d string) bool {
+	return exists(filepath.Join(d, "HEAD")) && exists(filepath.Join(d, "objects")) && exists(filepath.Join(d, "refs"))
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
