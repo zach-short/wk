@@ -495,8 +495,21 @@ var matchTestRow29 = []matchTestCase{
 	{"sh -c with a spelling in a comment", `sh -c 'echo hi # go test'`, `sh -c 'echo hi # go test'`, nil},
 	{"eval that echoes a spelling", `eval 'echo go test'`, `eval 'echo go test'`, nil},
 	{"sh -c in a function body that echoes a spelling", `f() { sh -c 'echo go test'; }`, `f() { sh -c 'echo go test'; }`, nil},
-	{"sh -c that runs one class and echoes another", `sh -c 'go test ./... && echo bun run build'`,
-		`/x/wk run --slot check -- sh -c 'go test ./... && echo bun run build'`, nil},
+	// Row 29 audit F1, decided by the row 29 session by risk: the class still comes from every
+	// spelling the string mentions, since a string can run a mentioned spelling in ways the walk
+	// does not see. Each of these stays refused and logged, as on the code before row 29.
+	{"sh -c that runs one class and echoes another", `sh -c 'go test ./... && echo bun run build'`, `sh -c 'go test ./... && echo bun run build'`,
+		[]Missed{{`sh -c 'go test ./... && echo bun run build'`, "inside sh -c: spellings of more than one class"}}},
+	{"sh -c that pipes another class into sh", `sh -c 'go test ./... && echo bun run build | sh'`, `sh -c 'go test ./... && echo bun run build | sh'`,
+		[]Missed{{`sh -c 'go test ./... && echo bun run build | sh'`, "inside sh -c: spellings of more than one class"}}},
+	{"sh -c that runs another class from a variable", `sh -c 'go test ./...; x="bun run build"; $x'`, `sh -c 'go test ./...; x="bun run build"; $x'`,
+		[]Missed{{`sh -c 'go test ./...; x="bun run build"; $x'`, "inside sh -c: spellings of more than one class"}}},
+	{"sh -c that feeds another class to bash", `sh -c 'go test ./...; bash <<< "bun run build"'`, `sh -c 'go test ./...; bash <<< "bun run build"'`,
+		[]Missed{{`sh -c 'go test ./...; bash <<< "bun run build"'`, "inside sh -c: spellings of more than one class"}}},
+	{"sh -c that sources another class", `sh -c 'go test ./...; . <(echo bun run build)'`, `sh -c 'go test ./...; . <(echo bun run build)'`,
+		[]Missed{{`sh -c 'go test ./...; . <(echo bun run build)'`, "inside sh -c: spellings of more than one class"}}},
+	{"sh -c that runs a heavy gate and echoes a check spelling", `sh -c 'bun run build && echo tsc'`, `sh -c 'bun run build && echo tsc'`,
+		[]Missed{{`sh -c 'bun run build && echo tsc'`, "inside sh -c: spellings of more than one class"}}},
 	{"sh -c with a gate in $( ) is still wrapped", `sh -c 'echo $(go test ./...)'`,
 		`/x/wk run --slot check -- sh -c 'echo $(go test ./...)'`, nil},
 	{"sh -c with a gate behind timeout is still wrapped", `sh -c 'timeout 300 go test ./...'`,

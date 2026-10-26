@@ -63,9 +63,8 @@ func matchSpellings(sf SlotsFile) []matchSpelling {
 }
 
 type matchInsert struct {
-	at    uint
-	text  string
-	entry MatchEntry
+	at   uint
+	text string
 }
 
 type matchWalk struct {
@@ -407,7 +406,7 @@ func (w *matchWalk) runsGateAt(c *syntax.CallExpr, i int) bool {
 		return false
 	}
 	if text, plain := matchNestedText(args); plain {
-		if runs, _, parsed := w.nestedGates(text); parsed {
+		if runs, parsed := w.nestedGates(text); parsed {
 			return runs
 		}
 	}
@@ -418,38 +417,28 @@ func (w *matchWalk) runsGateAt(c *syntax.CallExpr, i int) bool {
 // of its own. runs is true when the walk finds a gate it would rewrite or log, or a wk run whose
 // later words run one: the walk leaves a wk run alone, but behind a wrapper the bare form
 // `timeout 30 wk run -- go test` is logged, so `timeout 30 sh -c 'wk run -- go test'` is too
-// (row 29, from the row 28 audit N-B). found lists the spellings of those gates, for shellGate's
-// class. parsed is false when text does not parse.
-func (w *matchWalk) nestedGates(text string) (runs bool, found []matchSpelling, parsed bool) {
+// (row 29, from the row 28 audit N-B). parsed is false when text does not parse. It decides only
+// whether a gate runs; shellGate takes the class from every spelling the text mentions.
+func (w *matchWalk) nestedGates(text string) (runs, parsed bool) {
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(text), "")
 	if err != nil {
-		return false, nil, false
+		return false, false
 	}
 	inner := matchWalk{src: text, exe: w.exe, spellings: w.spellings}
 	inner.wrapped = inner.holdsWKRun(file)
 	inner.stmts(file.Stmts)
-	for _, in := range inner.inserts {
-		found = append(found, matchSpelling{entry: in.entry})
-	}
-	for _, m := range inner.missed {
-		found = append(found, matchMentioned(m.Command, w.spellings)...)
-	}
 	runs = len(inner.inserts) > 0 || len(inner.missed) > 0
 	syntax.Walk(file, func(n syntax.Node) bool {
 		c, ok := n.(*syntax.CallExpr)
-		if !ok || !inner.isWKRun(c) {
-			return true
+		if runs || !ok || !inner.isWKRun(c) {
+			return !runs
 		}
-		for j := 2; j < len(c.Args); j++ {
-			if inner.runsGateAt(c, j) {
-				runs = true
-				found = append(found, matchMentioned(inner.text(c.Args[j].Pos(), c.End()), w.spellings)...)
-				break
-			}
+		for j := 2; j < len(c.Args) && !runs; j++ {
+			runs = inner.runsGateAt(c, j)
 		}
-		return true
+		return !runs
 	})
-	return runs, found, true
+	return runs, true
 }
 
 // matchNestedText is the text a `<shell> -c` call or an eval runs, when every word of it is
@@ -673,7 +662,7 @@ func (w *matchWalk) insert(c *syntax.CallExpr, g matchGate) {
 		w.miss(c, "inside backticks")
 		return
 	}
-	w.inserts = append(w.inserts, matchInsert{at: g.word.Pos().Offset(), text: prefix, entry: g.entry})
+	w.inserts = append(w.inserts, matchInsert{at: g.word.Pos().Offset(), text: prefix})
 }
 
 // Prefix is the text Rewrite inserts before a command that matches e. `wk hooks install` builds
