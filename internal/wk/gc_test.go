@@ -2,6 +2,8 @@ package wk
 
 import (
 	"bytes"
+	"encoding/xml"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -462,8 +464,10 @@ func TestScheduleInstallWritesAndLoadsTheAgent(t *testing.T) {
 	path := filepath.Join(l.AgentsDir, "com.github.zach-short.wk.gc.demo.plist")
 	body := read(t, path)
 	for _, want := range []string{
-		"<string>/opt/wk/bin/wk</string>",
+		"<array>\n\t\t<string>/bin/sh</string>\n\t\t<string>-c</string>\n\t\t<string>exec &#34;$0&#34; &#34;$@&#34;</string>\n\t\t<string>/opt/wk/bin/wk</string>",
 		"<string>" + f.Repo + "</string>",
+		"<key>RunAtLoad</key>\n\t<false/>",
+		"<key>ProcessType</key>\n\t<string>Background</string>",
 		"<string>gc</string>\n\t\t<string>--apply</string>",
 		"<key>StartInterval</key>\n\t<integer>3600</integer>",
 		"<string>" + filepath.Join(f.Home, "demo/gc.log") + "</string>",
@@ -510,5 +514,127 @@ func TestScheduleInstallRefusesATransientBinary(t *testing.T) {
 	}
 	if _, err := os.Stat(l.AgentsDir); !os.IsNotExist(err) {
 		t.Fatal("a refused install wrote the agents directory")
+	}
+}
+
+// programArguments reads the ProgramArguments array of a plist the way launchd does: as XML,
+// one string per element, with the entities decoded.
+func programArguments(t *testing.T, body string) []string {
+	t.Helper()
+	d := xml.NewDecoder(strings.NewReader(body))
+	var args []string
+	var key, elem string
+	inArgs := false
+	for {
+		tok, err := d.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch tk := tok.(type) {
+		case xml.StartElement:
+			elem = tk.Name.Local
+			if elem == "array" && key == "ProgramArguments" {
+				inArgs = true
+			}
+			if elem == "string" && inArgs {
+				args = append(args, "")
+			}
+		case xml.EndElement:
+			if tk.Name.Local == "array" {
+				inArgs = false
+			}
+			elem = ""
+		case xml.CharData:
+			switch {
+			case elem == "key":
+				key = string(tk)
+			case elem == "string" && inArgs:
+				args[len(args)-1] += string(tk)
+			}
+		}
+	}
+	return args
+}
+
+// The agent starts wk through /bin/sh so that a brew upgrade, which changes wk's ad-hoc
+// signature, does not break launchd's inferred code requirement. The wk path goes in as its own
+// string, so a space or a quote in it reaches exec whole. The test runs the parsed arguments
+// through the real /bin/sh with a stand-in wk that prints its argv; it loads no agent.
+func TestScheduleAgentStartsWkThroughShell(t *testing.T) {
+	f := testrepo.New(t)
+	e := open(t, f, io.Discard)
+	dir := filepath.Join(f.Root, `my "wk" bin`)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "wk")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l := Launchd{AgentsDir: filepath.Join(f.Root, "LaunchAgents"), Domain: "gui/501", Control: (&recorder{}).control}
+	if err := e.ScheduleInstall(exe, l, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(l.AgentsDir, "com.github.zach-short.wk.gc.demo.plist")
+	args := programArguments(t, read(t, path))
+	want := []string{"/bin/sh", "-c", `exec "$0" "$@"`, exe, "--repo", f.Repo, "gc", "--apply"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("ProgramArguments = %q, want %q", args, want)
+	}
+	if lint, err := exec.LookPath("plutil"); err == nil {
+		if out, err := exec.Command(lint, "-lint", path).CombinedOutput(); err != nil {
+			t.Fatalf("plutil -lint: %v\n%s", err, out)
+		}
+	} else {
+		t.Log("plutil not on PATH; lint skipped")
+	}
+	out, err := exec.Command(args[0], args[1:]...).Output()
+	if err != nil {
+		t.Fatalf("sh: %v", err)
+	}
+	if got, wantOut := string(out), strings.Join(want[3:], "\n")+"\n"; got != wantOut {
+		t.Fatalf("wk got argv %q, want %q", got, wantOut)
+	}
+}
+
+func TestScheduleCheckReportsOnlyAFailedAgent(t *testing.T) {
+	f := testrepo.New(t)
+	e := open(t, f, io.Discard)
+	const label = "com.github.zach-short.wk.gc.demo"
+	printed := func(exit string) string {
+		return "gui/501/" + label + " = {\n\tactive count = 0\n\tpath = /x.plist\n\tstate = not running\n\n\tprogram = /bin/sh\n\truns = 3\n\tlast exit code = " + exit + "\n\n\tproperties = inferred program | managed LWCR | has LWCR\n}\n"
+	}
+	for name, tc := range map[string]struct {
+		text string
+		err  error
+		want string
+	}{
+		"exit 78":      {printed("78: EX_CONFIG"), nil, "gc agent " + label + ": last exit code 78: EX_CONFIG, so scheduled gc is not running; fix: wk gc schedule install\n"},
+		"exit 1":       {printed("1"), nil, "gc agent " + label + ": last exit code 1, so scheduled gc is not running; fix: wk gc schedule install\n"},
+		"exit 0":       {printed("0"), nil, ""},
+		"never exited": {printed("(never exited)"), nil, ""},
+		"missing":      {"Bad request.\nCould not find service \"" + label + "\" in domain for user gui: 501\n", errors.New("exit status 113"), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var targets []string
+			l := Launchd{Domain: "gui/501", Control: func(...string) error { t.Fatal("the check changed launchd"); return nil },
+				Print: func(target string) (string, error) { targets = append(targets, target); return tc.text, tc.err }}
+			var out bytes.Buffer
+			e.ScheduleCheck(l, &out)
+			if out.String() != tc.want {
+				t.Fatalf("printed %q, want %q", out.String(), tc.want)
+			}
+			if len(targets) != 1 || targets[0] != "gui/501/"+label {
+				t.Fatalf("launchctl print targets = %q", targets)
+			}
+		})
+	}
+	var out bytes.Buffer
+	e.ScheduleCheck(Launchd{Domain: "gui/501"}, &out)
+	if out.Len() != 0 {
+		t.Fatalf("no Print seam printed %q", out.String())
 	}
 }

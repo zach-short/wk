@@ -67,7 +67,8 @@ path on stdout and everything else on stderr. Without a flag it follows workspac
 
 wk gc lists every worktree with its verdict, then every orphan branch gc owns, and changes
 nothing; --apply removes the removable worktrees and deletes the removable branches; --json
-prints the worktree verdicts as one JSON document for tools.
+prints the worktree verdicts as one JSON document for tools. wk gc also prints one line when
+the repository's launchd agent is loaded and its last exit code is not 0.
 wk gc schedule install writes and loads a launchd agent that runs wk gc --apply every
 gc.apply_interval_minutes; uninstall unloads and deletes it.
 
@@ -657,6 +658,10 @@ func realLaunchd() (wk.Launchd, error) {
 			}
 			return nil
 		},
+		Print: func(target string) (string, error) {
+			out, err := exec.Command("launchctl", "print", target).Output()
+			return string(out), err
+		},
 	}, nil
 }
 
@@ -673,7 +678,15 @@ func runGC(home, repoDir string, args []string, stdout, stderr io.Writer) int {
 	}
 	switch what {
 	case "":
-		return fail(stderr, env.GC(stdout), exitError)
+		if err := env.GC(stdout); err != nil {
+			return fail(stderr, err, exitError)
+		}
+		// A broken agent is silent otherwise: gc stops and worktrees pile up. Reading it needs
+		// launchctl, so where launchd cannot be reached the dry run prints nothing more.
+		if l, err := launchd(); err == nil {
+			env.ScheduleCheck(l, stdout)
+		}
+		return exitOK
 	case "--apply":
 		return fail(stderr, env.GCApply(stdout), exitError)
 	case "--json":

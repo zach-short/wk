@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,34 @@ import (
 
 func TestMain(m *testing.M) {
 	testrepo.Isolate()
+	// No test reaches the owner's launchd, not even to read it: a test that needs launchd
+	// swaps in a recorder.
+	launchd = func() (wk.Launchd, error) { return wk.Launchd{}, errors.New("no launchd in tests") }
 	os.Exit(m.Run())
+}
+
+func TestGCDryRunReportsABrokenAgent(t *testing.T) {
+	f := testrepo.New(t)
+	t.Setenv("WK_HOME", f.Home)
+	var targets []string
+	printed := "gui/0/com.github.zach-short.wk.gc.demo = {\n\tstate = not running\n\tlast exit code = 78: EX_CONFIG\n}\n"
+	saved := launchd
+	launchd = func() (wk.Launchd, error) {
+		return wk.Launchd{Domain: "gui/0", Control: func(...string) error { t.Fatal("the dry run called launchctl to change state"); return nil },
+			Print: func(target string) (string, error) { targets = append(targets, target); return printed, nil }}, nil
+	}
+	t.Cleanup(func() { launchd = saved })
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--repo", f.Repo, "gc"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	want := "gc agent com.github.zach-short.wk.gc.demo: last exit code 78: EX_CONFIG, so scheduled gc is not running; fix: wk gc schedule install\n"
+	if !strings.HasSuffix(stdout.String(), want) {
+		t.Fatalf("stdout:\n%s\nwant it to end with %q", stdout.String(), want)
+	}
+	if len(targets) != 1 || targets[0] != "gui/0/com.github.zach-short.wk.gc.demo" {
+		t.Fatalf("launchctl print targets = %q", targets)
+	}
 }
 
 func TestNewPrintsOnlyThePath(t *testing.T) {
@@ -147,10 +175,11 @@ func TestScheduleInstallRefusesTheTestBinary(t *testing.T) {
 	f := testrepo.New(t)
 	t.Setenv("WK_HOME", f.Home)
 	called := false
+	saved := launchd
 	launchd = func() (wk.Launchd, error) {
 		return wk.Launchd{AgentsDir: filepath.Join(f.Root, "agents"), Domain: "gui/0", Control: func(...string) error { called = true; return nil }}, nil
 	}
-	t.Cleanup(func() { launchd = realLaunchd })
+	t.Cleanup(func() { launchd = saved })
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"--repo", f.Repo, "gc", "schedule", "install"}, &stdout, &stderr); code != exitError {
 		t.Fatalf("exit %d\n%s", code, stderr.String())

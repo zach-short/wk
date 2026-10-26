@@ -42,6 +42,8 @@ This check prints nothing when no hook or agent still names the old path:
 grep -l "go/bin/wk" ~/Projects/*/.claude/settings.local.json ~/Library/LaunchAgents/com.github.zach-short.wk.gc.*.plist
 ```
 
+The gc agent starts wk through `/bin/sh`, which runs `exec "$0" "$@"` with the wk path and its arguments as separate strings. launchd infers a code requirement for the program it starts and refuses the start with exit code 78 (`EX_CONFIG`) when the program no longer matches it. A wk release binary is ad-hoc signed, so its signature changes with every release, and an agent that named wk directly stopped running after the first `brew upgrade`. `/bin/sh` is an Apple binary whose requirement holds across wk releases, and `exec` then replaces the shell with wk. An agent installed by wk 0.1.9 or earlier names wk directly, so install it again once with the loop above (`wk hooks install` in it is harmless). After that, an upgrade needs no reinstall. `wk gc` prints a line when a repository's agent is loaded and its last exit code is not 0, with the fix.
+
 From source:
 
 ```bash
@@ -373,7 +375,7 @@ wk gc schedule install
 wk gc schedule uninstall
 ```
 
-`install` writes a launchd agent named `com.github.zach-short.wk.gc.<repo>` that runs `wk gc --apply` every `gc.apply_interval_minutes` (60 by default) and loads it. The log is `~/.wk/<repo>/gc.log`. `uninstall` unloads the agent and deletes its plist.
+`install` writes a launchd agent named `com.github.zach-short.wk.gc.<repo>` that runs `wk gc --apply` every `gc.apply_interval_minutes` (60 by default) and loads it. The log is `~/.wk/<repo>/gc.log`. `uninstall` unloads the agent and deletes its plist. The agent's program is `/bin/sh`, which execs wk, so a `brew upgrade` does not stop it (see Install). The dry run `wk gc` reads the agent with `launchctl print` and, when it is loaded and its last exit code is not 0, prints a line such as `gc agent com.github.zach-short.wk.gc.<repo>: last exit code 78: EX_CONFIG, so scheduled gc is not running; fix: wk gc schedule install`. A missing agent prints nothing.
 
 ## See the hive
 

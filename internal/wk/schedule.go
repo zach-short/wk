@@ -7,15 +7,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 // Launchd is where the gc agent goes and how launchctl is reached. The command line fills it
 // with the real ~/Library/LaunchAgents and launchctl; the self-test with a directory and a
-// recorder, so no test ever loads an agent into the owner's session.
+// recorder, so no test ever loads an agent into the owner's session. Print is the read-only
+// twin of Control: it returns what `launchctl print <target>` writes and changes nothing.
 type Launchd struct {
 	AgentsDir string
 	Domain    string
 	Control   func(args ...string) error
+	Print     func(target string) (string, error)
 }
 
 // Label names the agent per repository, so two repositories get two agents.
@@ -67,6 +70,43 @@ func (e *Env) ScheduleUninstall(l Launchd, out io.Writer) error {
 	return nil
 }
 
+// lastExit reads the "last exit code = N" line of `launchctl print`. An agent that has never
+// exited prints "(never exited)" there, which does not match.
+var lastExit = regexp.MustCompile(`(?m)^\s*last exit code = (-?\d+)(?::[ \t]*(.*\S))?\s*$`)
+
+// ScheduleCheck prints one line when the repository's agent is loaded and its last run exited
+// non-zero, as launchd's EX_CONFIG (78) refusal to spawn does. A missing agent, a failing
+// launchctl or a last exit of 0 prints nothing. It only reads.
+func (e *Env) ScheduleCheck(l Launchd, out io.Writer) {
+	if l.Print == nil {
+		return
+	}
+	text, err := l.Print(l.Domain + "/" + e.Label())
+	if err != nil {
+		return
+	}
+	m := lastExit.FindStringSubmatch(text)
+	if m == nil || m[1] == "0" {
+		return
+	}
+	code := m[1]
+	if m[2] != "" {
+		code += ": " + m[2]
+	}
+	_, _ = fmt.Fprintf(out, "gc agent %s: last exit code %s, so scheduled gc is not running; fix: wk gc schedule install\n", e.Label(), code)
+}
+
+// agentArgs starts wk through /bin/sh, which execs it. launchd infers a lightweight code
+// requirement for the program it spawns. wk's release binaries are ad-hoc signed, so each
+// `brew upgrade` changes the signature, the inferred requirement stops matching, and launchd
+// refuses the spawn with EX_CONFIG (78). /bin/sh is a platform binary whose requirement holds
+// across wk releases, and exec replaces the shell with wk. The wk path and its arguments are
+// their own strings: sh -c sets $0 and $@ from them, so nothing is quoted by hand and a space in
+// a path cannot split it.
+func (e *Env) agentArgs(exe string) []string {
+	return []string{"/bin/sh", "-c", `exec "$0" "$@"`, exe, "--repo", e.Repo.Primary, "gc", "--apply"}
+}
+
 // plist runs gc from / so that the agent's own cwd is inside no worktree, with the PATH of the
 // shell that installed it, because launchd's own PATH holds no Homebrew git.
 func (e *Env) plist(exe string) []byte {
@@ -90,7 +130,7 @@ func (e *Env) plist(exe string) []byte {
 	str("\t", e.Label())
 	key("ProgramArguments")
 	b.WriteString("\t<array>\n")
-	for _, a := range []string{exe, "--repo", e.Repo.Primary, "gc", "--apply"} {
+	for _, a := range e.agentArgs(exe) {
 		str("\t\t", a)
 	}
 	b.WriteString("\t</array>\n")
