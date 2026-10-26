@@ -63,7 +63,9 @@ func readWarmStats(home string, r slot.Range) ([]WarmStats, error) {
 
 var (
 	createLineRE = regexp.MustCompile(`^(\S+) WorktreeCreate name=(\S+)`)
-	warmLineRE   = regexp.MustCompile(`^(\S+) warm (\S.*) in ([0-9.]+)s$`)
+	// warmLineRE ends with the source the hook has written since 2026-10-26 (" from pool" or
+	// " from template"); older lines end at the seconds.
+	warmLineRE = regexp.MustCompile(`^(\S+) warm (\S.*) in ([0-9.]+)s(?: from (pool|template))?$`)
 	// endLineRE is every other way a create ends with its path: hook.go's "reused", "plain
 	// fallback" and "cold after a partial warm failure".
 	endLineRE  = regexp.MustCompile(`^\S+ (?:reused|plain fallback|cold after a partial warm failure) (\S.*) in [0-9.]+s$`)
@@ -92,9 +94,11 @@ type openCreate struct {
 type warmTimes struct{ pool, template, unattributed []float64 }
 
 // warmScan matches each warm line to its WorktreeCreate line by name, the base name of the warm
-// path. A warm create counts as pool or template only when no other create was open between its
-// two lines and exactly one of the claim line and the template clone line came between them.
-// Every other warm line, including one whose WorktreeCreate line is missing, is unattributed.
+// path. A warm line that names its source counts there, whatever else was open. A warm line
+// without one, as the hook wrote before 2026-10-26, counts as pool or template only when no other
+// create was open between its two lines and exactly one of the claim line and the template clone
+// line came between them. Every other warm line, including an old one whose WorktreeCreate line
+// is missing, is unattributed.
 type warmScan struct {
 	r     slot.Range
 	open  map[string]*openCreate
@@ -134,8 +138,8 @@ func (w *warmScan) line(line string) {
 		return
 	}
 	w.evidence(strings.Contains(line, poolClaim), strings.Contains(line, templateClone))
-	if at, name, sec, ok := warmLine(line); ok {
-		w.warm(at, name, sec)
+	if at, name, sec, source, ok := warmLine(line); ok {
+		w.warm(at, name, sec, source)
 	}
 }
 
@@ -159,13 +163,17 @@ func (w *warmScan) evidence(pool, template bool) {
 	}
 }
 
-func (w *warmScan) warm(at time.Time, name string, sec float64) {
+func (w *warmScan) warm(at time.Time, name string, sec float64, source string) {
 	c := w.open[name]
 	delete(w.open, name)
 	if !w.r.Contains(at) {
 		return
 	}
 	switch {
+	case source == sourcePool:
+		w.times.pool = append(w.times.pool, sec)
+	case source == sourceTemplate:
+		w.times.template = append(w.times.template, sec)
 	case c == nil || c.crossed || c.pool == c.template:
 		w.times.unattributed = append(w.times.unattributed, sec)
 	case c.pool:
@@ -175,22 +183,23 @@ func (w *warmScan) warm(at time.Time, name string, sec float64) {
 	}
 }
 
-func warmLine(line string) (at time.Time, name string, sec float64, ok bool) {
+func warmLine(line string) (at time.Time, name string, sec float64, source string, ok bool) {
 	m := warmLineRE.FindStringSubmatch(line)
 	if m == nil {
-		return time.Time{}, "", 0, false
+		return time.Time{}, "", 0, "", false
 	}
 	at, err := time.Parse(time.RFC3339, m[1])
 	sec, serr := strconv.ParseFloat(m[3], 64)
-	return at, filepath.Base(m[2]), sec, err == nil && serr == nil
+	return at, filepath.Base(m[2]), sec, m[4], err == nil && serr == nil
 }
 
 func (s Stats) Text() string {
 	var b strings.Builder
 	b.WriteString(s.Slots.Text())
 	b.WriteString("\nwarm creates in hook.log. Unattributed creates came from the pool or the template, but the log\n" +
-		"cannot separate them: another create was open at the same time, or the log has neither source\n" +
-		"line or both. So a low pool or template count does not mean few such creates happened.\n")
+		"cannot separate them: the warm line predates the source the hook writes since 2026-10-26, and\n" +
+		"another create was open at the same time, or the log has neither source line or both. So a low\n" +
+		"pool or template count does not mean few such creates happened.\n")
 	if len(s.Warm) == 0 {
 		b.WriteString("  none\n")
 	}

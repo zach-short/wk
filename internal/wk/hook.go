@@ -60,7 +60,11 @@ func WorktreeCreate(home string, in io.Reader, stderr io.Writer, configure func(
 		_, _ = fmt.Fprintf(log, "%s failed after %.2fs: %v\n", time.Now().Format(time.RFC3339), time.Since(start).Seconds(), err)
 		return "", err
 	}
-	_, _ = fmt.Fprintf(log, "%s %s %s in %.2fs\n", time.Now().Format(time.RFC3339), how, path, time.Since(start).Seconds())
+	from := ""
+	if how == "warm" {
+		from = " from " + h.source
+	}
+	_, _ = fmt.Fprintf(log, "%s %s %s in %.2fs%s\n", time.Now().Format(time.RFC3339), how, path, time.Since(start).Seconds(), from)
 	return path, nil
 }
 
@@ -72,6 +76,9 @@ type hookRun struct {
 	stderr io.Writer
 	dir    string
 	branch string
+	// source is where a warm create came from, sourcePool or sourceTemplate; the warm line
+	// ends with it.
+	source string
 }
 
 func (h *hookRun) create(home string, configure func(*Env)) (path, how string, err error) {
@@ -95,7 +102,9 @@ func (h *hookRun) create(home string, configure func(*Env)) (path, how string, e
 		if configure != nil {
 			configure(env)
 		}
-		_, warmErr = env.create(h.dir, h.branch, h.base, env.Cfg.Workspace.Sparse)
+		var source string
+		_, source, warmErr = env.createFrom(h.dir, h.branch, h.base, env.Cfg.Workspace.Sparse)
+		h.source = source
 	}
 	if warmErr == nil {
 		return h.dir, "warm", nil

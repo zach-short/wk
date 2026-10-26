@@ -132,8 +132,9 @@ local dates, both included (every date by default): per class and per command, t
 exits, wait and run times; how the waits overlapped; the waits over 10 minutes and the commands
 that held the places during them; commands issued again in the same directory within 10 minutes
 of the last one ending; missed.log by reason and the hook's deadline misses in errors.log; and
-each repository's warm creates in hook.log, from a pool slot, the template, or unattributed when
-another create overlapped it. --json prints the
+each repository's warm creates in hook.log, from a pool slot or the template as the warm line
+says, or, for a line older than 2026-10-26 that names no source, unattributed when another create
+overlapped it. --json prints the
 same as one JSON document, with every row the text leaves out.
 `
 
