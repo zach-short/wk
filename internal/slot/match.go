@@ -213,11 +213,18 @@ func (w *matchWalk) subst(c *syntax.CmdSubst) {
 }
 
 // matchCapturesStderr is true when a command inside c may write its stderr where c's stdout
-// goes: 2>&1, &>, &>>, 2>/dev/stdout or |&. It errs toward true: &> to a file also counts.
+// goes. It errs toward true, because a wrong true costs one unslotted gate and a wrong false
+// changes the captured text (row 22 audits B2 and A): |&, &> and &>> anywhere, even to a file;
+// any dup of fd 2 (>& or <&) to anything but a plain `-`, so 2>&3 after 3>&1 and 2>&1- count;
+// any fd-2 redirect whose target is not plain literal text, such as 2>&"1" or 2> >(cat), or is
+// under /dev/stdout or /dev/fd; and an exec that dups any fd, which lasts for the commands after
+// it. 2>/dev/null and 2>&- stay out of the capture.
 func matchCapturesStderr(c *syntax.CmdSubst) bool {
 	found := false
 	syntax.Walk(c, func(n syntax.Node) bool {
 		switch n := n.(type) {
+		case *syntax.Stmt:
+			found = found || matchExecDups(n)
 		case *syntax.Redirect:
 			found = found || matchStderrToStdout(n)
 		case *syntax.BinaryCmd:
@@ -229,14 +236,31 @@ func matchCapturesStderr(c *syntax.CmdSubst) bool {
 }
 
 func matchStderrToStdout(r *syntax.Redirect) bool {
-	switch r.Op {
-	case syntax.RdrAll, syntax.AppAll:
+	if r.Op == syntax.RdrAll || r.Op == syntax.AppAll {
 		return true
-	case syntax.DplOut:
-		return r.N != nil && r.N.Value == "2" && r.Word.Lit() == "1"
-	case syntax.RdrOut, syntax.AppOut, syntax.ClbOut:
-		target := r.Word.Lit()
-		return r.N != nil && r.N.Value == "2" && (target == "/dev/stdout" || target == "/dev/fd/1")
+	}
+	if r.N == nil || r.N.Value != "2" || r.Word == nil {
+		return false
+	}
+	target, plain := matchLiteral(r.Word)
+	switch {
+	case !plain:
+		return true
+	case r.Op == syntax.DplOut || r.Op == syntax.DplIn:
+		return target != "-"
+	}
+	return target == "/dev/stdout" || strings.HasPrefix(target, "/dev/fd/")
+}
+
+func matchExecDups(s *syntax.Stmt) bool {
+	call, ok := s.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 || call.Args[0].Lit() != "exec" {
+		return false
+	}
+	for _, r := range s.Redirs {
+		if r.Op == syntax.DplOut || r.Op == syntax.DplIn {
+			return true
+		}
 	}
 	return false
 }
