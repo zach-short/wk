@@ -132,7 +132,8 @@ local dates, both included (every date by default): per class and per command, t
 exits, wait and run times; how the waits overlapped; the waits over 10 minutes and the commands
 that held the places during them; commands issued again in the same directory within 10 minutes
 of the last one ending; missed.log by reason and the hook's deadline misses in errors.log; and
-each repository's warm creates in hook.log, from a pool slot or the template. --json prints the
+each repository's warm creates in hook.log, from a pool slot, the template, or unattributed when
+another create overlapped it. --json prints the
 same as one JSON document, with every row the text leaves out.
 `
 
@@ -559,11 +560,13 @@ func runStats(home string, args []string, stdout, stderr io.Writer) int {
 
 func parseStats(args []string) (r slot.Range, asJSON bool, err error) {
 	dates := map[string]string{}
+	seen := map[string]bool{} // a given empty value still counts, so it cannot be given twice
 	for i := 0; i < len(args); i++ {
 		switch flag := args[i]; {
 		case flag == "--json" && !asJSON:
 			asJSON = true
-		case (flag == "--since" || flag == "--until") && dates[flag] == "" && i+1 < len(args):
+		case (flag == "--since" || flag == "--until") && !seen[flag] && i+1 < len(args):
+			seen[flag] = true
 			i++
 			dates[flag] = args[i]
 		default:

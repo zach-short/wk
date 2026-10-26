@@ -15,11 +15,12 @@ func TestStatsRefusesBadArguments(t *testing.T) {
 		args []string
 		why  string
 	}{
-		"unknown flag":     {[]string{"stats", "--yaml"}, `unexpected argument to wk stats: "--yaml"`},
-		"--since no value": {[]string{"stats", "--since"}, `unexpected argument to wk stats: "--since"`},
-		"--json twice":     {[]string{"stats", "--json", "--json"}, `unexpected argument to wk stats: "--json"`},
-		"--until twice":    {[]string{"stats", "--until", "2026-10-26", "--until", "2026-10-27"}, `"--until"`},
-		"a bad date":       {[]string{"stats", "--since", "yesterday"}, `--since "yesterday" is not a YYYY-MM-DD date`},
+		"unknown flag":               {[]string{"stats", "--yaml"}, `unexpected argument to wk stats: "--yaml"`},
+		"--since no value":           {[]string{"stats", "--since"}, `unexpected argument to wk stats: "--since"`},
+		"--json twice":               {[]string{"stats", "--json", "--json"}, `unexpected argument to wk stats: "--json"`},
+		"--until twice":              {[]string{"stats", "--until", "2026-10-26", "--until", "2026-10-27"}, `"--until"`},
+		"--since twice, empty first": {[]string{"stats", "--since", "", "--since", "2026-10-17"}, `unexpected argument to wk stats: "--since"`},
+		"a bad date":                 {[]string{"stats", "--since", "yesterday"}, `--since "yesterday" is not a YYYY-MM-DD date`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

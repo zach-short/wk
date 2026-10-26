@@ -24,11 +24,12 @@ type Stats struct {
 }
 
 // WarmStats is one repository's warm creates from hook.log, split by where the workspace came
-// from: a ready pool slot, or a clone of the template.
+// from: a ready pool slot, a clone of the template, or Unattributed when the log cannot say.
 type WarmStats struct {
-	Repo     string            `json:"repo"`
-	Pool     slot.Distribution `json:"pool"`
-	Template slot.Distribution `json:"template"`
+	Repo         string            `json:"repo"`
+	Pool         slot.Distribution `json:"pool"`
+	Template     slot.Distribution `json:"template"`
+	Unattributed slot.Distribution `json:"unattributed"`
 }
 
 func ReadStats(home string, r slot.Range) (Stats, error) {
@@ -48,82 +49,152 @@ func readWarmStats(home string, r slot.Range) ([]WarmStats, error) {
 	sort.Strings(logs)
 	out := []WarmStats{}
 	for _, path := range logs {
-		pool, template, err := readWarm(path, r)
+		w, err := readWarm(path, r)
 		if err != nil {
 			return nil, err
 		}
-		if len(pool)+len(template) > 0 {
-			out = append(out, WarmStats{Repo: filepath.Base(filepath.Dir(path)), Pool: slot.Distribute(pool), Template: slot.Distribute(template)})
+		if len(w.pool)+len(w.template)+len(w.unattributed) > 0 {
+			out = append(out, WarmStats{Repo: filepath.Base(filepath.Dir(path)), Pool: slot.Distribute(w.pool),
+				Template: slot.Distribute(w.template), Unattributed: slot.Distribute(w.unattributed)})
 		}
 	}
 	return out, nil
 }
 
 var (
-	createLineRE = regexp.MustCompile(`^\S+ WorktreeCreate `)
-	warmLineRE   = regexp.MustCompile(`^(\S+) warm \S.* in ([0-9.]+)s$`)
+	createLineRE = regexp.MustCompile(`^(\S+) WorktreeCreate name=(\S+)`)
+	warmLineRE   = regexp.MustCompile(`^(\S+) warm (\S.*) in ([0-9.]+)s$`)
+	// endLineRE is every other way a create ends with its path: hook.go's "reused", "plain
+	// fallback" and "cold after a partial warm failure".
+	endLineRE  = regexp.MustCompile(`^\S+ (?:reused|plain fallback|cold after a partial warm failure) (\S.*) in [0-9.]+s$`)
+	failLineRE = regexp.MustCompile(`^\S+ failed after `)
 )
 
-// poolClaim is the line create writes when it takes a pool slot. "pool: no ready sparse slot"
-// also names the pool but is followed by a template clone, so a bare "pool" is not enough.
-const poolClaim = "claim pool slot"
+// The lines create writes for each source. "pool: no ready sparse slot" also names the pool but
+// is followed by a template clone, so a bare "pool" is not enough.
+const (
+	poolClaim     = "claim pool slot"
+	templateClone = "worktree add --no-checkout"
+)
 
-// readWarm reads the seconds of each warm create inside r. A create counts as from the pool when
-// a claim line comes between its WorktreeCreate line and its warm line. Two hooks that run at
-// once can interleave their lines; the warm line then takes the claim of the nearer create.
-func readWarm(path string, r slot.Range) (pool, template []float64, err error) {
+// staleCreate drops a create that never wrote an end line, such as a hook that was killed, so it
+// does not mark every later create as crossed. The slowest warm create seen took under a minute.
+const staleCreate = 10 * time.Minute
+
+// openCreate is one create between its WorktreeCreate line and its end line. crossed is set when
+// another create was open at any moment of that span: the pool and template lines carry no
+// create name, so the lines of crossed creates cannot be told apart.
+type openCreate struct {
+	at                      time.Time
+	crossed, pool, template bool
+}
+
+type warmTimes struct{ pool, template, unattributed []float64 }
+
+// warmScan matches each warm line to its WorktreeCreate line by name, the base name of the warm
+// path. A warm create counts as pool or template only when no other create was open between its
+// two lines and exactly one of the claim line and the template clone line came between them.
+// Every other warm line, including one whose WorktreeCreate line is missing, is unattributed.
+type warmScan struct {
+	r     slot.Range
+	open  map[string]*openCreate
+	times warmTimes
+}
+
+func readWarm(path string, r slot.Range) (warmTimes, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil
+		return warmTimes{}, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return warmTimes{}, err
 	}
 	defer func() { _ = f.Close() }()
-	claimed := false
+	w := warmScan{r: r, open: map[string]*openCreate{}}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case createLineRE.MatchString(line):
-			claimed = false
-		case strings.Contains(line, poolClaim):
-			claimed = true
-		default:
-			at, sec, ok := warmLine(line)
-			if !ok || !r.Contains(at) {
-				continue
-			}
-			if claimed {
-				pool = append(pool, sec)
-			} else {
-				template = append(template, sec)
-			}
-		}
+		w.line(sc.Text())
 	}
-	return pool, template, sc.Err()
+	return w.times, sc.Err()
 }
 
-func warmLine(line string) (time.Time, float64, bool) {
+func (w *warmScan) line(line string) {
+	if m := createLineRE.FindStringSubmatch(line); m != nil {
+		w.start(m[1], m[2])
+		return
+	}
+	if m := endLineRE.FindStringSubmatch(line); m != nil {
+		delete(w.open, filepath.Base(m[1]))
+		return
+	}
+	// A failure line names no create; it can only be placed when one create is open.
+	if failLineRE.MatchString(line) && len(w.open) == 1 {
+		clear(w.open)
+		return
+	}
+	w.evidence(strings.Contains(line, poolClaim), strings.Contains(line, templateClone))
+	if at, name, sec, ok := warmLine(line); ok {
+		w.warm(at, name, sec)
+	}
+}
+
+func (w *warmScan) start(stamp, name string) {
+	at, _ := time.Parse(time.RFC3339, stamp)
+	for n, c := range w.open {
+		if at.Sub(c.at) > staleCreate {
+			delete(w.open, n)
+		}
+	}
+	for _, c := range w.open {
+		c.crossed = true
+	}
+	w.open[name] = &openCreate{at: at, crossed: len(w.open) > 0}
+}
+
+func (w *warmScan) evidence(pool, template bool) {
+	for _, c := range w.open {
+		c.pool = c.pool || pool
+		c.template = c.template || template
+	}
+}
+
+func (w *warmScan) warm(at time.Time, name string, sec float64) {
+	c := w.open[name]
+	delete(w.open, name)
+	if !w.r.Contains(at) {
+		return
+	}
+	switch {
+	case c == nil || c.crossed || c.pool == c.template:
+		w.times.unattributed = append(w.times.unattributed, sec)
+	case c.pool:
+		w.times.pool = append(w.times.pool, sec)
+	default:
+		w.times.template = append(w.times.template, sec)
+	}
+}
+
+func warmLine(line string) (at time.Time, name string, sec float64, ok bool) {
 	m := warmLineRE.FindStringSubmatch(line)
 	if m == nil {
-		return time.Time{}, 0, false
+		return time.Time{}, "", 0, false
 	}
 	at, err := time.Parse(time.RFC3339, m[1])
-	sec, serr := strconv.ParseFloat(m[2], 64)
-	return at, sec, err == nil && serr == nil
+	sec, serr := strconv.ParseFloat(m[3], 64)
+	return at, filepath.Base(m[2]), sec, err == nil && serr == nil
 }
 
 func (s Stats) Text() string {
 	var b strings.Builder
 	b.WriteString(s.Slots.Text())
-	b.WriteString("\nwarm creates in hook.log:\n")
+	b.WriteString("\nwarm creates in hook.log (unattributed: another create was open at the same time, or the log names neither source):\n")
 	if len(s.Warm) == 0 {
 		b.WriteString("  none\n")
 	}
 	for _, w := range s.Warm {
-		fmt.Fprintf(&b, "  %s\n    pool:     %s\n    template: %s\n", w.Repo, w.Pool.Text(), w.Template.Text())
+		fmt.Fprintf(&b, "  %s\n    pool:         %s\n    template:     %s\n    unattributed: %s\n",
+			w.Repo, w.Pool.Text(), w.Template.Text(), w.Unattributed.Text())
 	}
 	return b.String()
 }
