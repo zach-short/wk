@@ -403,6 +403,11 @@ func matchIndexAll(index syntax.ArithmExpr) bool {
 // `sh -c 'go test && echo bun run build'` is refused as two classes. Reversal: give nestedGates
 // back a list of the gates it found and take the class from that.
 //
+// A string that names a gate but runs none the walk sees, and holds a form that can run text as
+// a command (`echo go test | sh`, `$x`), is refused with matchRunsTextReason, never wrapped and
+// never silent (row 29 audit F2, decided by the row 29 session by risk). Reversal: remove the
+// runsText check in nestedGates.
+//
 // A string that runs a gate behind timeout, `sh -c 'timeout 300 go test'`, is wrapped whole like
 // any other (row 27, from the row 25 audit N1): wk run waits for its place before the shell
 // starts, so timeout's clock starts after the wait, and the harm that keeps a gate behind
@@ -421,9 +426,12 @@ func (w *matchWalk) shellGate(c *syntax.CallExpr) (matchGate, string, bool) {
 	if !plain {
 		return why("the string is not plain text")
 	}
-	runs, parsed := w.nestedGates(text)
+	runs, runsText, parsed := w.nestedGates(text)
 	if !parsed {
 		return why("the string does not parse")
+	}
+	if runsText {
+		return why(matchRunsTextReason)
 	}
 	if !runs {
 		return matchGate{}, "", false
