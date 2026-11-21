@@ -539,6 +539,66 @@ func TestGCKeepsAnUntrackedFileWhoseDeletionIsStaged(t *testing.T) {
 	}
 }
 
+// A change only in the index leaves the working tree equal to HEAD, so `git diff HEAD` sees
+// nothing, and `git worktree remove` still refuses. gc must keep the worktree and delete nothing.
+func TestGCKeepsAHeldFileBesideAChangeOnlyInTheIndex(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stage func(t *testing.T, dir string)
+	}{
+		{"staged-edit-undone", func(t *testing.T, dir string) {
+			writeIn(t, dir, "README.md", "staged\n")
+			testrepo.Git(t, dir, "add", "README.md")
+			writeIn(t, dir, "README.md", "demo\n")
+		}},
+		{"added-then-deleted", func(t *testing.T, dir string) {
+			writeIn(t, dir, "N.txt", "n\n")
+			testrepo.Git(t, dir, "add", "N.txt")
+			if err := os.Remove(filepath.Join(dir, "N.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testrepo.New(t)
+			e := idle(t, f)
+			dir := auditWorktree(t, f, tc.name, "a finding\n")
+			tc.stage(t, dir)
+			j, ok := judgments(t, e)[dir]
+			if !ok || j.Verdict == Removable || len(j.held) != 0 {
+				t.Fatalf("verdict %q, reasons %q, held %v; want it kept with nothing held", j.Verdict, j.Reasons, j.held)
+			}
+			var dry bytes.Buffer
+			if err := e.GC(&dry); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(dry.String(), "the base already holds") {
+				t.Fatalf("the dry run called the file held:\n%s", dry.String())
+			}
+			apply(t, e)
+			assertStays(t, dir)
+			if got := read(t, filepath.Join(dir, finding)); got != "a finding\n" {
+				t.Fatalf("the held file was deleted: %q", got)
+			}
+		})
+	}
+}
+
+func TestGCKeepsAnEqualFileWhoseExecutableBitDiffers(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := auditWorktree(t, f, "chmod", "a finding\n")
+	if err := os.Chmod(filepath.Join(dir, finding), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, e, dir, KeptForLanding, "1 changed path")
+	apply(t, e)
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, finding)); got != "a finding\n" {
+		t.Fatalf("the executable copy was deleted: %q", got)
+	}
+}
+
 func TestGCKeepsASymbolicLinkToAnEqualFile(t *testing.T) {
 	f := testrepo.New(t)
 	e := idle(t, f)

@@ -175,11 +175,22 @@ func Untracked(dir string) ([]string, error) {
 	return nulList(dir, "ls-files", "--others", "--exclude-standard", "-z")
 }
 
-// Tracked lists the tracked paths in dir that differ from HEAD, staged or not: the first half
-// of DirtyPaths, by the same command. A path can be in both halves, as after
-// `git rm --cached`, which DirtyPaths lists once.
-func Tracked(dir string) ([]string, error) {
-	return nulList(dir, "diff", "--name-only", "--no-renames", "-z", "HEAD")
+// OnlyUntracked says whether every change git status sees in dir is an untracked file: the
+// test `git worktree remove` applies before it refuses. It reads the index too, so it sees a
+// change that is only staged, which `git diff HEAD` against the working tree misses: an edit
+// staged and then undone on disk, or a file added and then deleted. GIT_OPTIONAL_LOCKS=0 (Run)
+// keeps the status read from rewriting the index.
+func OnlyUntracked(dir string) (bool, error) {
+	out, err := Run(dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range strings.Split(out, "\x00") {
+		if entry != "" && !strings.HasPrefix(entry, "?? ") {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func nulList(dir string, args ...string) ([]string, error) {
@@ -200,7 +211,8 @@ func nulList(dir string, args ...string) ([]string, error) {
 // bytes are exactly that blob, or "" when it is not. Deleting such a file loses nothing, because
 // rev still has it. A symbolic link, a directory or a non-file entry in rev is never held, and
 // --no-filters hashes the bytes on disk, so a file that differs from the blob only by a clean
-// filter or a line-ending conversion is not held either.
+// filter or a line-ending conversion is not held either. The executable bit must match too: any
+// x bit on disk for mode 100755, none for 100644, as git reads it with core.fileMode.
 func HeldBlob(dir, rev, rel string) (string, error) {
 	abs := filepath.Join(dir, filepath.FromSlash(rel))
 	info, err := os.Lstat(abs)
@@ -210,9 +222,12 @@ func HeldBlob(dir, rev, rel string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", nil
 	}
-	blob, err := fileBlob(dir, rev, rel)
+	blob, executable, err := fileBlob(dir, rev, rel)
 	if err != nil || blob == "" {
 		return "", err
+	}
+	if executable != (info.Mode().Perm()&0o111 != 0) {
+		return "", nil
 	}
 	sum, err := Run(dir, "hash-object", "--no-filters", abs)
 	if err != nil {
@@ -224,23 +239,24 @@ func HeldBlob(dir, rev, rel string) (string, error) {
 	return blob, nil
 }
 
-// fileBlob is the blob of a regular file (mode 100644 or 100755) at exactly rel in rev, or "".
-// --literal-pathspecs keeps a name with a glob character from matching other paths.
-func fileBlob(dir, rev, rel string) (string, error) {
+// fileBlob is the blob of a regular file (mode 100644 or 100755) at exactly rel in rev, or "",
+// and whether its mode is 100755. --literal-pathspecs keeps a name with a glob character from
+// matching other paths.
+func fileBlob(dir, rev, rel string) (string, bool, error) {
 	out, err := Run(dir, "--literal-pathspecs", "ls-tree", "-z", "--full-tree", rev, "--", rel)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	entries := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
 	if len(entries) != 1 {
-		return "", nil
+		return "", false, nil
 	}
 	meta, path, _ := strings.Cut(entries[0], "\t")
 	fields := strings.Fields(meta)
 	if path != rel || len(fields) != 3 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
-		return "", nil
+		return "", false, nil
 	}
-	return fields[2], nil
+	return fields[2], fields[0] == "100755", nil
 }
 
 // IsAncestor says whether commit is already in into's history.

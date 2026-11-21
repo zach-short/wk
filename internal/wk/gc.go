@@ -214,17 +214,16 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	return j
 }
 
-// heldByBase is the held list for judge: every changed path, when each one is untracked and
-// never a tracked change, and HeldBlob finds it byte-equal to base's blob, and nil otherwise. A
-// path can be both, as after `git rm --cached`; that staged deletion is work, so it is not held.
-// A worktree with one path that is not held keeps all its paths, so gc never deletes part of
-// its work.
+// heldByBase is the held list for judge: every changed path, when git status sees nothing but
+// untracked files and HeldBlob finds each one byte-equal to base's blob, and nil otherwise. A
+// staged change is work even when the working tree matches HEAD, as after `git rm --cached` or
+// a staged edit undone on disk, so any one keeps the whole worktree. A worktree with one path
+// that is not held keeps all its paths, so gc never deletes part of its work.
 func heldByBase(wt, base string, dirty []string) []heldFile {
 	if len(dirty) == 0 {
 		return nil
 	}
-	tracked, err := gitx.Tracked(wt)
-	if err != nil || len(tracked) > 0 {
+	if only, err := gitx.OnlyUntracked(wt); err != nil || !only {
 		return nil
 	}
 	untracked, err := gitx.Untracked(wt)
@@ -430,7 +429,7 @@ func (e *Env) removeOne(out io.Writer, w gitx.Worktree) (bool, error) {
 	if _, err := gitx.Run(e.Repo.Primary, "worktree", "remove", j.Worktree.Path); err != nil {
 		reason := "git worktree remove refused: " + err.Error()
 		if len(j.held) > 0 {
-			reason += "; the " + count(len(j.held), "file", "files") + " deleted before it are still in " + e.Cfg.Workspace.Base
+			reason += "; the " + count(len(j.held), "file deleted before it is", "files deleted before it are") + " still in " + e.Cfg.Workspace.Base
 		}
 		e.printLine(out, "kept", w, reason)
 		return false, err
@@ -468,7 +467,7 @@ func (e *Env) deleteHeld(out io.Writer, j Judgment) (bool, error) {
 	}
 	for i, h := range j.held {
 		if err := os.Remove(filepath.Join(j.Worktree.Path, filepath.FromSlash(h.path))); err != nil {
-			e.printLine(out, "kept", j.Worktree, fmt.Sprintf("deleting %s failed: %v; the %s deleted before it are still in %s", h.path, err, count(i, "file", "files"), e.Cfg.Workspace.Base))
+			e.printLine(out, "kept", j.Worktree, fmt.Sprintf("deleting %s failed: %v; the %s still in %s", h.path, err, count(i, "file deleted before it is", "files deleted before it are"), e.Cfg.Workspace.Base))
 			return false, err
 		}
 	}

@@ -17,6 +17,11 @@ func heldFixture(t *testing.T) (testrepo.Fixture, string, string) {
 	old := f.Git(t, "rev-parse", "HEAD")
 	f.Write(t, "docs/audit/finding.md", "a finding\n")
 	f.Write(t, "docs/audit/run.sh", "#!/bin/sh\n")
+	f.Write(t, "docs/audit/finding-x.md", "a finding\n")
+	f.Write(t, "docs/audit/run-plain.sh", "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(f.Repo, "docs/audit/run-plain.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(filepath.Join(f.Repo, "docs/audit/run.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +50,8 @@ func TestHeldBlobHoldsOnlyAByteEqualRegularFile(t *testing.T) {
 	f, wt, base := heldFixture(t)
 	put(t, wt, "docs/audit/finding.md", "a finding\n", 0o644)
 	put(t, wt, "docs/audit/run.sh", "#!/bin/sh\n", 0o755)
+	put(t, wt, "docs/audit/finding-x.md", "a finding\n", 0o755)
+	put(t, wt, "docs/audit/run-plain.sh", "#!/bin/sh\n", 0o644)
 	put(t, wt, "docs/audit/differs.md", "x\n", 0o644)
 	put(t, wt, "docs/audit/new.md", "not on the base\n", 0o644)
 	put(t, wt, "docs/audit/link", "finding.md", 0o644)
@@ -57,6 +64,8 @@ func TestHeldBlobHoldsOnlyAByteEqualRegularFile(t *testing.T) {
 	}{
 		{"equal file", base, "docs/audit/finding.md", true},
 		{"equal executable", base, "docs/audit/run.sh", true},
+		{"executable copy of a 100644 file", base, "docs/audit/finding-x.md", false},
+		{"plain copy of a 100755 file", base, "docs/audit/run-plain.sh", false},
 		{"different bytes", base, "docs/audit/differs.md", false},
 		{"path the base lacks", base, "docs/audit/new.md", false},
 		{"regular file over the base's symbolic link", base, "docs/audit/link", false},
@@ -117,16 +126,19 @@ func TestUntrackedIsTheUntrackedHalfOfDirtyPaths(t *testing.T) {
 	}
 }
 
-func TestTrackedIsTheTrackedHalfOfDirtyPaths(t *testing.T) {
+func TestOnlyUntrackedSeesAChangeThatIsOnlyStaged(t *testing.T) {
 	f := testrepo.New(t)
-	put(t, f.Repo, "web/page.ts", "edited\n", 0o644)
 	put(t, f.Repo, "notes/draft.md", "a draft\n", 0o644)
-	testrepo.Git(t, f.Repo, "rm", "--cached", "--quiet", "README.md")
-	got, err := Tracked(f.Repo)
-	if err != nil {
-		t.Fatal(err)
+	if only, err := OnlyUntracked(f.Repo); err != nil || !only {
+		t.Fatalf("only untracked files: OnlyUntracked = %v, %v; want true", only, err)
 	}
-	if len(got) != 2 || got[0] != "README.md" || got[1] != "web/page.ts" {
-		t.Fatalf("Tracked = %q, want [README.md web/page.ts]", got)
+	put(t, f.Repo, "README.md", "staged\n", 0o644)
+	testrepo.Git(t, f.Repo, "add", "README.md")
+	put(t, f.Repo, "README.md", "demo\n", 0o644)
+	if out := testrepo.Git(t, f.Repo, "diff", "--name-only", "HEAD"); out != "" {
+		t.Fatalf("the probe needs git diff HEAD to see nothing, got %q", out)
+	}
+	if only, err := OnlyUntracked(f.Repo); err != nil || only {
+		t.Fatalf("a staged edit undone on disk: OnlyUntracked = %v, %v; want false", only, err)
 	}
 }

@@ -87,3 +87,24 @@ N4 is also fixed. `deleteHeld` now reports a git error from `HeldBlob` as "the s
 N1, N2, N3 and N5 from the same review stay open, as the coordinator decided.
 
 After the fix, the gate is green with `env -u WK_SLOT_HELD` and a fresh lint cache. The read-only `wk gc` on ezhomesteading gives `24 of 43 removable` again, with the same verdict lines as the first proof.
+
+### Fix round 2, 2026-11-21
+
+The second Fable 5.2 review of `3c614b5` closed B1 and found N6 and N7.
+
+N6: the round 1 check missed a change that is only in the index, because `gitx.Tracked` compared the working tree with HEAD. A staged edit undone on disk (`MM README.md`) and a file added and then deleted (`AD N.txt`) both gave a removable verdict, and `--apply` would delete the held file before `git worktree remove` refused. The fix replaces `gitx.Tracked` with `gitx.OnlyUntracked`, which runs `git status --porcelain=v1 -z --untracked-files=all` and is true only when every entry is `??`, the same test `git worktree remove` applies. `heldByBase` finds no held files unless it is true. `Tracked` and its test are deleted, so the round 1 note above names a helper that no longer exists. The B1 test still passes, because a `git rm --cached` path is a `D ` entry in the status. `TestGCKeepsAHeldFileBesideAChangeOnlyInTheIndex` covers both cases: kept, nothing held, no held text in the dry run, and the held file still on disk after `--apply`. With the round 1 `git diff HEAD` check put back, both subtests fail with a removable verdict.
+
+N7: `HeldBlob` did not compare the executable bit. It now requires an x bit on disk for base mode `100755` and no x bit for `100644`. `TestGCKeepsAnEqualFileWhoseExecutableBitDiffers` and two new `HeldBlob` cases (an executable copy of a `100644` file, a plain copy of a `100755` file) fail without the check.
+
+The plural is fixed: a kept line now says "the 1 file deleted before it is still in main", and "files ... are" for more than one.
+
+Open from the reviews, left as they are by the coordinator's decision:
+
+- N1: the base ref can move after the re-judge, so the "still in main" line can then be inexact. The bytes stay in the old commit.
+- N2: `deleteHeld` checks all files, then deletes all. The gap is about two git processes per held file. It is bounded, and it comes after the quiet-window and process checks.
+- N3: no test covers the two kept lines after a partial delete (the `git worktree remove` refusal in `removeOne` and the `os.Remove` failure in `deleteHeld`).
+- N5: each judge runs two git processes per untracked file, also in the dry run and in `--json`.
+
+Outside row 31: `git diff --name-only HEAD` can rewrite the index of a stat-dirty worktree, so it can reset the quiet window for one pass. `DirtyPaths` still runs it. The round 1 `Tracked` added a second run, and round 2 drops `Tracked`, so that second run is gone. The new `git status` runs through `gitx.Run` with `GIT_OPTIONAL_LOCKS=0`, so it does not write the index.
+
+After the fix, the gate is green with `env -u WK_SLOT_HELD` and a fresh lint cache. The read-only `wk gc` on ezhomesteading gives `24 of 43 removable`, with the same verdict lines as the first proof.
