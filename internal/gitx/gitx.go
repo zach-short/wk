@@ -172,7 +172,18 @@ func DirtyPaths(dir string) ([]string, error) {
 // Untracked lists the untracked files in dir that are not ignored: the second half of
 // DirtyPaths, by the same command, so gc can tell an untracked path from a tracked edit.
 func Untracked(dir string) ([]string, error) {
-	out, err := Run(dir, "ls-files", "--others", "--exclude-standard", "-z")
+	return nulList(dir, "ls-files", "--others", "--exclude-standard", "-z")
+}
+
+// Tracked lists the tracked paths in dir that differ from HEAD, staged or not: the first half
+// of DirtyPaths, by the same command. A path can be in both halves, as after
+// `git rm --cached`, which DirtyPaths lists once.
+func Tracked(dir string) ([]string, error) {
+	return nulList(dir, "diff", "--name-only", "--no-renames", "-z", "HEAD")
+}
+
+func nulList(dir string, args ...string) ([]string, error) {
+	out, err := Run(dir, args...)
 	if err != nil {
 		return nil, err
 	}

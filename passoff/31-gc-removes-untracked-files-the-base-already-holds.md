@@ -77,3 +77,13 @@ What is now fixed. The read-only proof on ezhomesteading with the branch binary 
 Judgment calls. `hash-object` runs with `--no-filters`, so a file that equals the blob only after a clean filter or a line-ending conversion is not held; this deletes fewer files than the filtered hash would. To reverse it, drop `--no-filters` in `HeldBlob`. The `held` field is in `report.go`, which this item's "Files it owns" did not list, because the item asks for the count in the `--json` report. Kept lines do not mention held files; only the removable line and the `held` count do.
 
 Left owed. The Fable 5.2 review of the deletion path (`deleteHeld`, `removeOne`, `HeldBlob`). A release tag and `brew upgrade`, by the owner. The gate's `TestRunPassesTheExitStatusThroughAPlace` in `cmd/wk` fails when the gate runs under a `wk run --slot` wrapper, because the child inherits `WK_SLOT_HELD`; it fails the same way on a clean `main` copy, and passes with `env -u WK_SLOT_HELD`. That is a test isolation gap outside this item.
+
+### Fix round 1, 2026-11-21
+
+The Fable 5.2 review of `b082b2b` found one blocking defect, B1. `heldByBase` checked only that a path was in the untracked half of `DirtyPaths`, so a path in both halves passed. After `git rm --cached <file>`, the path is a staged deletion and an untracked file with the base's bytes. gc called it removable, `--apply` deleted the file, and then `git worktree remove` refused, which left the staged deletion with the file gone. The fix: `gitx.Tracked` runs the same `git diff --name-only --no-renames -z HEAD` as the tracked half of `DirtyPaths`, which is unchanged, and `heldByBase` returns no held files when that list has any path. `TestGCKeepsAnUntrackedFileWhoseDeletionIsStaged` proves the worktree is kept and the file stays, in both the dry run and `--apply`; it fails on `b082b2b`. `TestTrackedIsTheTrackedHalfOfDirtyPaths` covers the helper.
+
+N4 is also fixed. `deleteHeld` now reports a git error from `HeldBlob` as "the second check of <path> failed: <error>; nothing deleted" and returns the error. A file that changed, or a file that is gone (`fs.ErrNotExist`), still gives "changed after it was judged; nothing deleted".
+
+N1, N2, N3 and N5 from the same review stay open, as the coordinator decided.
+
+After the fix, the gate is green with `env -u WK_SLOT_HELD` and a fresh lint cache. The read-only `wk gc` on ezhomesteading gives `24 of 43 removable` again, with the same verdict lines as the first proof.

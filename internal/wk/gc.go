@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -213,11 +214,17 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	return j
 }
 
-// heldByBase is the held list for judge: every changed path, when each one is untracked (never a
-// tracked edit) and HeldBlob finds it byte-equal to base's blob, and nil otherwise. A worktree
-// with one path that is not held keeps all its paths, so gc never deletes part of its work.
+// heldByBase is the held list for judge: every changed path, when each one is untracked and
+// never a tracked change, and HeldBlob finds it byte-equal to base's blob, and nil otherwise. A
+// path can be both, as after `git rm --cached`; that staged deletion is work, so it is not held.
+// A worktree with one path that is not held keeps all its paths, so gc never deletes part of
+// its work.
 func heldByBase(wt, base string, dirty []string) []heldFile {
 	if len(dirty) == 0 {
+		return nil
+	}
+	tracked, err := gitx.Tracked(wt)
+	if err != nil || len(tracked) > 0 {
 		return nil
 	}
 	untracked, err := gitx.Untracked(wt)
@@ -449,7 +456,12 @@ func (e *Env) removeOne(out io.Writer, w gitx.Worktree) (bool, error) {
 // file at a time and never recursively, so nothing but a file the base holds can go.
 func (e *Env) deleteHeld(out io.Writer, j Judgment) (bool, error) {
 	for _, h := range j.held {
-		if blob, err := gitx.HeldBlob(j.Worktree.Path, j.base, h.path); err != nil || blob != h.blob {
+		blob, err := gitx.HeldBlob(j.Worktree.Path, j.base, h.path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			e.printLine(out, "kept", j.Worktree, "the second check of "+h.path+" failed: "+err.Error()+"; nothing deleted")
+			return false, err
+		}
+		if blob != h.blob {
 			e.printLine(out, "kept", j.Worktree, h.path+" changed after it was judged; nothing deleted")
 			return false, nil
 		}

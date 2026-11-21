@@ -511,6 +511,34 @@ func TestGCKeepsAHeldFileBesideATrackedEdit(t *testing.T) {
 	}
 }
 
+// After `git rm --cached`, a path is a staged deletion and an untracked file with the base's
+// bytes. The staged deletion is a tracked change, so the file is not held (rule 1 of row 31).
+func TestGCKeepsAnUntrackedFileWhoseDeletionIsStaged(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := addWorktree(t, f, "rm-cached")
+	testrepo.Git(t, dir, "rm", "--cached", "--quiet", "README.md")
+	j := expect(t, e, dir, KeptForLanding, "1 changed path")
+	if len(j.held) != 0 {
+		t.Fatalf("held = %v, want none", j.held)
+	}
+	var dry bytes.Buffer
+	if err := e.GC(&dry); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(dry.String(), "the base already holds") {
+		t.Fatalf("the dry run called the file held:\n%s", dry.String())
+	}
+	apply(t, e)
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, "README.md")); got != "demo\n" {
+		t.Fatalf("README.md = %q, want it kept", got)
+	}
+	if st := testrepo.Git(t, dir, "status", "--porcelain"); !strings.Contains(st, "D  README.md") {
+		t.Fatalf("the staged deletion is gone: %q", st)
+	}
+}
+
 func TestGCKeepsASymbolicLinkToAnEqualFile(t *testing.T) {
 	f := testrepo.New(t)
 	e := idle(t, f)

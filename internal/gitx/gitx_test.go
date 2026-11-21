@@ -116,3 +116,17 @@ func TestUntrackedIsTheUntrackedHalfOfDirtyPaths(t *testing.T) {
 		t.Fatalf("Untracked = %q, want [notes/draft.md]", got)
 	}
 }
+
+func TestTrackedIsTheTrackedHalfOfDirtyPaths(t *testing.T) {
+	f := testrepo.New(t)
+	put(t, f.Repo, "web/page.ts", "edited\n", 0o644)
+	put(t, f.Repo, "notes/draft.md", "a draft\n", 0o644)
+	testrepo.Git(t, f.Repo, "rm", "--cached", "--quiet", "README.md")
+	got, err := Tracked(f.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "README.md" || got[1] != "web/page.ts" {
+		t.Fatalf("Tracked = %q, want [README.md web/page.ts]", got)
+	}
+}
