@@ -1,6 +1,6 @@
 # Row 5, builder report (Opus 5.5), 2026-10-17
 
-Launched 2026-10-17 14:06 EDT under /delegate from the personal-config session; returned 14:33 EDT. Worktree `/Users/zachshort/Projects/wk/.claude/worktrees/ap-row-5`, branch `ap/row-5`, from `main` at `78dc9b9`. Commits `8f2d091` (code and tests), `31006c5` (status format fix the proof found), `c4f9fac` (README, plan, close-out). Patch `scratchpad/row-5/row-5.patch` (108843 bytes). Diffstat 21 files, 1699 insertions, 61 deletions. Files added: `internal/config/gates_test.go`, `internal/wk/trial.go`, `internal/wk/gatekeeper.go`, `internal/wk/gateplan.go`, `internal/wk/gatekeeper_test.go`. Relay passes: 0.
+Launched 2026-10-17 14:06 EDT under /delegate from the personal-config session; returned 14:33 EDT. Worktree `/Users/zachshort/Developer/zach-short/wk/.claude/worktrees/ap-row-5`, branch `ap/row-5`, from `main` at `78dc9b9`. Commits `8f2d091` (code and tests), `31006c5` (status format fix the proof found), `c4f9fac` (README, plan, close-out). Patch `scratchpad/row-5/row-5.patch` (108843 bytes). Diffstat 21 files, 1699 insertions, 61 deletions. Files added: `internal/config/gates_test.go`, `internal/wk/trial.go`, `internal/wk/gatekeeper.go`, `internal/wk/gateplan.go`, `internal/wk/gatekeeper_test.go`. Relay passes: 0.
 
 Gates: the gate line exit 0 at `8f2d091` (14:21 EDT, 1 min 23 s) and at `31006c5` (14:30 EDT, 1 min 13 s, load 4.37); `internal/wk` 64.0 s; `0 issues.`
 

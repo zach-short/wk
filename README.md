@@ -30,16 +30,16 @@ brew update && brew upgrade wk
 
 When wk writes its hooks or its launchd agent, it records Homebrew's stable link, `$(brew --prefix)/opt/wk/bin/wk`, and not the versioned path under `Cellar`. An upgrade moves that link to the new version, so every repository's hooks and gc agent run the new release at once, with no reinstall. Run `wk hooks install` again in a repository only when a release changes which hooks or permission rules wk writes. It is safe at any time, and it reports "unchanged" when nothing differs.
 
-If wk was installed with `go install` before, remove `~/go/bin/wk` after the Homebrew install. `~/go/bin` usually comes before the Homebrew directory on `PATH`, so the old binary hides the release (Homebrew warns that it is shadowed). Then run `wk hooks install` and `wk gc schedule install` in each repository that uses wk, so that the hooks and the agent point at the Homebrew link. Until then they call the deleted binary and every worktree request fails. This loop does it for every repository with a config in `~/.wk`, when each lives at `~/Projects/<repo>`:
+If wk was installed with `go install` before, remove `~/go/bin/wk` after the Homebrew install. `~/go/bin` usually comes before the Homebrew directory on `PATH`, so the old binary hides the release (Homebrew warns that it is shadowed). Then run `wk hooks install` and `wk gc schedule install` in each repository that uses wk, so that the hooks and the agent point at the Homebrew link. Until then they call the deleted binary and every worktree request fails. This loop does it for every repository with a config in `~/.wk`, when each lives at `~/Developer/<owner>/<repo>`:
 
 ```bash
-for f in ~/.wk/*.toml; do r=$(basename "$f" .toml); case "$r" in *.slots|machine) continue;; esac; echo "== $r"; (cd ~/Projects/"$r" && wk hooks install && wk gc schedule install); done
+for f in ~/.wk/*.toml; do r=$(basename "$f" .toml); case "$r" in *.slots|machine) continue;; esac; d=$(ls -d ~/Developer/*/"$r" 2>/dev/null | head -1); [ -n "$d" ] || continue; echo "== $r"; (cd "$d" && wk hooks install && wk gc schedule install); done
 ```
 
 This check prints nothing when no hook or agent still names the old path:
 
 ```bash
-grep -l "go/bin/wk" ~/Projects/*/.claude/settings.local.json ~/Library/LaunchAgents/com.github.zach-short.wk.gc.*.plist
+grep -l "go/bin/wk" ~/Developer/*/*/.claude/settings.local.json ~/Library/LaunchAgents/com.github.zach-short.wk.gc.*.plist
 ```
 
 The gc agent starts wk through `/bin/sh`, which runs `exec "$0" "$@"` with the wk path and its arguments as separate strings. A wk release binary is ad-hoc signed (`codesign -dvv` prints `Signature=adhoc`), so its signature changes with every release. On 2026-10-26, after `brew upgrade` replaced the binary, launchd was seen to refuse to start agents that named wk directly: `launchctl print` showed `last exit code = 78: EX_CONFIG` and `needs LWCR update` in the agent's properties, and gc.log got no new line. Apple's `launchd.plist` man page documents no key for this code requirement. `/bin/sh` is an Apple platform binary whose signature does not change with a wk release, and `exec` then replaces the shell with wk. An agent installed by wk 0.1.9 or earlier names wk directly, so install it again once with the loop above (`wk hooks install` in it is harmless). After that, an upgrade needs no reinstall. `wk gc` prints a line when a repository's agent is loaded and its last exit code is not 0: for 78 it gives the fix, and for any other code it points at gc.log.

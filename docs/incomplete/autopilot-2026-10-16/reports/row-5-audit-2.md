@@ -1,6 +1,6 @@
 # Row 5, audit 2 (Opus 5.5, fresh), 2026-10-17
 
-Launched 2026-10-17 14:51 EDT in the detached worktree `/Users/zachshort/Projects/wk/.claude/worktrees/ap-row-5-audit-2` at `a2bca12`; returned 14:56 EDT. Diffstat 22 files, 1928 insertions, 61 deletions (the fix round 7 files, 254 insertions, 25 deletions). Gate line exit 0 (`internal/wk` 42.3 s, `0 issues.`; `scratchpad/row-5-audit-2/gate.out`). B1, B2 and N1 closed: audit 1's two probes against the fix pass (the slotted missing command ends the pass with a start error and the record stays `submitted`; the gated prefix lands both files on the tip). No regression of a path that worked at `c4f9fac`.
+Launched 2026-10-17 14:51 EDT in the detached worktree `/Users/zachshort/Developer/zach-short/wk/.claude/worktrees/ap-row-5-audit-2` at `a2bca12`; returned 14:56 EDT. Diffstat 22 files, 1928 insertions, 61 deletions (the fix round 7 files, 254 insertions, 25 deletions). Gate line exit 0 (`internal/wk` 42.3 s, `0 issues.`; `scratchpad/row-5-audit-2/gate.out`). B1, B2 and N1 closed: audit 1's two probes against the fix pass (the slotted missing command ends the pass with a start error and the record stays `submitted`; the gated prefix lands both files on the tip). No regression of a path that worked at `c4f9fac`.
 
 Verdict: blocking (1), non-blocking (3).
 

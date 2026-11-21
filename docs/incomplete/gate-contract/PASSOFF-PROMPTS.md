@@ -1,12 +1,12 @@
 # Gate contract: pass-off prompts
 
-Written 2026-10-18 from `SCOPE.md` in this folder. The scope session ran on Sonnet 5.5. Both builds below are assigned to other models by the routing rule, so neither was started. Each prompt stands alone. Both work in `~/Projects/personal-config`, in a worktree, and neither touches wk.
+Written 2026-10-18 from `SCOPE.md` in this folder. The scope session ran on Sonnet 5.5. Both builds below are assigned to other models by the routing rule, so neither was started. Each prompt stands alone. Both work in `~/Developer/zach-short/personal-config`, in a worktree, and neither touches wk.
 
 ## Prompt 1. Model: Opus 5.5, with an independent Opus 5.5 review
 
 Changed 2026-10-18 at the owner's request, from Fable 5.1 with a Fable 5.1 review. The first assignment sized the work by the fact that the hook fails open. The question that decides the tier is whether a new failure can be silent. Here the worst silent result equals today's behavior (a skipped gate), and a wrong config makes a gate fail loudly. The one real risk is breaking an existing guard in `config_dir`, and a fixture for each guard catches that. The owner may add one Fable 5.1 review of the diff alone.
 
-Work in `~/Projects/personal-config`. Read `CLAUDE.md`, `docs/conventions-ts.md` and `docs/incomplete/gate-contract/SCOPE.md` from `~/Projects/wk`. Change `templates/hooks/completion-gate.sh`, function `config_dir`. Today it appends the subfolder (`prefix`) to the main checkout path, so a stop in `docs/bench` looks for `<main>/docs/bench/.personal-config.json`, finds nothing and exits 0. The gate log at `~/.config/personal-config/completion-gate.log` shows 83 such skips for `wk/docs/bench`.
+Work in `~/Developer/zach-short/personal-config`. Read `CLAUDE.md`, `docs/conventions-ts.md` and `docs/incomplete/gate-contract/SCOPE.md` from `~/Developer/zach-short/wk`. Change `templates/hooks/completion-gate.sh`, function `config_dir`. Today it appends the subfolder (`prefix`) to the main checkout path, so a stop in `docs/bench` looks for `<main>/docs/bench/.personal-config.json`, finds nothing and exits 0. The gate log at `~/.config/personal-config/completion-gate.log` shows 83 such skips for `wk/docs/bench`.
 
 Required behavior: start at the working folder and climb toward the main checkout root. Use the nearest `.personal-config.json`. Stop at the git top level and never go above it. Keep every existing guard in `config_dir`: the common-dir round trip, the `GIT_*` unsets, the deleted-files check, and the fail-open direction for anything it cannot decide. Keep the stop at `config=none` only when no config exists anywhere on the path.
 
@@ -16,7 +16,7 @@ Done means: the full gate line passes (`bun run typecheck && bun run lint && bun
 
 ## Prompt 2. Model: Opus 5.5
 
-Work in `~/Projects/personal-config`. Read `CLAUDE.md`, `docs/conventions-ts.md`, `src/doctor/rules/wk-config.ts` and `docs/incomplete/gate-contract/SCOPE.md` from `~/Projects/wk`.
+Work in `~/Developer/zach-short/personal-config`. Read `CLAUDE.md`, `docs/conventions-ts.md`, `src/doctor/rules/wk-config.ts` and `docs/incomplete/gate-contract/SCOPE.md` from `~/Developer/zach-short/wk`.
 
 Part C1. Add a doctor rule, one file under `src/doctor/rules/` with a violating and a passing fixture test, that warns when `gateCommand` in `.personal-config.json` and the `[[gates.run]]` entries in `~/.wk/<repo>.toml` disagree. The two are different shapes, a string and a list, so compare the command words of each gate in order and warn on a gate present in one and absent from the other. Do not try to be exact. Only run when `landStep` is `wk`, as `wk-config` does. Read the toml the way `wk-config.ts` does, without a new dependency. Register it in `src/doctor/index.ts`.
 
