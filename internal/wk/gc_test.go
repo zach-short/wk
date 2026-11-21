@@ -2,6 +2,7 @@ package wk
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/xml"
 	"errors"
 	"io"
@@ -618,6 +619,86 @@ func TestGCKeepsAnUntrackedGitignoreTheBaseHolds(t *testing.T) {
 	assertStays(t, dir)
 	if got := read(t, filepath.Join(dir, ignore)); got != "*.log\n" {
 		t.Fatalf("the .gitignore was deleted: %q", got)
+	}
+}
+
+// On a case-insensitive volume, as APFS is by default, git opens sub/.GITIGNORE when it reads
+// sub/.gitignore, so that name hides files too and is never held.
+func TestGCKeepsAnUntrackedGitignoreInAnyCase(t *testing.T) {
+	const ignore = "docs/incomplete/audit/.GITIGNORE"
+	probe := filepath.Join(t.TempDir(), "case")
+	if err := os.WriteFile(probe, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(probe), "CASE")); err != nil {
+		t.Skip("the temp volume is case-sensitive, so git never reads .GITIGNORE as an ignore file")
+	}
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := addWorktree(t, f, "ignore-case")
+	f.Write(t, ignore, "*.log\n")
+	f.Commit(t, "the lead commits the .GITIGNORE")
+	writeIn(t, dir, ignore, "*.log\n")
+	writeIn(t, dir, "docs/incomplete/audit/run.log", "hidden\n")
+	j := expect(t, e, dir, KeptForLanding, "1 changed path")
+	if len(j.held) != 0 {
+		t.Fatalf("held = %v, want none", j.held)
+	}
+	apply(t, e)
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, ignore)); got != "*.log\n" {
+		t.Fatalf("the .GITIGNORE was deleted: %q", got)
+	}
+}
+
+// cat-file -e only checks that a loose object's file exists, and git does not check the hash
+// when it reads one, so a damaged object for the base's blob must keep the file: after a delete,
+// the disk copy would be the only good one.
+func TestGCKeepsAFileWhoseBaseBlobIsDamaged(t *testing.T) {
+	deflate := func(t *testing.T, raw string) []byte {
+		var b bytes.Buffer
+		w := zlib.NewWriter(&b)
+		if _, err := w.Write([]byte(raw)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	for _, tc := range []struct {
+		name   string
+		object func(t *testing.T) []byte
+	}{
+		{"zero-length", func(*testing.T) []byte { return nil }},
+		{"garbage", func(*testing.T) []byte { return []byte("not zlib at all") }},
+		{"wrong content", func(t *testing.T) []byte { return deflate(t, "blob 10\x00a findinG\n") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testrepo.New(t)
+			e := idle(t, f)
+			dir := auditWorktree(t, f, "damaged", "a finding\n")
+			blob := f.Git(t, "rev-parse", "main:"+finding)
+			loose := filepath.Join(f.Repo, ".git", "objects", blob[:2], blob[2:])
+			if err := os.Remove(loose); err != nil {
+				t.Fatalf("the probe needs the blob as a loose object: %v", err)
+			}
+			if err := os.WriteFile(loose, tc.object(t), 0o444); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitx.Run(f.Repo, "cat-file", "-e", blob); err != nil {
+				t.Fatalf("the probe needs cat-file -e to pass on the damaged object: %v", err)
+			}
+			j := expect(t, e, dir, KeptForLanding, "1 changed path")
+			if len(j.held) != 0 {
+				t.Fatalf("held = %v, want none", j.held)
+			}
+			apply(t, e)
+			assertStays(t, dir)
+			if got := read(t, filepath.Join(dir, finding)); got != "a finding\n" {
+				t.Fatalf("the only good copy was deleted: %q", got)
+			}
+		})
 	}
 }
 

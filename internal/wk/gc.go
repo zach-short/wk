@@ -221,7 +221,8 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 // a staged edit undone on disk, so any one keeps the whole worktree. A worktree with one path
 // that is not held keeps all its paths, so gc never deletes part of its work. A .gitignore is
 // never held: deleting it can make the files it hides untracked, and git then refuses the
-// removal after gc deleted files.
+// removal after gc deleted files. The name is matched in any case, because on a
+// case-insensitive volume (APFS by default) git reads sub/.GITIGNORE as sub/.gitignore.
 func heldByBase(wt, base string, dirty []string) []heldFile {
 	if len(dirty) == 0 {
 		return nil
@@ -239,7 +240,7 @@ func heldByBase(wt, base string, dirty []string) []heldFile {
 	}
 	held := make([]heldFile, 0, len(dirty))
 	for _, rel := range dirty {
-		if !isUntracked[rel] || path.Base(rel) == ".gitignore" {
+		if !isUntracked[rel] || strings.EqualFold(path.Base(rel), ".gitignore") {
 			return nil
 		}
 		blob, err := gitx.HeldBlob(wt, base, rel)

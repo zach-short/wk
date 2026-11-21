@@ -132,6 +132,21 @@ func TestHeldBlobNeedsTheBlobInTheStore(t *testing.T) {
 	}
 }
 
+func TestHeldBlobHoldsAPackedBlob(t *testing.T) {
+	f, wt, base := heldFixture(t)
+	put(t, wt, "docs/audit/finding.md", "a finding\n", 0o644)
+	testrepo.Git(t, f.Repo, "repack", "-a", "-d", "-q")
+	testrepo.Git(t, f.Repo, "prune-packed")
+	blob := testrepo.Git(t, f.Repo, "rev-parse", base+":docs/audit/finding.md")
+	common := testrepo.Git(t, f.Repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if _, err := os.Stat(filepath.Join(common, "objects", blob[:2], blob[2:])); !os.IsNotExist(err) {
+		t.Fatalf("the probe needs the blob only in a pack: %v", err)
+	}
+	if held, err := HeldBlob(wt, base, "docs/audit/finding.md"); err != nil || held != blob {
+		t.Fatalf("HeldBlob = %q, %v; want the packed blob %q", held, err, blob)
+	}
+}
+
 func TestHeldBlobReadsAGlobCharacterLiterally(t *testing.T) {
 	f := testrepo.New(t)
 	old := f.Git(t, "rev-parse", "HEAD")

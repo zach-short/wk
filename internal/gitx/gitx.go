@@ -14,11 +14,20 @@ import (
 
 // Run runs git in dir and returns its stdout with the trailing newline removed. A failure
 // carries git's stderr, so the reason reaches whoever reads the error.
+func Run(dir string, args ...string) (string, error) {
+	out, err := output(dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
+// output is Run with stdout exactly as git wrote it, for a caller that compares bytes.
 //
 // GIT_OPTIONAL_LOCKS=0 stops `git diff HEAD` and `git status` from rewriting the index they
 // read. Without it every read wk makes bumps the index mtime, and `wk gc` reads that mtime as
 // a session's activity (BD-10), so an hourly gc would keep every worktree "busy" for ever.
-func Run(dir string, args ...string) (string, error) {
+func output(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stdout, stderr bytes.Buffer
@@ -29,9 +38,9 @@ func Run(dir string, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
-	return strings.TrimRight(stdout.String(), "\n"), nil
+	return stdout.Bytes(), nil
 }
 
 // Repo is one repository as wk sees it: the main checkout every relative config path hangs
@@ -213,9 +222,10 @@ func nulList(dir string, args ...string) ([]string, error) {
 // --no-filters hashes the bytes on disk, so a file that differs from the blob only by a clean
 // filter or a line-ending conversion is not held either. The executable bit must match too: the
 // owner x bit on disk for mode 100755, none for 100644, because git reads only that bit with
-// core.fileMode. The blob must also be in the object store: a tree can name a blob the store
-// lacks (a corrupt store, or a partial clone whose blob is only at a remote), and then the file
-// on disk is the only copy.
+// core.fileMode. The store must also give back the blob's bytes, equal to the file on disk: a
+// tree can name a blob the store lacks (a partial clone whose blob is only at a remote) or holds
+// damaged (a zero-length or garbage loose object after a crash, or one with other bytes under
+// that name), and then the file on disk is the only good copy.
 func HeldBlob(dir, rev, rel string) (string, error) {
 	abs := filepath.Join(dir, filepath.FromSlash(rel))
 	info, err := os.Lstat(abs)
@@ -236,18 +246,24 @@ func HeldBlob(dir, rev, rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if sum != blob || !inStore(dir, blob) {
+	if sum != blob || !storedAs(dir, blob, abs) {
 		return "", nil
 	}
 	return blob, nil
 }
 
-// inStore says whether the object store has blob. --no-lazy-fetch keeps a partial clone from
-// fetching the blob from its remote, so gc never reaches the network, and any failure answers
-// false, which keeps the file.
-func inStore(dir, blob string) bool {
-	_, err := Run(dir, "--no-lazy-fetch", "cat-file", "-e", blob)
-	return err == nil
+// storedAs reads blob from the object store and compares it with the file at abs. cat-file -e
+// is not enough: it only checks that a loose object's file exists, and git does not check the
+// hash when it reads an object, so only the bytes it gives back prove the store has the copy.
+// --no-lazy-fetch keeps a partial clone from fetching the blob from its remote, so gc never
+// reaches the network, and any failure answers false, which keeps the file.
+func storedAs(dir, blob, abs string) bool {
+	stored, err := output(dir, "--no-lazy-fetch", "cat-file", "blob", blob)
+	if err != nil {
+		return false
+	}
+	disk, err := os.ReadFile(abs)
+	return err == nil && bytes.Equal(stored, disk)
 }
 
 // fileBlob is the blob of a regular file (mode 100644 or 100755) at exactly rel in rev, or "",
