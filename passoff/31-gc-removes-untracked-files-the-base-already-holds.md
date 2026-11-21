@@ -108,3 +108,16 @@ Open from the reviews, left as they are by the coordinator's decision:
 Outside row 31: `git diff --name-only HEAD` can rewrite the index of a stat-dirty worktree, so it can reset the quiet window for one pass. `DirtyPaths` still runs it. The round 1 `Tracked` added a second run, and round 2 drops `Tracked`, so that second run is gone. The new `git status` runs through `gitx.Run` with `GIT_OPTIONAL_LOCKS=0`, so it does not write the index.
 
 After the fix, the gate is green with `env -u WK_SLOT_HELD` and a fresh lint cache. The read-only `wk gc` on ezhomesteading gives `24 of 43 removable`, with the same verdict lines as the first proof.
+
+### Sign-off, 2026-11-21
+
+- Builder: Opus 5.5, worktree `wk-row-31-build` (scratch), branch `row-31-build`, commits `b082b2b`, `3c614b5` (fix round 1), `22097db` (fix round 2). Relay passes: 0.
+- Reviews: three independent Fable 5.2 reviews, each in its own worktree (`row-31-audit`, `row-31-audit-2`, `row-31-audit-3`). Review 1 blocking (B1), review 2 non-blocking but N6 sent back by the lead, review 3 non-blocking. Each matched the diffstat and re-ran the gate green with `env -u WK_SLOT_HELD`.
+- Proof: dry-run `wk gc` on ezhomesteading, 24 of 43 removable (70 held files, each checked equal to `main` by plain git), the two worktrees with a differing file kept. No `--apply` on a real repository.
+- Open: N1, N2, N3, N5 (above). From review 3:
+  - N8: the x-bit test uses `Perm()&0o111`; git reads only the owner bit `0o100`, so mode `0654` against base `100755` is held. Bytes equal; only the mode claim is inexact (`internal/gitx/gitx.go:229`, comment at 214-215).
+  - N9: `fileBlob` reads the tree only and does not check the blob object exists; with the blob missing from the store (corrupt store, or a partial clone) the file is held and deleted. ezhomesteading is not a partial clone. Fix: `git cat-file -e <blob>` in `HeldBlob`.
+  - N10: a worktree with a populated submodule: held files are deleted, then git refuses removal. Nothing lost; old refusal.
+  - N11: a held untracked `.gitignore` that hides other files is deleted, the hidden files become untracked, git refuses. Nothing lost.
+  - Outside row 31: `cmd/wk` `TestRunPassesTheExitStatusThroughAPlace` fails under a `wk run --slot` wrapper (inherits `WK_SLOT_HELD`), on `main` too.
+- Release: not tagged; the owner tags a release.
