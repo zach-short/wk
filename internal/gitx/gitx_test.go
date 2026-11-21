@@ -19,10 +19,15 @@ func heldFixture(t *testing.T) (testrepo.Fixture, string, string) {
 	f.Write(t, "docs/audit/run.sh", "#!/bin/sh\n")
 	f.Write(t, "docs/audit/finding-x.md", "a finding\n")
 	f.Write(t, "docs/audit/run-plain.sh", "#!/bin/sh\n")
+	f.Write(t, "docs/audit/run-group-x.sh", "#!/bin/sh\n")
+	f.Write(t, "docs/audit/finding-other-x.md", "a finding\n")
 	if err := os.Chmod(filepath.Join(f.Repo, "docs/audit/run-plain.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(f.Repo, "docs/audit/run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(f.Repo, "docs/audit/run-group-x.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("finding.md", filepath.Join(f.Repo, "docs/audit/link")); err != nil {
@@ -44,6 +49,9 @@ func put(t *testing.T, dir, rel, content string, mode os.FileMode) {
 	if err := os.WriteFile(p, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(p, mode); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestHeldBlobHoldsOnlyAByteEqualRegularFile(t *testing.T) {
@@ -52,6 +60,8 @@ func TestHeldBlobHoldsOnlyAByteEqualRegularFile(t *testing.T) {
 	put(t, wt, "docs/audit/run.sh", "#!/bin/sh\n", 0o755)
 	put(t, wt, "docs/audit/finding-x.md", "a finding\n", 0o755)
 	put(t, wt, "docs/audit/run-plain.sh", "#!/bin/sh\n", 0o644)
+	put(t, wt, "docs/audit/run-group-x.sh", "#!/bin/sh\n", 0o654)
+	put(t, wt, "docs/audit/finding-other-x.md", "a finding\n", 0o645)
 	put(t, wt, "docs/audit/differs.md", "x\n", 0o644)
 	put(t, wt, "docs/audit/new.md", "not on the base\n", 0o644)
 	put(t, wt, "docs/audit/link", "finding.md", 0o644)
@@ -66,6 +76,8 @@ func TestHeldBlobHoldsOnlyAByteEqualRegularFile(t *testing.T) {
 		{"equal executable", base, "docs/audit/run.sh", true},
 		{"executable copy of a 100644 file", base, "docs/audit/finding-x.md", false},
 		{"plain copy of a 100755 file", base, "docs/audit/run-plain.sh", false},
+		{"group and other x bits only, against 100755", base, "docs/audit/run-group-x.sh", false},
+		{"other x bit only, against 100644", base, "docs/audit/finding-other-x.md", true},
 		{"different bytes", base, "docs/audit/differs.md", false},
 		{"path the base lacks", base, "docs/audit/new.md", false},
 		{"regular file over the base's symbolic link", base, "docs/audit/link", false},
@@ -95,6 +107,28 @@ func TestHeldBlobHoldsOnlyAByteEqualRegularFile(t *testing.T) {
 	}
 	if blob, err := HeldBlob(wt, base, "docs/audit/finding.md"); err != nil || blob != "" {
 		t.Fatalf("a symbolic link to an equal file: HeldBlob = %q, %v; want it not held", blob, err)
+	}
+}
+
+// A tree can name a blob the store lacks: a corrupt store, or a partial clone whose blob is only
+// at a remote. The bytes on disk would then be the only copy, so the file is not held.
+func TestHeldBlobNeedsTheBlobInTheStore(t *testing.T) {
+	f, wt, base := heldFixture(t)
+	put(t, wt, "docs/audit/finding.md", "a finding\n", 0o644)
+	blob := testrepo.Git(t, f.Repo, "rev-parse", base+":docs/audit/finding.md")
+	if held, err := HeldBlob(wt, base, "docs/audit/finding.md"); err != nil || held != blob {
+		t.Fatalf("with the blob in the store: HeldBlob = %q, %v; want %q", held, err, blob)
+	}
+	common := testrepo.Git(t, f.Repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	loose := filepath.Join(common, "objects", blob[:2], blob[2:])
+	if err := os.Remove(loose); err != nil {
+		t.Fatalf("the probe needs the blob as a loose object: %v", err)
+	}
+	if out, err := Run(wt, "cat-file", "-e", blob); err == nil {
+		t.Fatalf("the blob is still in the store after the delete: %q", out)
+	}
+	if held, err := HeldBlob(wt, base, "docs/audit/finding.md"); err != nil || held != "" {
+		t.Fatalf("with the blob gone from the store: HeldBlob = %q, %v; want it not held", held, err)
 	}
 }
 

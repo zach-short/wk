@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -218,7 +219,9 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 // untracked files and HeldBlob finds each one byte-equal to base's blob, and nil otherwise. A
 // staged change is work even when the working tree matches HEAD, as after `git rm --cached` or
 // a staged edit undone on disk, so any one keeps the whole worktree. A worktree with one path
-// that is not held keeps all its paths, so gc never deletes part of its work.
+// that is not held keeps all its paths, so gc never deletes part of its work. A .gitignore is
+// never held: deleting it can make the files it hides untracked, and git then refuses the
+// removal after gc deleted files.
 func heldByBase(wt, base string, dirty []string) []heldFile {
 	if len(dirty) == 0 {
 		return nil
@@ -236,7 +239,7 @@ func heldByBase(wt, base string, dirty []string) []heldFile {
 	}
 	held := make([]heldFile, 0, len(dirty))
 	for _, rel := range dirty {
-		if !isUntracked[rel] {
+		if !isUntracked[rel] || path.Base(rel) == ".gitignore" {
 			return nil
 		}
 		blob, err := gitx.HeldBlob(wt, base, rel)

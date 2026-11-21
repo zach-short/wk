@@ -46,9 +46,12 @@ func TestSlotVerbsRefuseBadArguments(t *testing.T) {
 }
 
 // The command's own status comes back, and the run went through the place of the machine file
-// in WK_HOME, so the wiring hands slot.Run the home and the class.
+// in WK_HOME, so the wiring hands slot.Run the home and the class. The gate itself may run under
+// wk run --slot, and an inherited WK_SLOT_HELD makes this run a nested one, which takes no place
+// and writes no runs.log line, so the test clears it.
 func TestRunPassesTheExitStatusThroughAPlace(t *testing.T) {
 	isolated(t)
+	t.Setenv("WK_SLOT_HELD", "")
 	home := os.Getenv("WK_HOME")
 	machine := "[slots]\ndir = \"" + filepath.Join(home, "slots") + "\"\n\n[slots.heavy]\ncapacity = 1\n"
 	if err := os.WriteFile(filepath.Join(home, "machine.toml"), []byte(machine), 0o644); err != nil {

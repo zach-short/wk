@@ -24,3 +24,15 @@ passes both with and without `WK_SLOT_HELD=heavy` in the environment, and a dry-
 ## Rules this prompt carries
 
 A plain worktree outside the repository (`.claude/worktrees/` is not ignored here), as row 31 used. `GOTOOLCHAIN=local`. Never `go install ./cmd/wk`. Never write under `~/.wk` or `~/Library/LaunchAgents`. No comment that says what code does. No `Co-Authored-By:` trailer and no "Generated with" line. Never push.
+
+## Close-out, 2026-11-21
+
+Built on branch `row-32-build` by Opus 5.5, with `go1.26.11 darwin/arm64` and `GOTOOLCHAIN=local`.
+
+What changed and why. N9: `HeldBlob` in `internal/gitx/gitx.go` now ends with `inStore`, which runs `git --no-lazy-fetch cat-file -e <blob>`. A tree can name a blob the store lacks, and then the file on disk is the only copy, so a missing object, or any failure of that command, means not held. `--no-lazy-fetch` keeps a partial clone from fetching the blob, so gc never reaches the network; it needs git 2.44 or later, and an older git fails the command, which keeps the file. N8: the executable test reads only the owner bit, `Perm()&0o100`, as git does with `core.fileMode`, and the doc comment says so. N11: `heldByBase` in `internal/wk/gc.go` never holds a path whose base name is `.gitignore`, so a worktree with one is kept whole. The rule is in `heldByBase`, not in `HeldBlob`, because it is a gc decision about side effects, and `gitx` holds no worktree decisions; `deleteHeld` needs no copy of it, because it only re-checks paths that `heldByBase` already held. The slot test: `TestRunPassesTheExitStatusThroughAPlace` in `cmd/wk/slots_test.go` sets `WK_SLOT_HELD` to the empty string with `t.Setenv`, which `slot`'s `nested` reads as not nested.
+
+Tests, each shown to fail with its fix reverted in place (restored, never committed). `TestHeldBlobNeedsTheBlobInTheStore` deletes the blob's loose object in a throwaway repository: held before the delete, not held after. `TestHeldBlobHoldsOnlyAByteEqualRegularFile` has two new cases: mode `0654` against base `100755` (not held) and mode `0645` against base `100644` (held); the `put` helper now runs `os.Chmod` after the write, so the umask cannot change a test mode. `TestGCKeepsAnUntrackedGitignoreTheBaseHolds` gives a worktree an untracked `.gitignore` equal to the base's that hides a `run.log`: kept for "1 changed path", nothing held, the file still there after `--apply`. With `WK_SLOT_HELD=heavy`, the slot test failed before the fix ("runs.log ... no such file or directory") and passes after it.
+
+What is now fixed. The gate passes with `env -u WK_SLOT_HELD` and with `env WK_SLOT_HELD=heavy`, each with a fresh lint cache. A dry-run `wk gc` in ezhomesteading, with a branch binary and a `main` binary each built by `go build -o` to a scratch path and a scratch `WK_HOME` holding copies of the two config files, gives `24 of 43 removable` on both, with the same removable list; the only difference in the output is a "64 minutes ago" against "65 minutes ago" on two kept lines.
+
+Left owed. The Fable 5.2 review of the deletion path. N1, N2, N3, N5 and N10 stay open as row 31 records them. A release tag, by the owner.

@@ -211,8 +211,11 @@ func nulList(dir string, args ...string) ([]string, error) {
 // bytes are exactly that blob, or "" when it is not. Deleting such a file loses nothing, because
 // rev still has it. A symbolic link, a directory or a non-file entry in rev is never held, and
 // --no-filters hashes the bytes on disk, so a file that differs from the blob only by a clean
-// filter or a line-ending conversion is not held either. The executable bit must match too: any
-// x bit on disk for mode 100755, none for 100644, as git reads it with core.fileMode.
+// filter or a line-ending conversion is not held either. The executable bit must match too: the
+// owner x bit on disk for mode 100755, none for 100644, because git reads only that bit with
+// core.fileMode. The blob must also be in the object store: a tree can name a blob the store
+// lacks (a corrupt store, or a partial clone whose blob is only at a remote), and then the file
+// on disk is the only copy.
 func HeldBlob(dir, rev, rel string) (string, error) {
 	abs := filepath.Join(dir, filepath.FromSlash(rel))
 	info, err := os.Lstat(abs)
@@ -226,17 +229,25 @@ func HeldBlob(dir, rev, rel string) (string, error) {
 	if err != nil || blob == "" {
 		return "", err
 	}
-	if executable != (info.Mode().Perm()&0o111 != 0) {
+	if executable != (info.Mode().Perm()&0o100 != 0) {
 		return "", nil
 	}
 	sum, err := Run(dir, "hash-object", "--no-filters", abs)
 	if err != nil {
 		return "", err
 	}
-	if sum != blob {
+	if sum != blob || !inStore(dir, blob) {
 		return "", nil
 	}
 	return blob, nil
+}
+
+// inStore says whether the object store has blob. --no-lazy-fetch keeps a partial clone from
+// fetching the blob from its remote, so gc never reaches the network, and any failure answers
+// false, which keeps the file.
+func inStore(dir, blob string) bool {
+	_, err := Run(dir, "--no-lazy-fetch", "cat-file", "-e", blob)
+	return err == nil
 }
 
 // fileBlob is the blob of a regular file (mode 100644 or 100755) at exactly rel in rev, or "",

@@ -599,6 +599,28 @@ func TestGCKeepsAnEqualFileWhoseExecutableBitDiffers(t *testing.T) {
 	}
 }
 
+// Deleting an untracked .gitignore can turn the files it hides into untracked files, and then
+// git refuses the removal after gc deleted files, so a .gitignore is never held.
+func TestGCKeepsAnUntrackedGitignoreTheBaseHolds(t *testing.T) {
+	const ignore = "docs/incomplete/audit/.gitignore"
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := addWorktree(t, f, "ignore")
+	f.Write(t, ignore, "*.log\n")
+	f.Commit(t, "the lead commits the .gitignore")
+	writeIn(t, dir, ignore, "*.log\n")
+	writeIn(t, dir, "docs/incomplete/audit/run.log", "hidden\n")
+	j := expect(t, e, dir, KeptForLanding, "1 changed path")
+	if len(j.held) != 0 {
+		t.Fatalf("held = %v, want none", j.held)
+	}
+	apply(t, e)
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, ignore)); got != "*.log\n" {
+		t.Fatalf("the .gitignore was deleted: %q", got)
+	}
+}
+
 func TestGCKeepsASymbolicLinkToAnEqualFile(t *testing.T) {
 	f := testrepo.New(t)
 	e := idle(t, f)
