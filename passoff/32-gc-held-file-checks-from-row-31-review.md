@@ -46,3 +46,16 @@ F1, a silent-loss path. `inStore` used `git cat-file -e`, which only checks that
 F2. The `.gitignore` name was compared case-exactly, but on a case-insensitive volume (APFS by default) git reads `sub/.GITIGNORE` as `sub/.gitignore`. `heldByBase` now uses `strings.EqualFold`. `TestGCKeepsAnUntrackedGitignoreInAnyCase` gives a worktree an untracked `.GITIGNORE` equal to the base's that hides a `run.log`, and proves it is kept with nothing deleted. It skips with a reason on a case-sensitive temp volume, where git never reads that name. Here it ran, and it fails with the case-exact compare put back.
 
 After the fix, the gate passes with `env -u WK_SLOT_HELD` and with `env WK_SLOT_HELD=heavy`, each with a fresh lint cache. The dry-run `wk gc` in ezhomesteading, run the same way as before, gives `24 of 43 removable` with the branch binary and with the `main` binary, and the two outputs are the same byte for byte.
+
+### Sign-off, 2026-11-21
+
+- Builder: Opus 5.5, scratch worktree `wk-row-32-build`, branch `row-32-build`, commits `545321f`, `c30e18b` (fix round 1: F1 damaged stored blob, F2 `.gitignore` in any case). Relay passes: 0.
+- Reviews: two independent Fable 5.2 reviews in their own worktrees (`row-32-audit`, `row-32-audit-2`). Review 1 non-blocking, F1 sent back by the lead as a silent-loss path; review 2 non-blocking. Each matched the diffstat and ran the gate green with and without `WK_SLOT_HELD=heavy`.
+- Proof: dry-run `wk gc` on ezhomesteading with a scratch `WK_HOME`, 24 of 43 removable, the same list as `main`. No `--apply` on a real repository.
+- Open, from review 2 (none loses bytes):
+  - N12: bytes appended after a complete loose zlib stream pass `storedAs` (`internal/gitx/gitx.go:260-267`); `cat-file blob` and checkout still read the right bytes; `fsck`, `archive` and `git gc` fail on that object.
+  - N13: a good loose copy beside a damaged packed copy is held; `git gc` heals it; a hand-run `git prune-packed` in that state would leave the blob unreadable (double fault).
+  - N14: a replace ref on the base commit makes `ls-tree` read the replacement tree (row 31's rule); the blob stays reachable locally through the replace ref.
+  - N15: `storedAs` holds the file and git's output in memory, about 2 to 3 times the file size, one file at a time; a streamed compare would remove it.
+- Still open from row 31: N1, N2, N3, N5, N10.
+- Release: not tagged; the owner tags a release.
