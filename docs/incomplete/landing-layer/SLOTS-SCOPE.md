@@ -102,7 +102,7 @@ Not verified: whether a subagent's foreground call is moved to the background th
 | Two gate runs per delegated row | The `/delegate` builder runs every gate in its worktree, and the auditor "re-run[s] every gate" in its own | `~/.claude/skills/delegate/SKILL.md:84-90`, `:133` |
 | Package scripts | web `build` is `next build --webpack`, `lint` is `eslint . --max-warnings 41`; native `lint` is `eslint . --max-warnings 25`; root `test` is `vitest run`. `tsc`, `go test` and `lintgate` are not package scripts | `web/package.json`, `native/package.json`, `package.json`, `scripts` |
 | `web/package.json` is owned by open rows | Row 194 lists it in "Files it owns" and waits on row 54, "which owns `web/package.json`" | `PASSOFF.md`, row 194 |
-| Skills are generated | The skills carry a personal-config stamp; their source is `~/Projects/personal-config`, not this repository | `~/.claude/skills/scope/SKILL.md:1` |
+| Skills are generated | The skills carry a personal-config stamp; their source is `~/Developer/zach-short/personal-config`, not this repository | `~/.claude/skills/scope/SKILL.md:1` |
 
 ### 1.8 What this session changed
 
@@ -231,17 +231,17 @@ The next free row on 2026-10-16 at 15:45 is 199 (`PASSOFF.md` ends at row 198; r
 
 | # | Task | Status | Model | Lane | Waits on | Files it owns |
 |---|---|---|---|---|---|---|
-| 199 | `wk run --slot`: a machine-wide cap on heavy gates (`heavy` 1, `check` 2), a `PreToolUse` hook that routes gate commands through it, and a trim of `web/.next/cache` after each build; scope in `docs/incomplete/landing-layer/SLOTS-SCOPE.md` | OPEN | Opus, with a Fable review of the hook's rewrite and of `wk run`'s exit status and signal handling | tooling | no row 196 phase in flight in `~/Projects/wk`; GATE 1 passed 2026-10-16 ("Answers") | `~/Projects/wk` (`cmd/wk/main.go`, a new `internal/slot`, `internal/config`, `internal/settings`, `README.md`); `~/.wk/machine.toml`; `~/.wk/ezhomesteading.toml`; `.claude/settings.local.json` in the main checkout and the template; `docs/incomplete/landing-layer/SLOTS-SCOPE.md` |
+| 199 | `wk run --slot`: a machine-wide cap on heavy gates (`heavy` 1, `check` 2), a `PreToolUse` hook that routes gate commands through it, and a trim of `web/.next/cache` after each build; scope in `docs/incomplete/landing-layer/SLOTS-SCOPE.md` | OPEN | Opus, with a Fable review of the hook's rewrite and of `wk run`'s exit status and signal handling | tooling | no row 196 phase in flight in `~/Developer/zach-short/wk`; GATE 1 passed 2026-10-16 ("Answers") | `~/Developer/zach-short/wk` (`cmd/wk/main.go`, a new `internal/slot`, `internal/config`, `internal/settings`, `README.md`); `~/.wk/machine.toml`; `~/.wk/ezhomesteading.toml`; `.claude/settings.local.json` in the main checkout and the template; `docs/incomplete/landing-layer/SLOTS-SCOPE.md` |
 
 Prompt body for `passoff/199-...md`, in Part 3's shape:
 
 ```
 ## 199. Cap heavy gates machine-wide with `wk run --slot`, and route agents through it
 
-**Model: Opus, with a Fable review of the rewrite matcher and of exit status and signals. Lane tooling. Waits on** no row 196 phase being in flight in `~/Projects/wk`; GATE 1 passed 2026-10-16 (`docs/incomplete/landing-layer/SLOTS-SCOPE.md`, "Answers").
-Work in `~/Projects/wk` for the code (D21); in this repository write only `docs/incomplete/landing-layer/`.
+**Model: Opus, with a Fable review of the rewrite matcher and of exit status and signals. Lane tooling. Waits on** no row 196 phase being in flight in `~/Developer/zach-short/wk`; GATE 1 passed 2026-10-16 (`docs/incomplete/landing-layer/SLOTS-SCOPE.md`, "Answers").
+Work in `~/Developer/zach-short/wk` for the code (D21); in this repository write only `docs/incomplete/landing-layer/`.
 
-You are picking up the build slot of the landing layer. Read `SLOTS-SCOPE.md` in full first: section 1 holds every measured number and citation, "Answers" holds Zach's choices, and nothing there is re-derived. Then read `DESIGN.md` option V and D16, `PLAN.md` section 4, and `internal/wk/new.go` `takeCreateSlot` and `internal/flock` in `~/Projects/wk`, the precedent to copy. Session rules: absolute dates, a citation on every claim, never `git commit`, `git push`, `git add -A` or `git add .` while `~/.claude/rules/commits.md` says so, print the two blocks per repository at hand-back, no attribution lines.
+You are picking up the build slot of the landing layer. Read `SLOTS-SCOPE.md` in full first: section 1 holds every measured number and citation, "Answers" holds Zach's choices, and nothing there is re-derived. Then read `DESIGN.md` option V and D16, `PLAN.md` section 4, and `internal/wk/new.go` `takeCreateSlot` and `internal/flock` in `~/Developer/zach-short/wk`, the precedent to copy. Session rules: absolute dates, a citation on every claim, never `git commit`, `git push`, `git add -A` or `git add .` while `~/.claude/rules/commits.md` says so, print the two blocks per repository at hand-back, no attribution lines.
 
 **Why this exists.** Zach plans 50 or more parallel agents on a 16 GB machine. Each gate peaks near 1 GiB, and the web build and a cold `lintgate` near 2 GiB, and nothing stops ten of them running at once. Each first build also leaves 758 MiB in its workspace. The slot makes them take turns.
 

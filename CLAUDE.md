@@ -220,7 +220,7 @@ Claude may run `git add`, `git commit` and `git push`. Add no `Co-Authored-By:` 
 ## Never do this
 
 - Run `go install ./cmd/wk` from a branch that is not on `main`. ezhomesteading's hooks
-  (`/Users/zachshort/Projects/ezhomesteading/.claude/settings.local.json`) and its launchd
+  (`/Users/zachshort/Developer/dan-short/ezhomesteading/.claude/settings.local.json`) and its launchd
   agent `com.github.zach-short.wk.gc.ezhomesteading` run `/Users/zachshort/go/bin/wk`, so an
   install changes them at once.
   (Superseded 2026-10-21: the hooks and agents of every wk project run

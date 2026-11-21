@@ -1,6 +1,6 @@
 # Row 5, audit 3 (Opus 5.5, fresh), 2026-10-17
 
-Launched 2026-10-17 15:01 EDT in the detached worktree `/Users/zachshort/Projects/wk/.claude/worktrees/ap-row-5-audit-3` at `98160da`, scoped to fix round 2's 42 lines; returned 15:07 EDT. Diffstat 22 files, 1957 insertions, 61 deletions; the round 5 files, 42 insertions, 13 deletions. Gate line exit 0 (15:01:01 to 15:01:57 EDT; `internal/wk` 49.2 s; `0 issues.`; `scratchpad/row-5-audit-3/gate.out`).
+Launched 2026-10-17 15:01 EDT in the detached worktree `/Users/zachshort/Developer/zach-short/wk/.claude/worktrees/ap-row-5-audit-3` at `98160da`, scoped to fix round 2's 42 lines; returned 15:07 EDT. Diffstat 22 files, 1957 insertions, 61 deletions; the round 5 files, 42 insertions, 13 deletions. Gate line exit 0 (15:01:01 to 15:01:57 EDT; `internal/wk` 49.2 s; `0 issues.`; `scratchpad/row-5-audit-3/gate.out`).
 
 Verdict: non-blocking (1). B-new and N-b closed; no regression in the changed lines.
 

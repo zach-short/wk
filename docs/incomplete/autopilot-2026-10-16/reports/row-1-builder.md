@@ -29,7 +29,7 @@ Gate about 44 s; `internal/wk` about 40 s under -race (39.98, 40.88, 41.95 s). 8
 
 - Paste the six blocks below into HANDOFF.md (Environment, Code map, Invariants, Known facts) and docs/AGENT-PRACTICES.md (the two placeholders).
 - Log line `- 2026-10-16 · closed item 1` after landing.
-- `gateCommand` in `/Users/zachshort/Projects/wk/.personal-config.json` (untracked): see question 1.
+- `gateCommand` in `/Users/zachshort/Developer/zach-short/wk/.personal-config.json` (untracked): see question 1.
 - Part 0 steps 0.4, 0.6, 0.7, 0.8 in `docs/AGENT-PRACTICES.md` (cut CI and migrations; fix survivors of `grep -n 'Part 12'`; ask the batched GATE 0 question; stamp the file and delete Part 0; add `· adapted`). Untracked file, so the worktree build could not do them.
 
 ## Not verified

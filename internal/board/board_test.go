@@ -7,7 +7,7 @@ import (
 )
 
 // wkBoard is the wk board's header and rows 1 to 5, copied from
-// ~/Projects/wk/PASSOFF.md on 2026-10-16.
+// ~/Developer/zach-short/wk/PASSOFF.md on 2026-10-16.
 var wkBoard = strings.Join([]string{
 	"# PASSOFF: wk (the board)",
 	"",
@@ -15,21 +15,21 @@ var wkBoard = strings.Join([]string{
 	"|---|------|--------|-------|------|----------|---------------|",
 	"| 1 | Run Part 0 for wk: fill CLAUDE.md and the ledger's environment | `DONE - 2026-10-16` | Opus 5.5 | B | nothing | `CLAUDE.md`; `HANDOFF.md` |",
 	"| 2 | Ratify the P1 amendments and write the plan for P2 to P4 | `DONE - 2026-10-16` | Fable 5.1 | A | nothing | `docs/incomplete/landing-layer/`; `passoff/3-*.md` to `passoff/5-*.md` |",
-	"| 3 | Build P2, path leases: integrate the daemon, the lease store, the board parser and the edit hook | `OPEN` | Opus 5.5 | A | 2; 6, 7, 8; `/Users/zachshort/Projects/ezhomesteading/PASSOFF.md` item 200 | `cmd/wk/main.go`; `internal/config/config.go`; `internal/settings/settings.go` (sequential overlap with ezhomesteading item 200); `internal/wk/lease.go`, `internal/wk/leasehook.go`, `internal/wk/daemon.go`, `internal/wk/hooks.go`; `README.md`; `~/.wk/wk.toml`; `~/.wk/ezhomesteading.toml`; `docs/incomplete/landing-layer/PLAN-P2-P4.md` (As built, P2) |",
+	"| 3 | Build P2, path leases: integrate the daemon, the lease store, the board parser and the edit hook | `OPEN` | Opus 5.5 | A | 2; 6, 7, 8; `/Users/zachshort/Developer/dan-short/ezhomesteading/PASSOFF.md` item 200 | `cmd/wk/main.go`; `internal/config/config.go`; `internal/settings/settings.go` (sequential overlap with ezhomesteading item 200); `internal/wk/lease.go`, `internal/wk/leasehook.go`, `internal/wk/daemon.go`, `internal/wk/hooks.go`; `README.md`; `~/.wk/wk.toml`; `~/.wk/ezhomesteading.toml`; `docs/incomplete/landing-layer/PLAN-P2-P4.md` (As built, P2) |",
 	"| 4 | Build P3, the landing queue: integrate `wk submit`, the landing loop, `wk sync` and `wk land` | `OPEN` | Fable 5.1 | A | 3; 9, 10 | `cmd/wk/main.go`; `internal/config/config.go`; `internal/wk/landing.go`, `internal/wk/submit.go`, `internal/wk/status.go`; `README.md`; `~/.wk/wk.toml`; `~/.wk/ezhomesteading.toml`; `docs/incomplete/landing-layer/PLAN-P2-P4.md` (As built, P3) |",
 	"| 5 | Build P4, one gate run per batch: integrate the trial, the batch loop, attribution and the fast-forward of `main` | `OPEN` | Opus 5.5 | A | 4; 11, 12 | `cmd/wk/main.go`; `internal/config/config.go`; `internal/wk/trial.go`, `internal/wk/gatekeeper.go`, `internal/wk/landing.go`, `internal/wk/status.go`; `README.md`; `~/.wk/wk.toml`; `~/.wk/ezhomesteading.toml`; `docs/incomplete/landing-layer/PLAN-P2-P4.md` (As built, P4) |",
 	"",
 	"Each item's prompt is `passoff/<n>-<slug>.md`.",
 }, "\n")
 
-// ezhCells are "Files it owns" cells from ~/Projects/ezhomesteading on
+// ezhCells are "Files it owns" cells from ~/Developer/dan-short/ezhomesteading on
 // 2026-10-16: rows 76, 77 and 200 of PASSOFF.md, and row 200 as its item file
 // passoff/200-*.md states it, which the board shortens to "(more in the file)".
 var ezhCells = map[string]string{
 	"76":        "A: `backend/services/visibilityService.go`, `backend/repository/location_postgres.go`, `backend/services/checkoutPlanService.go`, `backend/services/offerService.go`, `backend/controllers/resource/checkoutPlanControllers.go`, one new `backend/migrations/` file. B: `backend/repository/order.go`, `backend/repository/order_postgres.go` (the inbox and list reads only), `backend/controllers/resource/orderResourceControllers.go`, `backend/routes/routes.go` (one route), `packages/core/src/orders/order-api.ts`, `packages/core/src/orders/chat/orders-inbox.ts`, `web/features/orders/`, `native/features/orders/`, `native/services/order-services.ts`, new Past orders routes in `web/app/` and `native/app/`. C: `backend/services/orderChatService.go` (proposal path and `GetChat` only), `backend/controllers/resource/orderChatControllers.go`, the chat composer in `packages/core/src/orders/chat/`, `web/features/orders/` chat components, `native/features/orders/` chat components",
 	"77":        "per item in the audit",
-	"200":       "`~/Projects/wk`; `~/.wk/machine.toml`, `~/.wk/ezhomesteading.toml`; `.claude/settings.local.json`; `SLOTS-SCOPE.md` (more in the file)",
-	"200, item": "`~/Projects/wk` (`cmd/wk/main.go`, a new `internal/slot`, `internal/config`, `internal/settings`, `README.md`); `~/.wk/machine.toml`; `~/.wk/ezhomesteading.toml`; `.claude/settings.local.json` in the main checkout and the template; `docs/incomplete/landing-layer/SLOTS-SCOPE.md` and the slots plan beside it",
+	"200":       "`~/Developer/zach-short/wk`; `~/.wk/machine.toml`, `~/.wk/ezhomesteading.toml`; `.claude/settings.local.json`; `SLOTS-SCOPE.md` (more in the file)",
+	"200, item": "`~/Developer/zach-short/wk` (`cmd/wk/main.go`, a new `internal/slot`, `internal/config`, `internal/settings`, `README.md`); `~/.wk/machine.toml`; `~/.wk/ezhomesteading.toml`; `.claude/settings.local.json` in the main checkout and the template; `docs/incomplete/landing-layer/SLOTS-SCOPE.md` and the slots plan beside it",
 }
 
 func TestCell(t *testing.T) {
@@ -98,12 +98,12 @@ func TestParseLiveCells(t *testing.T) {
 		{
 			"ezhomesteading 200", ezhCell("200"),
 			[]string{".claude/settings.local.json", "SLOTS-SCOPE.md"},
-			[]string{"~/Projects/wk", "~/.wk/machine.toml", "~/.wk/ezhomesteading.toml", "(more in the file)"},
+			[]string{"~/Developer/zach-short/wk", "~/.wk/machine.toml", "~/.wk/ezhomesteading.toml", "(more in the file)"},
 		},
 		{
 			"ezhomesteading 200, item file", ezhCell("200, item"),
 			[]string{"cmd/wk/main.go", "internal/slot", "internal/config", "internal/settings", "README.md", ".claude/settings.local.json", "docs/incomplete/landing-layer/SLOTS-SCOPE.md"},
-			[]string{"~/Projects/wk", ", a new", "~/.wk/machine.toml", "~/.wk/ezhomesteading.toml", "in the main checkout and the template;", "and the slots plan beside it"},
+			[]string{"~/Developer/zach-short/wk", ", a new", "~/.wk/machine.toml", "~/.wk/ezhomesteading.toml", "in the main checkout and the template;", "and the slots plan beside it"},
 		},
 	}
 	for _, c := range cases {

@@ -40,4 +40,4 @@ Fix round 1 note present with F1, N1, N2, N5 fixed and N3, N4, N6 open; call 5 r
 
 The launchd timer, the installed binary, a live Claude Code session, CI's Linux job; a queue file from the first build; `wk sync` with a `landing.Sync` failure after the fold.
 
-Audit worktree status empty; nothing committed; `~/.wk` untouched (newest mtime 10:17); nothing run in `~/Projects/wk` or the builder's worktree.
+Audit worktree status empty; nothing committed; `~/.wk` untouched (newest mtime 10:17); nothing run in `~/Developer/zach-short/wk` or the builder's worktree.

@@ -1,6 +1,6 @@
 # Row 5, audit 1 (Opus 5.5), 2026-10-17
 
-Launched 2026-10-17 14:34 EDT in the detached worktree `/Users/zachshort/Projects/wk/.claude/worktrees/ap-row-5-audit` at `c4f9fac`; returned 14:44 EDT. Diffstat 21 files, 1699 insertions, 61 deletions, matching the builder's. Gate line exit 0 (`internal/wk` 48.8 s, `0 issues.`; `scratchpad/row-5-audit-1/gate.out`).
+Launched 2026-10-17 14:34 EDT in the detached worktree `/Users/zachshort/Developer/zach-short/wk/.claude/worktrees/ap-row-5-audit` at `c4f9fac`; returned 14:44 EDT. Diffstat 21 files, 1699 insertions, 61 deletions, matching the builder's. Gate line exit 0 (`internal/wk` 48.8 s, `0 issues.`; `scratchpad/row-5-audit-1/gate.out`).
 
 Verdict: blocking (2), non-blocking (5).
 

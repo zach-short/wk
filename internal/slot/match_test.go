@@ -232,7 +232,7 @@ var matchTestUntouched = []matchTestCase{
 		[]Missed{{"nice -n 19 bun run build", "after the wrapper nice"}}},
 	{"wk run before ;", `wk run; bun run build`, `wk run; bun run build`,
 		[]Missed{{"bun run build", "the line already holds wk run"}}},
-	{"wk run as two words of another command", `ls ~/Projects/wk run; go test ./...`, `ls ~/Projects/wk run; go test ./...`,
+	{"wk run as two words of another command", `ls ~/Developer/zach-short/wk run; go test ./...`, `ls ~/Developer/zach-short/wk run; go test ./...`,
 		[]Missed{{"go test ./...", "the line already holds wk run"}}},
 	{"wk run before a closing quote", `echo "use wk run" && bun run build`, `echo "use wk run" && bun run build`,
 		[]Missed{{"bun run build", "the line already holds wk run"}}},

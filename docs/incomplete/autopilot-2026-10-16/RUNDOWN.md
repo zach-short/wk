@@ -104,7 +104,7 @@ Each with its reversal, in `STATE.md` under Judgment calls. Since the first rund
 | 14 | `ap/row-14` | fast-forward to the merge commit b7f5db1 | yes |
 | 4 | `ap/row-4` | fast-forward to the merge commit 01120ce | yes |
 
-Rows landed and not pushed: none. Every branch this run made is merged and deleted; every worktree it made is removed. The run commits add `docs/incomplete/autopilot-2026-10-16/STATE.md`, `RUNDOWN.md` and `reports/*.md`, and the fold's removal of the `DONE` item files (rows 3, 4, 7, 13, 14 in this fold; rows 1, 2, 6, 8 to 12 in the first). The archive repository (`/Users/zachshort/Projects/archive`, its own git) holds `wk/INDEX.md` and `wk/passoff/*`; `HANDOFF.md` and `PASSOFF.md` are ignored by git and carry the log and the board as untracked records.
+Rows landed and not pushed: none. Every branch this run made is merged and deleted; every worktree it made is removed. The run commits add `docs/incomplete/autopilot-2026-10-16/STATE.md`, `RUNDOWN.md` and `reports/*.md`, and the fold's removal of the `DONE` item files (rows 3, 4, 7, 13, 14 in this fold; rows 1, 2, 6, 8 to 12 in the first). The archive repository (`/Users/zachshort/Developer/zach-short/archive`, its own git) holds `wk/INDEX.md` and `wk/passoff/*`; `HANDOFF.md` and `PASSOFF.md` are ignored by git and carry the log and the board as untracked records.
 
 ## For personal-config row 117
 
