@@ -169,6 +169,69 @@ func DirtyPaths(dir string) ([]string, error) {
 	return paths, nil
 }
 
+// Untracked lists the untracked files in dir that are not ignored: the second half of
+// DirtyPaths, by the same command, so gc can tell an untracked path from a tracked edit.
+func Untracked(dir string) ([]string, error) {
+	out, err := Run(dir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// HeldBlob is the blob id rev holds at rel when the file at rel in dir is a regular file whose
+// bytes are exactly that blob, or "" when it is not. Deleting such a file loses nothing, because
+// rev still has it. A symbolic link, a directory or a non-file entry in rev is never held, and
+// --no-filters hashes the bytes on disk, so a file that differs from the blob only by a clean
+// filter or a line-ending conversion is not held either.
+func HeldBlob(dir, rev, rel string) (string, error) {
+	abs := filepath.Join(dir, filepath.FromSlash(rel))
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil
+	}
+	blob, err := fileBlob(dir, rev, rel)
+	if err != nil || blob == "" {
+		return "", err
+	}
+	sum, err := Run(dir, "hash-object", "--no-filters", abs)
+	if err != nil {
+		return "", err
+	}
+	if sum != blob {
+		return "", nil
+	}
+	return blob, nil
+}
+
+// fileBlob is the blob of a regular file (mode 100644 or 100755) at exactly rel in rev, or "".
+// --literal-pathspecs keeps a name with a glob character from matching other paths.
+func fileBlob(dir, rev, rel string) (string, error) {
+	out, err := Run(dir, "--literal-pathspecs", "ls-tree", "-z", "--full-tree", rev, "--", rel)
+	if err != nil {
+		return "", err
+	}
+	entries := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	if len(entries) != 1 {
+		return "", nil
+	}
+	meta, path, _ := strings.Cut(entries[0], "\t")
+	fields := strings.Fields(meta)
+	if path != rel || len(fields) != 3 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
+		return "", nil
+	}
+	return fields[2], nil
+}
+
 // IsAncestor says whether commit is already in into's history.
 func IsAncestor(dir, commit, into string) bool {
 	_, err := Run(dir, "merge-base", "--is-ancestor", commit, into)

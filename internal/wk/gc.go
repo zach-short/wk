@@ -49,6 +49,17 @@ type Judgment struct {
 	// feed the --json report; a zero Activity means it could not be read.
 	Dirty    int
 	Activity time.Time
+	// held lists the changed paths when every one is an untracked file the base commit holds
+	// byte for byte, and base is that commit. Such a worktree is not kept for its changes:
+	// removeOne checks the files again and deletes them, so `git worktree remove` can run
+	// without --force.
+	held []heldFile
+	base string
+}
+
+type heldFile struct {
+	path string
+	blob string
 }
 
 // survey is what gc reads once per pass and asks every worktree about.
@@ -152,6 +163,10 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	}
 	dirty, dirtyErr := gitx.DirtyPaths(w.Path)
 	j.Dirty = len(dirty)
+	if dirtyErr == nil {
+		j.held, j.base = heldByBase(w.Path, s.base, dirty), s.base
+	}
+	work := len(dirty) - len(j.held)
 	quiet, stopped, why := s.quietFor(w.Path)
 	if last, err := lastActivity(w.Path, dirty); err != nil {
 		keep("its last activity cannot be read: %v", err)
@@ -176,19 +191,19 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 	switch {
 	case dirtyErr != nil:
 		keep("git could not list its changes: %v", dirtyErr)
-	case len(dirty) > 0:
-		keep("%s", count(len(dirty), "changed path", "changed paths"))
+	case work > 0:
+		keep("%s", count(work, "changed path", "changed paths"))
 	}
 
 	switch {
 	case len(reasons) == 0 && keptOnBranch && !absorbed:
 		j.Verdict = Removable
-		j.Reasons = []string{stoppedReason(e.Cfg.Workspace.Base, w.Branch)}
+		j.Reasons = append([]string{stoppedReason(e.Cfg.Workspace.Base, w.Branch)}, heldReason(j.held)...)
 	case len(reasons) == 0:
 		j.Verdict = Removable
 		j.DeleteBranch = ancestor && w.Branch != ""
-		j.Reasons = []string{removableReason(e.Cfg.Workspace.Base, w.Branch, ancestor)}
-	case absorbed && (dirtyErr != nil || len(dirty) > 0):
+		j.Reasons = append([]string{removableReason(e.Cfg.Workspace.Base, w.Branch, ancestor)}, heldReason(j.held)...)
+	case absorbed && (dirtyErr != nil || work > 0):
 		j.Verdict = KeptForLanding
 		j.Reasons = reasons
 	default:
@@ -196,6 +211,42 @@ func (e *Env) judge(s survey, w gitx.Worktree) Judgment {
 		j.Reasons = reasons
 	}
 	return j
+}
+
+// heldByBase is the held list for judge: every changed path, when each one is untracked (never a
+// tracked edit) and HeldBlob finds it byte-equal to base's blob, and nil otherwise. A worktree
+// with one path that is not held keeps all its paths, so gc never deletes part of its work.
+func heldByBase(wt, base string, dirty []string) []heldFile {
+	if len(dirty) == 0 {
+		return nil
+	}
+	untracked, err := gitx.Untracked(wt)
+	if err != nil {
+		return nil
+	}
+	isUntracked := make(map[string]bool, len(untracked))
+	for _, p := range untracked {
+		isUntracked[p] = true
+	}
+	held := make([]heldFile, 0, len(dirty))
+	for _, rel := range dirty {
+		if !isUntracked[rel] {
+			return nil
+		}
+		blob, err := gitx.HeldBlob(wt, base, rel)
+		if err != nil || blob == "" {
+			return nil
+		}
+		held = append(held, heldFile{path: rel, blob: blob})
+	}
+	return held
+}
+
+func heldReason(held []heldFile) []string {
+	if len(held) == 0 {
+		return nil
+	}
+	return []string{count(len(held), "untracked file the base already holds is", "untracked files the base already holds are") + " deleted with it"}
 }
 
 func (e *Env) skipReason(s survey, w gitx.Worktree) string {
@@ -364,10 +415,17 @@ func (e *Env) removeOne(out io.Writer, w gitx.Worktree) (bool, error) {
 		e.printJudgment(out, j.Verdict, j)
 		return false, nil
 	}
+	if ok, err := e.deleteHeld(out, j); !ok {
+		return false, err
+	}
 	// No --force: git refuses a worktree with tracked changes or untracked files, a second
 	// guard behind the re-check above. Ignored files go with the directory.
 	if _, err := gitx.Run(e.Repo.Primary, "worktree", "remove", j.Worktree.Path); err != nil {
-		e.printLine(out, "kept", w, "git worktree remove refused: "+err.Error())
+		reason := "git worktree remove refused: " + err.Error()
+		if len(j.held) > 0 {
+			reason += "; the " + count(len(j.held), "file", "files") + " deleted before it are still in " + e.Cfg.Workspace.Base
+		}
+		e.printLine(out, "kept", w, reason)
 		return false, err
 	}
 	if !j.DeleteBranch {
@@ -383,6 +441,25 @@ func (e *Env) removeOne(out io.Writer, w gitx.Worktree) (bool, error) {
 		return true, nil
 	}
 	e.printLine(out, "removed", w, "branch "+j.Worktree.Branch+" deleted")
+	return true, nil
+}
+
+// deleteHeld checks every held file of j once more, right before the delete, and keeps the
+// worktree whole when any one changed since the re-judge. Only then does it delete them, one
+// file at a time and never recursively, so nothing but a file the base holds can go.
+func (e *Env) deleteHeld(out io.Writer, j Judgment) (bool, error) {
+	for _, h := range j.held {
+		if blob, err := gitx.HeldBlob(j.Worktree.Path, j.base, h.path); err != nil || blob != h.blob {
+			e.printLine(out, "kept", j.Worktree, h.path+" changed after it was judged; nothing deleted")
+			return false, nil
+		}
+	}
+	for i, h := range j.held {
+		if err := os.Remove(filepath.Join(j.Worktree.Path, filepath.FromSlash(h.path))); err != nil {
+			e.printLine(out, "kept", j.Worktree, fmt.Sprintf("deleting %s failed: %v; the %s deleted before it are still in %s", h.path, err, count(i, "file", "files"), e.Cfg.Workspace.Base))
+			return false, err
+		}
+	}
 	return true, nil
 }
 

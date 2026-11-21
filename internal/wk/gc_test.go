@@ -445,6 +445,165 @@ func TestGCDryRunChangesNothing(t *testing.T) {
 	}
 }
 
+const finding = "docs/incomplete/audit/finding.md"
+
+// auditWorktree is an /audit agent's worktree after the lead copied its finding file into the
+// main checkout and committed it on main: the worktree still has its own untracked copy.
+func auditWorktree(t *testing.T, f testrepo.Fixture, name, content string) string {
+	t.Helper()
+	dir := addWorktree(t, f, name)
+	f.Write(t, finding, "a finding\n")
+	f.Commit(t, "the lead commits the finding")
+	writeIn(t, dir, finding, content)
+	return dir
+}
+
+func TestGCRemovesAWorktreeWhoseOnlyChangeTheBaseHolds(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := auditWorktree(t, f, "audit", "a finding\n")
+	j := expect(t, e, dir, Removable, "1 untracked file the base already holds is deleted with it")
+	if !j.DeleteBranch {
+		t.Fatal("the branch is an ancestor of main, so it must go with the worktree (BD-11)")
+	}
+	out := apply(t, e)
+	assertGone(t, f, dir)
+	if gitx.BranchExists(f.Repo, "worktree-audit") {
+		t.Fatalf("branch worktree-audit was kept\n%s", out)
+	}
+	if got := read(t, filepath.Join(f.Repo, finding)); got != "a finding\n" {
+		t.Fatalf("the main checkout's copy changed: %q", got)
+	}
+}
+
+func TestGCKeepsAnUntrackedFileTheBaseDoesNotHold(t *testing.T) {
+	for _, tc := range []struct{ name, rel, content string }{
+		{"differs", finding, "a finding, edited later\n"},
+		{"new-path", "docs/incomplete/audit/other.md", "a finding\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testrepo.New(t)
+			e := idle(t, f)
+			dir := addWorktree(t, f, tc.name)
+			f.Write(t, finding, "a finding\n")
+			f.Commit(t, "the lead commits the finding")
+			writeIn(t, dir, tc.rel, tc.content)
+			expect(t, e, dir, KeptForLanding, "1 changed path")
+			apply(t, e)
+			assertStays(t, dir)
+			if got := read(t, filepath.Join(dir, tc.rel)); got != tc.content {
+				t.Fatalf("%s changed: %q", tc.rel, got)
+			}
+		})
+	}
+}
+
+func TestGCKeepsAHeldFileBesideATrackedEdit(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := auditWorktree(t, f, "mixed", "a finding\n")
+	writeIn(t, dir, "README.md", "edited\n")
+	expect(t, e, dir, KeptForLanding, "2 changed paths")
+	apply(t, e)
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, finding)); got != "a finding\n" {
+		t.Fatalf("the held file was deleted from a kept worktree: %q", got)
+	}
+}
+
+func TestGCKeepsASymbolicLinkToAnEqualFile(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := addWorktree(t, f, "link")
+	f.Write(t, finding, "a finding\n")
+	f.Commit(t, "the lead commits the finding")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, finding)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(f.Repo, finding), filepath.Join(dir, finding)); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, e, dir, KeptForLanding, "1 changed path")
+	apply(t, e)
+	assertStays(t, dir)
+	if _, err := os.Lstat(filepath.Join(dir, finding)); err != nil {
+		t.Fatalf("the link was deleted: %v", err)
+	}
+}
+
+func TestGCApplyKeepsAHeldFileThatChangesBeforeRemoval(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := auditWorktree(t, f, "late-edit", "a finding\n")
+	j := expect(t, e, dir, Removable, "the base already holds")
+	writeIn(t, dir, finding, "edited after the pass\n")
+	var out bytes.Buffer
+	removed, err := e.removeOne(&out, j.Worktree)
+	if err != nil || removed {
+		t.Fatalf("removed = %v, err = %v; want it kept\n%s", removed, err, out.String())
+	}
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, finding)); got != "edited after the pass\n" {
+		t.Fatalf("the edited file was touched: %q", got)
+	}
+	if !strings.Contains(out.String(), string(KeptForLanding)) {
+		t.Fatalf("the re-check did not say why it kept it:\n%s", out.String())
+	}
+}
+
+// The re-judge can pass and the file still change before the delete; deleteHeld checks every
+// file again and deletes none of them when one fails.
+func TestGCDeleteHeldDeletesNothingWhenOneFileChanged(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := addWorktree(t, f, "two")
+	f.Write(t, "docs/incomplete/audit/a.md", "a\n")
+	f.Write(t, "docs/incomplete/audit/b.md", "b\n")
+	f.Commit(t, "the lead commits two findings")
+	writeIn(t, dir, "docs/incomplete/audit/a.md", "a\n")
+	writeIn(t, dir, "docs/incomplete/audit/b.md", "b\n")
+	j := expect(t, e, dir, Removable, "2 untracked files the base already holds are deleted with it")
+	writeIn(t, dir, "docs/incomplete/audit/b.md", "b, edited\n")
+	var out bytes.Buffer
+	ok, err := e.deleteHeld(&out, j)
+	if ok || err != nil {
+		t.Fatalf("deleteHeld = %v, %v; want it to refuse\n%s", ok, err, out.String())
+	}
+	if !strings.Contains(out.String(), "docs/incomplete/audit/b.md changed after it was judged; nothing deleted") {
+		t.Fatalf("deleteHeld did not say why:\n%s", out.String())
+	}
+	for rel, want := range map[string]string{"docs/incomplete/audit/a.md": "a\n", "docs/incomplete/audit/b.md": "b, edited\n"} {
+		if got := read(t, filepath.Join(dir, rel)); got != want {
+			t.Fatalf("%s = %q, want %q", rel, got, want)
+		}
+	}
+}
+
+func TestGCDryRunLeavesTheHeldFiles(t *testing.T) {
+	f := testrepo.New(t)
+	e := idle(t, f)
+	dir := auditWorktree(t, f, "dry", "a finding\n")
+	var out bytes.Buffer
+	if err := e.GC(&out); err != nil {
+		t.Fatal(err)
+	}
+	assertStays(t, dir)
+	if got := read(t, filepath.Join(dir, finding)); got != "a finding\n" {
+		t.Fatalf("the dry run touched the held file: %q", got)
+	}
+	if !strings.Contains(out.String(), "1 untracked file the base already holds is deleted with it") || !strings.Contains(out.String(), "1 of 1 removable; dry run") {
+		t.Fatalf("dry run output:\n%s", out.String())
+	}
+	var report bytes.Buffer
+	if err := e.GCJSON(&report); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.String(), `"held": 1`) {
+		t.Fatalf("the --json report has no held count:\n%s", report.String())
+	}
+	assertStays(t, dir)
+}
+
 type recorder struct{ calls []string }
 
 func (r *recorder) control(args ...string) error {

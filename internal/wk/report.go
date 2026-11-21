@@ -25,6 +25,9 @@ type ReportItem struct {
 	Dirty        int      `json:"dirty"`
 	LastActivity string   `json:"last_activity,omitempty"`
 	DeleteBranch bool     `json:"delete_branch"`
+	// Held counts the changed paths that are untracked files the base holds byte for byte;
+	// --apply deletes them with the worktree. It is 0 unless every changed path is held.
+	Held int `json:"held"`
 }
 
 // GCJSON writes the dry-run judgments as one JSON document. Like GC, it changes nothing.
@@ -50,6 +53,7 @@ func (e *Env) GCJSON(out io.Writer) error {
 			Reasons:      j.Reasons,
 			Dirty:        j.Dirty,
 			DeleteBranch: j.DeleteBranch,
+			Held:         len(j.held),
 		}
 		if !j.Activity.IsZero() {
 			item.LastActivity = j.Activity.Format(time.RFC3339)
