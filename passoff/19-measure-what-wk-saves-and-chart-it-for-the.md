@@ -129,3 +129,16 @@ Left unmeasured, and why:
 Reproduction. `sh docs/bench/run.sh --scenario F` regenerated `F.csv`, equal except for the 2026-11-22 row, where the live log had grown. A one-run `RUNS=1 sh docs/bench/run.sh --scenario E` gave the same verdict rows. A second `python3 docs/bench/chart.py` left every SVG and `SUMMARY.md` byte-identical. While I ran the repro, I fixed two faults in `run.sh` that only a rerun on a used clone can show: the E file names now carry a per-run token, and the intact check reads the new names. The committed data comes from a fresh clone and does not have the fault: 48 distinct rows, and no skipped commit in the log.
 
 The wk gate is green in the worktree. The row changes no Go. After the commit, I removed the scratch clone and the scratch `WK_HOME`.
+
+### Sign-off, 2026-11-22
+
+- Builder: Opus 5.5, scratch worktree `wk-row-19-build`, branch `row-19-build`, commits `30b27fd`, `8e1a44d`, `3196fd8`. Relay passes: 0. Fix rounds: 0.
+- Review: one independent Opus 5.5 audit in its own worktree (`row-19-audit`). Verdict: non-blocking. It recomputed about 120 figures from `docs/bench/data/*.csv` and all matched. `chart.py` rebuilt every SVG and `SUMMARY.md` byte-identical. The diffstat matched (21 files, 2398 insertions, 2 deletions). The wk gate passed.
+- Owner answers: given 2026-11-21 23:45 EST to the questions posted 19:26 EST. The slot bypass is allowed only inside `run.sh` against the scratch clone.
+- Open, from the audit (none changes a conclusion):
+  - A1: only scenario A marks run 1 `first_run` (`run.sh:226`). The B, C and D medians use every run, against `METHOD.md:73,235`. C on runs 2 to 5 would be 15.14, 12.96, 9.99 and 11.57 s. The prose does not say that all runs were used.
+  - A2: `ANALYSIS.md:11` says "runs 2 to 5", but the cold arm uses runs 1 to 3, with run 1 marked `load_high`. The median is 3.84 s either way.
+  - A3: the `SUMMARY.md` "Runs" column says 5 where each A median uses 4. `PORTFOLIO-DRAFT.md:13` says "5 runs each".
+  - A4: some figures have no CSV: Lunar Client 9.6 GB, bun install about 2 s, the pool.log "within 2 s" (the log went with the scratch folder), 447 MB of PNGs (`SLIM-SCOPE.md:112` gives 419 MiB), and the step times in the portfolio terminal bodies.
+  - A5: `run.sh --fresh` runs `rm -rf` on `$BENCH_DIR/*` with no check that it is a scratch path; `wait_disk` gives up after 2 minutes with no flag; the pool arm does not check for 4 ready slots; the E match does not check `branch_gone`.
+- Owner's open call: question 13, whether the README shows the slot-test chart.
