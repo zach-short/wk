@@ -1,5 +1,7 @@
 # 19. Measure what wk saves, and chart it for the README and the portfolio
 
+
+> **Claimed `IN FLIGHT` 2026-11-21.**
 *Opened 2026-10-18, at the owner's request: "conduct tests in ezhomesteading or under whatever circumstances to illustrate its effectiveness and provide an analysis with visuals" for the wk README and the wk story on the portfolio site. wk has been in daily use in 12 repositories since 2026-10-17, and no measurement of the shipped tool exists; the numbers on record are design-time probes from 2026-10-16.*
 
 **Model: Opus 5.5. Lane C. Waits on nothing, but every run in step 3 onward waits on the owner saying the machine is quiet. Work in your own worktree of `~/Developer/zach-short/wk` (`cd "$(wk new 19)"` from the main checkout); the benchmark itself runs against a separate clone, never the live ezhomesteading checkout. Files it owns: `docs/bench/` (new), `README.md`.**
