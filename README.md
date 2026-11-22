@@ -500,6 +500,10 @@ Ten workspaces asked for at once were all ready after a median of 10.20 s with a
 
 ![Ten workspaces at once](docs/bench/C-burst-timeline.svg)
 
+Six web builds started together finished in 57.0 to 61.1 s the plain way, and in 119.6 to 122.5 s through `wk run --slot heavy` with 2 places. Free memory never went below 27,031 MB, so on this 64 GiB machine the cap doubled the wall time and protected nothing that was at risk. Whether it protects a machine with less memory was not measured.
+
+![Memory during six builds at once](docs/bench/D-memory-during-builds.svg)
+
 ## Development
 
 ```bash

@@ -141,4 +141,4 @@ The wk gate is green in the worktree. The row changes no Go. After the commit, I
   - A3: the `SUMMARY.md` "Runs" column says 5 where each A median uses 4. `PORTFOLIO-DRAFT.md:13` says "5 runs each".
   - A4: some figures have no CSV: Lunar Client 9.6 GB, bun install about 2 s, the pool.log "within 2 s" (the log went with the scratch folder), 447 MB of PNGs (`SLIM-SCOPE.md:112` gives 419 MiB), and the step times in the portfolio terminal bodies.
   - A5: `run.sh --fresh` runs `rm -rf` on `$BENCH_DIR/*` with no check that it is a scratch path; `wait_disk` gives up after 2 minutes with no flag; the pool arm does not check for 4 ready slots; the E match does not check `branch_gone`.
-- Owner's open call: question 13, whether the README shows the slot-test chart.
+- Question 13, answered by the owner 2026-11-22: the README shows the slot-test chart (README "Measured").

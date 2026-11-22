@@ -40,7 +40,7 @@ Six plain `bun run build` runs started together finished in 57.0 to 61.1 s. Thro
 
 The plain runs never came near the stop rule. Free memory (free, inactive and speculative pages) fell by at most 21,319 MB and never went below 27,031 MB. The lowest `memory_pressure` free figure was 83 percent. Swap grew once, from 32 MB to 318 MB during the first plain run, and then stayed at 318 MB for every later run either way. The slotted runs dropped about half as far: at most 10,393 MB.
 
-So on a 64 GiB machine at six builds, the slot cap doubled the wall time and protected nothing that was at risk. The README's claim that gates which start together "can exhaust a 16 GB machine" was not tested, because this machine has 64 GiB and the owner capped the test at six builds. A drop of 10,495 to 21,319 MB for six builds makes the claim plausible for 16 GiB, but that is an inference, not a measurement. The owner decides whether the README shows this chart (`METHOD.md`, question 13).
+So on a 64 GiB machine at six builds, the slot cap doubled the wall time and protected nothing that was at risk. The README's claim that gates which start together "can exhaust a 16 GB machine" was not tested, because this machine has 64 GiB and the owner capped the test at six builds. A drop of 10,495 to 21,319 MB for six builds makes the claim plausible for 16 GiB, but that is an inference, not a measurement. The README shows this chart, by the owner's answer to question 13 on 2026-11-22.
 
 ## Scenario E: what gc removes
 
