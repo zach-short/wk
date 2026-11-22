@@ -87,3 +87,45 @@ Also show that the data reproduces: `sh docs/bench/run.sh --scenario A` (or the 
 The owner should see: `docs/bench/ANALYSIS.md` with every chart rendered, the new README section, and `PORTFOLIO-DRAFT.md` with its PNGs. Then list what was not measured and why.
 
 Commit `docs/bench/` and `README.md` in your worktree with a message starting `row 19:`, with no `Co-Authored-By:` trailer and no "Generated with" line. Remove the scratch clone and `WK_HOME` once the CSVs are committed, and say that you did. Write the close-out section at the end of this file: what ran, the headline numbers, the findings, and what was left unmeasured.
+
+## Close-out, 2026-11-22
+
+Built on branch `row-19-build` by Opus 5.5. The owner read `docs/bench/METHOD.md` and answered its 15 questions at 23:45 EST on 2026-11-21: every proposal as written, with six builds in scenario D, the gates inside `run.sh` only (where the live hook cannot see them), and "start now, record the load".
+
+What ran. Scenarios A to F ran on 2026-11-22 between 00:20 and 02:20 EST against a fresh `git clone --no-hardlinks` of ezhomesteading at `80ce82149`, under a scratch `WK_HOME` with the live config values, wk 0.1.11 (`e4ed909`, Homebrew). It used 18 runs in A, 9 sets of 10 in B, 20 bursts of 10 in C, 6 runs of six builds in D, 3 repetitions of 16 workspaces in E, and one read of the Stop-hook log in F. The machine was shared: a Lunar Client Java process and several Claude Code sessions ran, and the 1-minute load at a run's start was between 1.83 and 4.31. One run is marked `load_high` (A, cold template, run 1). No run was stopped. Every number is in `docs/bench/data/*.csv`. `docs/bench/chart.py` draws the five SVGs and `docs/bench/SUMMARY.md` from them, and `docs/bench/ANALYSIS.md` reads them.
+
+Headline numbers (medians):
+
+- A: ready in 2.44 s plain, 1.58 s from the template, 0.10 s from the pool, 3.84 s with a cold template. The first `tsc` and the first build were not faster in any arm.
+- B: 635.2 MiB per plain worktree, 205.6 MiB per sparse wk workspace, 636.2 MiB per `wk new --full`.
+- C: the last of ten ready after 15.23 s plain, 13.03 s with wk, 10.20 s with a pool of 4, and 11.65 s with `max_parallel = 10`. No create failed.
+- D: six plain builds took 57.0 to 61.1 s, and six slotted ones (2 places) 119.6 to 122.5 s. Free memory never fell below 27,031 MB. Swap grew from 32 to 318 MB once.
+- E: 48 of 48 gc verdicts were right, the held-file rule of rows 31 and 32 included. `gc --apply` took 34.85 s.
+- F: 19 pairs of Stop gates from different folders ended within 60 s, 18 of them on 2026-11-12. Option B of `gate-contract/SCOPE.md` closes.
+
+Findings, all in `ANALYSIS.md`, "Findings for later rows":
+
+- A sparse workspace misses `max_mb_per_workspace = 120`.
+- All of the disk saving comes from the sparse checkout. A full wk workspace costs the same as a plain one, because bun already clones `node_modules`.
+- `max_parallel = 2` finished a burst of ten later than 10 did.
+- The slot cap doubled the wall time of six builds on 64 GiB and protected nothing at risk.
+- No build-cache gain is possible while the config clones no part of `web/.next`.
+- In the pool arm of A, the gates slowed over five runs, for a cause not found.
+- `wk gc --apply` takes about 35 s for 16 workspaces.
+
+README changes. "Cap heavy gates" no longer says "a 16 GB machine" and cites scenario D. "Disk use" has the new `df` figures and says that the old 2 to 2.7 GB was a `du` figure. A new "Measured" section has three charts. The 16 GB mention in "Provenance" is history and stays.
+
+Portfolio. `docs/bench/PORTFOLIO-DRAFT.md` holds two terminal frames from real bench output. The portfolio itself was not edited.
+
+Left unmeasured, and why:
+
+- A cold bun cache (no real worktree starts from one).
+- A cold OS file cache (needs `sudo purge`).
+- More than six builds, and heavy capacity 1 (owner's answers).
+- A cloned `web/.next/cache` (owner's answer).
+- The lengths of the Stop-hook gates (the log has no start time).
+- Any other machine.
+
+Reproduction. `sh docs/bench/run.sh --scenario F` regenerated `F.csv`, equal except for the 2026-11-22 row, where the live log had grown. A one-run `RUNS=1 sh docs/bench/run.sh --scenario E` gave the same verdict rows. A second `python3 docs/bench/chart.py` left every SVG and `SUMMARY.md` byte-identical. While I ran the repro, I fixed two faults in `run.sh` that only a rerun on a used clone can show: the E file names now carry a per-run token, and the intact check reads the new names. The committed data comes from a fresh clone and does not have the fault: 48 distinct rows, and no skipped commit in the log.
+
+The wk gate is green in the worktree. The row changes no Go. After the commit, I removed the scratch clone and the scratch `WK_HOME`.

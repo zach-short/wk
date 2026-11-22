@@ -82,3 +82,13 @@ Build seconds run from the request to the end, so a slotted build includes its w
 | 2026-11-21 | 20 | 1 | 0 | 0 |
 | 2026-11-22 | 27 | 1 | 0 | 0 |
 
+## Run conditions
+
+| Scenario | Rows | Start stamps | load1 at start, lowest | highest | Memory free %, lowest | Rows marked load_high | Rows marked stopped |
+|---|---|---|---|---|---|---|---|
+| A | 54 | 54 | 2.73 | 4.31 | 91 | 3 | 0 |
+| B | 18 | 9 | 1.83 | 3.92 | 90 | 0 | 0 |
+| C | 220 | 20 | 2.60 | 4.00 | 90 | 0 | 0 |
+| D | 42 | 6 | 2.30 | 3.98 | 86 | 0 | 0 |
+| E | 6 | 6 | 2.30 | 3.66 | 86 | 0 | 0 |
+

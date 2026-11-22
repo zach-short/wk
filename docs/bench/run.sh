@@ -363,6 +363,8 @@ scenario_D() {
 
 scenario_E() {
 	ensure_template
+	# A token per invocation keeps the file names new when the clone already holds an earlier run's files.
+	tok=$(date +%s)
 	out="$DATA/E-verdicts.csv"
 	[ -f "$out" ] || echo "rep,row,group,expected,verdict,held,reasons,dir_gone,branch_gone,kept_work_intact,match" > "$out"
 	for r in $(runs 3); do
@@ -378,23 +380,23 @@ scenario_E() {
 			n=${ng%%:*}; g=${ng#*:}; w="$B/.claude/worktrees/wk-$n"
 			case "$g" in
 			merged)
-				echo "bench $n" > "$w/bench-merged-$n.txt"
-				git -C "$w" add "bench-merged-$n.txt" && git -C "$w" commit -q -m "bench $n"
+				echo "bench $n" > "$w/bench-$tok-merged-$n.txt"
+				git -C "$w" add "bench-$tok-merged-$n.txt" && git -C "$w" commit -q -m "bench $n"
 				git -C "$B" merge -q --no-edit "wk/$n"
 				;;
 			dirty_tracked) echo "bench $n" >> "$w/README.md" ;;
-			dirty_untracked) echo "bench $n" > "$w/bench-untracked-$n.txt" ;;
+			dirty_untracked) echo "bench $n" > "$w/bench-$tok-untracked-$n.txt" ;;
 			unmerged)
-				echo "bench $n" > "$w/bench-unmerged-$n.txt"
-				git -C "$w" add "bench-unmerged-$n.txt" && git -C "$w" commit -q -m "bench $n"
+				echo "bench $n" > "$w/bench-$tok-unmerged-$n.txt"
+				git -C "$w" add "bench-$tok-unmerged-$n.txt" && git -C "$w" commit -q -m "bench $n"
 				;;
 			esac
 		done
 		for ng in $groups; do
 			n=${ng%%:*}; g=${ng#*:}
 			case "$g" in held | held_differs)
-				hk=$((hk + 1)); echo "held $r $hk" > "$B/bench-held-$r-$hk.txt"
-				git -C "$B" add "bench-held-$r-$hk.txt"; git -C "$B" commit -q -m "bench held $r $hk"
+				hk=$((hk + 1)); echo "held $r $hk" > "$B/bench-$tok-held-$r-$hk.txt"
+				git -C "$B" add "bench-$tok-held-$r-$hk.txt"; git -C "$B" commit -q -m "bench held $r $hk"
 				;;
 			esac
 		done
@@ -402,8 +404,8 @@ scenario_E() {
 		for ng in $groups; do
 			n=${ng%%:*}; g=${ng#*:}; w="$B/.claude/worktrees/wk-$n"
 			case "$g" in
-			held) hk=$((hk + 1)); echo "held $r $hk" > "$w/bench-held-$r-$hk.txt" ;;
-			held_differs) hk=$((hk + 1)); echo "other bytes $r $hk" > "$w/bench-held-$r-$hk.txt" ;;
+			held) hk=$((hk + 1)); echo "held $r $hk" > "$w/bench-$tok-held-$r-$hk.txt" ;;
+			held_differs) hk=$((hk + 1)); echo "other bytes $r $hk" > "$w/bench-$tok-held-$r-$hk.txt" ;;
 			esac
 		done
 		sleep 90
@@ -419,9 +421,9 @@ scenario_E() {
 			intact=n/a
 			case "$g" in
 			dirty_tracked) intact=no; grep -q "bench $n" "$w/README.md" 2>/dev/null && intact=yes ;;
-			dirty_untracked) intact=no; [ -f "$w/bench-untracked-$n.txt" ] && intact=yes ;;
-			unmerged) intact=no; git -C "$B" cat-file -e "wk/$n:bench-unmerged-$n.txt" 2>/dev/null && intact=yes ;;
-			held_differs) intact=no; grep -q "other bytes" "$w"/bench-held-*.txt 2>/dev/null && intact=yes ;;
+			dirty_untracked) intact=no; [ -f "$w/bench-$tok-untracked-$n.txt" ] && intact=yes ;;
+			unmerged) intact=no; git -C "$B" cat-file -e "wk/$n:bench-$tok-unmerged-$n.txt" 2>/dev/null && intact=yes ;;
+			held_differs) intact=no; grep -q "other bytes" "$w"/bench-$tok-held-*.txt 2>/dev/null && intact=yes ;;
 			esac
 			python3 -I - "$LOGS/E-$r.json" "$w" "$r" "$n" "$g" "$exp" "$dg" "$bg" "$intact" >> "$out" <<'PY'
 import json, sys, csv

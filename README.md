@@ -99,7 +99,7 @@ Claude Code never removes a hook-made worktree by itself, so `wk gc` is what cle
 
 ## Cap heavy gates
 
-Each type check, lint or test run peaks near 1 GiB, and a web build near 2 GiB, so ten agents that start their gates together can exhaust a 16 GB machine. `wk run --slot <class>` makes them take turns. It holds one of the class's places while its command runs, and waits in arrival order while every place is held. The places are lock files under one directory, so the cap holds across every workspace and every repository on the machine.
+Each type check, lint or test run peaks near 1 GiB, and a web build near 2 GiB or more, so many agents that start their gates together can exhaust a machine with little memory. On the 64 GiB machine measured on 2026-11-22, six web builds started together lowered free memory by at most 21,319 MB and never pressed it, and two heavy places made the six take twice as long (`docs/bench/ANALYSIS.md`, scenario D). Set the capacities for the machine at hand. `wk run --slot <class>` makes them take turns. It holds one of the class's places while its command runs, and waits in arrival order while every place is held. The places are lock files under one directory, so the cap holds across every workspace and every repository on the machine.
 
 ```bash
 wk run --slot heavy --trim web/.next/cache -- bun run build
@@ -482,7 +482,23 @@ Both `workspace.dir` and `workspace.branch` must contain `{row}`, both `hook` pa
 
 ## Disk use
 
-`du` counts a cloned directory at its full size, because it adds up file sizes and cannot see that APFS shares the blocks. Only `df` shows the real cost of a workspace. In ezhomesteading on 2026-10-16, a sparse workspace without the screenshots under `docs/incomplete` cost about 100 MB by `df`, a full one about 520 MB, nearly all of it git's checkout, and a worktree made before wk with its own install about 2 to 2.7 GB.
+`du` counts a cloned directory at its full size, because it adds up file sizes and cannot see that APFS shares the blocks. Only `df` shows the real cost of a workspace. In ezhomesteading on 2026-11-22, a sparse workspace without the screenshots under `docs/incomplete` cost 205.6 MiB by `df` and a full one 636.2 MiB, nearly all of it git's checkout. A plain `git worktree add` with its own `bun install` cost 635.2 MiB, the same as a full workspace, because bun already clones `node_modules` from its cache (`docs/bench/ANALYSIS.md`, scenario B). The 2 to 2.7 GB once given for worktrees made before wk was a `du` figure that included their build output under `web/.next` (`docs/incomplete/landing-layer/DESIGN.md`, section 1.2).
+
+## Measured
+
+On 2026-11-22, against a scratch clone of ezhomesteading, on an Apple M5 Pro with 64 GiB, with wk 0.1.11. The method, the raw CSVs and the script that reruns every scenario are in `docs/bench/`, and `docs/bench/ANALYSIS.md` has all six scenarios, including the places where wk did not help. The numbers hold for that machine only.
+
+A workspace was ready in a median of 0.10 s from a pool slot and 1.58 s from a warm template, against 2.44 s for `git worktree add` with the manual setup. The first type check and build took the same time either way, because the config clones no build cache.
+
+![Time to a workspace and its first gates](docs/bench/A-time-to-first-gate.svg)
+
+The disk saving is the sparse checkout: 205.6 MiB per sparse workspace against 635.2 MiB for a plain worktree. A full wk workspace costs the same as a plain one.
+
+![Disk per workspace](docs/bench/B-disk-per-workspace.svg)
+
+Ten workspaces asked for at once were all ready after a median of 10.20 s with a pool of 4, 13.03 s without one, and 15.23 s the plain way.
+
+![Ten workspaces at once](docs/bench/C-burst-timeline.svg)
 
 ## Development
 
