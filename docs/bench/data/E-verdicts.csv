@@ -1,0 +1,49 @@
+rep,row,group,expected,verdict,held,reasons,dir_gone,branch_gone,kept_work_intact,match
+1,9002,merged,removable,removable,0,branch wk/9002 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+1,9003,merged,removable,removable,0,branch wk/9003 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+1,9004,merged,removable,removable,0,branch wk/9004 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+1,9005,merged,removable,removable,0,branch wk/9005 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+1,9006,dirty_tracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+1,9007,dirty_tracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+1,9008,dirty_untracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+1,9009,dirty_untracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+1,9010,unmerged,kept,kept,0,branch wk/9010 has commits main does not hold,no,no,yes,yes
+1,9011,unmerged,kept,kept,0,branch wk/9011 has commits main does not hold,no,no,yes,yes
+1,9012,unmerged,kept,kept,0,branch wk/9012 has commits main does not hold,no,no,yes,yes
+1,9013,unmerged,kept,kept,0,branch wk/9013 has commits main does not hold,no,no,yes,yes
+1,9014,held,removable,removable,1,branch wk/9014 is an ancestor of main; clean and idle; the branch is deleted with it; 1 untracked file the base already holds is deleted with it,yes,yes,n/a,yes
+1,9015,held,removable,removable,1,branch wk/9015 is an ancestor of main; clean and idle; the branch is deleted with it; 1 untracked file the base already holds is deleted with it,yes,yes,n/a,yes
+1,9016,held_differs,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+1,9017,held_differs,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+2,9018,merged,removable,removable,0,branch wk/9018 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+2,9019,merged,removable,removable,0,branch wk/9019 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+2,9020,merged,removable,removable,0,branch wk/9020 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+2,9021,merged,removable,removable,0,branch wk/9021 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+2,9022,dirty_tracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+2,9023,dirty_tracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+2,9024,dirty_untracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+2,9025,dirty_untracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+2,9026,unmerged,kept,kept,0,branch wk/9026 has commits main does not hold,no,no,yes,yes
+2,9027,unmerged,kept,kept,0,branch wk/9027 has commits main does not hold,no,no,yes,yes
+2,9028,unmerged,kept,kept,0,branch wk/9028 has commits main does not hold,no,no,yes,yes
+2,9029,unmerged,kept,kept,0,branch wk/9029 has commits main does not hold,no,no,yes,yes
+2,9030,held,removable,removable,1,branch wk/9030 is an ancestor of main; clean and idle; the branch is deleted with it; 1 untracked file the base already holds is deleted with it,yes,yes,n/a,yes
+2,9031,held,removable,removable,1,branch wk/9031 is an ancestor of main; clean and idle; the branch is deleted with it; 1 untracked file the base already holds is deleted with it,yes,yes,n/a,yes
+2,9032,held_differs,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+2,9033,held_differs,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+3,9034,merged,removable,removable,0,branch wk/9034 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+3,9035,merged,removable,removable,0,branch wk/9035 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+3,9036,merged,removable,removable,0,branch wk/9036 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+3,9037,merged,removable,removable,0,branch wk/9037 is an ancestor of main; clean and idle; the branch is deleted with it,yes,yes,n/a,yes
+3,9038,dirty_tracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+3,9039,dirty_tracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+3,9040,dirty_untracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+3,9041,dirty_untracked,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+3,9042,unmerged,kept,kept,0,branch wk/9042 has commits main does not hold,no,no,yes,yes
+3,9043,unmerged,kept,kept,0,branch wk/9043 has commits main does not hold,no,no,yes,yes
+3,9044,unmerged,kept,kept,0,branch wk/9044 has commits main does not hold,no,no,yes,yes
+3,9045,unmerged,kept,kept,0,branch wk/9045 has commits main does not hold,no,no,yes,yes
+3,9046,held,removable,removable,1,branch wk/9046 is an ancestor of main; clean and idle; the branch is deleted with it; 1 untracked file the base already holds is deleted with it,yes,yes,n/a,yes
+3,9047,held,removable,removable,1,branch wk/9047 is an ancestor of main; clean and idle; the branch is deleted with it; 1 untracked file the base already holds is deleted with it,yes,yes,n/a,yes
+3,9048,held_differs,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes
+3,9049,held_differs,kept,"kept, run /land-worktrees",0,1 changed path,no,no,yes,yes

@@ -1,0 +1,8 @@
+scenario,day_utc,gate_stops,folders,pairs_within_60s_other_folder,stops_with_such_a_neighbor
+F,2026-11-11,5,2,0,0
+F,2026-11-12,167,2,18,24
+F,2026-11-13,23,2,1,2
+F,2026-11-17,4,2,0,0
+F,2026-11-19,5,1,0,0
+F,2026-11-21,20,1,0,0
+F,2026-11-22,27,1,0,0
